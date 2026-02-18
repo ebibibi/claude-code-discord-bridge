@@ -14,8 +14,10 @@ Discord frontend for Claude Code CLI. Python 3.10+ with discord.py v2.
 - Type hints required on ALL function signatures
 - `from __future__ import annotations` in EVERY file
 - ruff for linting/formatting (line-length: 100)
+- **TDD enforced**: Write tests FIRST (RED), implement (GREEN), refactor. No exceptions.
 - pytest with pytest-asyncio (auto mode) for testing
 - Logging via `logging.getLogger(__name__)`, never print()
+- Security audit mandatory before committing changes to runner/Cog code
 
 ## Security (Non-Negotiable)
 
