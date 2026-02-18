@@ -154,6 +154,40 @@ CONTRIBUTING.md          # Contribution guidelines
 - **Squash merge preferred**: Keeps main history clean
 - **Commit style**: `<type>: <description>` — types: feat, fix, refactor, docs, test, chore, security
 
+## AI Agent Configuration
+
+This project ships AI agent configs for all major tools:
+
+| File | Tool | Purpose |
+|------|------|---------|
+| `CLAUDE.md` | Claude Code | Project context (this file) |
+| `AGENTS.md` | OpenAI Codex | Symlink → CLAUDE.md |
+| `.github/copilot-instructions.md` | GitHub Copilot | Condensed instructions |
+| `.cursorrules` | Cursor | IDE-specific rules |
+
+### Skills (`.claude/skills/`)
+
+Project-specific skills that help AI agents work effectively on this codebase:
+
+| Skill | Purpose |
+|-------|---------|
+| `verify` | Pre-commit quality gate (lint + format + test + security) |
+| `add-cog` | Step-by-step guide to scaffold a new Cog |
+| `security-audit` | Security checklist specific to subprocess/injection threats |
+| `python-quality` | Python coding patterns and project conventions |
+| `test-guide` | Testing patterns, TDD workflow, coverage goals |
+
+### Commands (`.claude/commands/`)
+
+| Command | Usage |
+|---------|-------|
+| `/verify` | Run full verification pipeline |
+| `/new-cog <name>` | Scaffold a new Cog with tests |
+
+### Hooks (`.claude/settings.json`)
+
+- **PostToolUse (Edit/Write)**: Auto-format `.py` files with ruff after editing
+
 ## What Does NOT Belong Here
 
 - Personal bot configuration (tokens, channel IDs, user IDs)

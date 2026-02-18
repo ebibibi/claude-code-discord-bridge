@@ -1,0 +1,43 @@
+# claude-discord — Cursor Rules
+
+Discord frontend for Claude Code CLI. Python 3.10+ with discord.py v2.
+
+## Architecture
+
+- CLI spawn approach: `claude -p --output-format stream-json` as async subprocess
+- Thread = Session: Discord thread maps 1:1 to Claude Code session
+- Cog pattern for modular features
+- Repository pattern for SQLite data access
+
+## Code Standards
+
+- Type hints required on ALL function signatures
+- `from __future__ import annotations` in EVERY file
+- ruff for linting/formatting (line-length: 100)
+- pytest with pytest-asyncio (auto mode) for testing
+- Logging via `logging.getLogger(__name__)`, never print()
+
+## Security (Non-Negotiable)
+
+- NEVER use shell=True in subprocess calls
+- ALWAYS use `create_subprocess_exec` with args as list
+- ALWAYS validate user input (session IDs: `^[a-f0-9\-]+$`, skill names: `^[\w-]+$`)
+- ALWAYS use `--` before user prompt in CLI args
+- Strip secrets from subprocess environment (`_STRIPPED_ENV_KEYS`)
+- Use `contextlib.suppress(discord.HTTPException)` for non-critical Discord calls
+
+## File Layout
+
+- `claude_discord/cogs/` — Discord Cogs (use `_run_helper.run_claude_in_thread()`)
+- `claude_discord/claude/` — CLI runner, stream parser, types
+- `claude_discord/database/` — SQLite repository
+- `claude_discord/discord_ui/` — Status, chunker, embeds
+- `tests/` — pytest suite
+
+## Commands
+
+```bash
+uv run pytest tests/ -v --cov=claude_discord
+uv run ruff check claude_discord/
+uv run ruff format claude_discord/
+```
