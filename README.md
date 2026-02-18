@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Use [Claude Code](https://docs.anthropic.com/en/docs/claude-code) from your phone. A thin Discord frontend that gives you **full Claude Code CLI access** through Discord threads — designed for mobile development when you're away from your terminal.
+Connect [Claude Code](https://docs.anthropic.com/en/docs/claude-code) to Discord and GitHub. A framework that bridges Claude Code CLI with Discord for **interactive chat, CI/CD automation, and GitHub workflow integration**.
 
 **[日本語](docs/ja/README.md)** | **[简体中文](docs/zh-CN/README.md)** | **[한국어](docs/ko/README.md)** | **[Español](docs/es/README.md)** | **[Português](docs/pt-BR/README.md)** | **[Français](docs/fr/README.md)**
 
@@ -12,72 +12,53 @@ Use [Claude Code](https://docs.anthropic.com/en/docs/claude-code) from your phon
 
 > **Built entirely by Claude Code.** This project was designed, implemented, tested, and documented by Claude Code itself — the AI coding agent from Anthropic. The human author has not read the source code. See [How This Project Was Built](#how-this-project-was-built) for details.
 
-## Why This Exists
+## Two Ways to Use It
 
-I run 3-4 projects in parallel with Claude Code. On my phone via [Termux](https://termux.dev/) + tmux, managing multiple terminal sessions became painful — which tmux window was which project? What was I doing in each one? The context-switching overhead killed my productivity.
+### 1. Interactive Chat (Mobile / Desktop)
 
-**Discord solves this perfectly:**
-
-- Each project conversation is a **named thread** — instantly scannable
-- Threads preserve full history — come back hours later and pick up where you left off
-- Emoji reactions show status at a glance — no need to scroll through terminal output
-- Discord is free, works on every phone, and handles notifications natively
-
-## What This Is (and Isn't)
-
-**This is:** A focused bridge between Discord and Claude Code CLI. It spawns `claude -p --output-format stream-json` as a subprocess, parses the output, and posts it back to Discord. That's it.
-
-**This is not:** A feature-rich Discord bot, an AI chatbot framework, or a replacement for the Claude Code terminal experience. There's no custom AI logic, no plugin system, no admin dashboard.
-
-**Your Claude Code environment does the heavy lifting.** Your CLAUDE.md, skills, tools, memory, MCP servers — they all work exactly as they do in the terminal. This bridge just provides the UI layer.
-
-**Security model:** Run it on your own private Discord server, in a channel only you can access. The bot is intentionally simple — fewer features means fewer attack surfaces. You built it yourself, you can read every line of code, and there's nothing phoning home.
-
-## How It Compares
-
-| | claude-code-discord-bridge | [OpenClaw](https://github.com/openclaw/openclaw) & similar |
-|---|---|---|
-| **Focus** | Mobile-first Claude Code access | Full-featured Discord AI bot |
-| **AI backend** | Claude Code CLI (subprocess) | Direct API calls |
-| **Features** | Minimal: threads, status, chunking | Extensive: plugins, admin, multi-model |
-| **Configuration** | Your existing Claude Code setup | Bot-specific config |
-| **Skills/tools** | Inherited from Claude Code | Defined in bot config |
-| **Target user** | Developer who already uses Claude Code | Anyone wanting an AI Discord bot |
-| **Complexity** | ~800 lines of Python | Thousands of lines |
-
-**If you want a Discord AI chatbot**, use OpenClaw or similar projects — they're far more capable.
-
-**If you want to use Claude Code from your phone**, with all your existing project context, skills, and tools — that's what this is for.
-
-## Features
-
-- **Thread = Session** — Each task gets its own Discord thread, mapped 1:1 to a Claude Code session
-- **Real-time status** — Emoji reactions show what Claude is doing (🧠 thinking, 🛠️ reading files, 💻 editing, 🌐 web search)
-- **Streaming text** — Intermediate assistant text appears as Claude works, not just at the end
-- **Tool result display** — Tool use embeds update in place to show what each tool returned
-- **Extended thinking** — Claude's reasoning appears as spoiler-tagged embeds (click to reveal)
-- **Session persistence** — Continue conversations across messages via `--resume`
-- **Skill execution** — Run Claude Code skills (`/skill goodmorning`) via slash commands with autocomplete
-- **Webhook triggers** — Trigger Claude Code tasks from CI/CD pipelines via Discord webhooks
-- **Auto-upgrade** — Automatically update the bot when upstream packages are released
-- **REST API** — Push notifications to Discord from external tools (optional, requires aiohttp)
-- **Fence-aware splitting** — Long responses split at natural boundaries, never breaking code blocks
-- **Concurrent sessions** — Run multiple sessions in parallel (configurable limit)
-- **Security hardened** — No shell injection, secrets stripped from subprocess env, user authorization
-
-## How It Works
+Use Claude Code from your phone or any device with Discord. Each conversation becomes a thread with full session persistence.
 
 ```
 You (Discord)  →  Bridge  →  Claude Code CLI
-    ↑                                      ↓
-    ←──────── stream-json output ──────────←
+    ↑                              ↓
+    ←──── stream-json output ─────←
 ```
 
-1. Send a message in the configured Discord channel
-2. The bot creates a thread and starts a Claude Code session
-3. Stream-json output is parsed in real-time for status updates
-4. Claude's response is posted back to the thread
-5. Reply in the thread to continue the conversation
+### 2. CI/CD Automation (GitHub → Discord → Claude Code → GitHub)
+
+Trigger Claude Code tasks from GitHub Actions via Discord webhooks. Claude Code runs autonomously — reading code, updating docs, creating PRs, and enabling auto-merge.
+
+```
+GitHub Actions  →  Discord Webhook  →  Bridge  →  Claude Code CLI
+                                                         ↓
+GitHub PR (auto-merge)  ←  git push  ←  Claude Code  ←──┘
+```
+
+**Real-world example:** On every push to main, Claude Code automatically analyzes changes, updates documentation in English and Japanese, creates a PR with a bilingual summary, and enables auto-merge. No human interaction required.
+
+## Features
+
+### Interactive Chat
+- **Thread = Session** — Each task gets its own Discord thread, mapped 1:1 to a Claude Code session
+- **Real-time status** — Emoji reactions show what Claude is doing (🧠 thinking, 🛠️ reading files, 💻 editing, 🌐 web search)
+- **Streaming text** — Intermediate assistant text appears as Claude works, not just at the end
+- **Tool result display** — Tool use results shown as embeds in real-time
+- **Extended thinking** — Claude's reasoning appears as spoiler-tagged embeds (click to reveal)
+- **Session persistence** — Continue conversations across messages via `--resume`
+- **Skill execution** — Run Claude Code skills (`/skill goodmorning`) via slash commands with autocomplete
+- **Concurrent sessions** — Run multiple sessions in parallel (configurable limit)
+
+### CI/CD Automation
+- **Webhook triggers** — Trigger Claude Code tasks from GitHub Actions or any CI/CD system
+- **Auto-upgrade** — Automatically update the bot when upstream packages are released
+- **REST API** — Push notifications to Discord from external tools (optional, requires aiohttp)
+
+### Security
+- **No shell injection** — `asyncio.create_subprocess_exec` only, never `shell=True`
+- **Session ID validation** — Strict regex before passing to `--resume`
+- **Flag injection prevention** — `--` separator before all prompts
+- **Secret isolation** — Bot token and secrets stripped from subprocess environment
+- **User authorization** — `allowed_user_ids` restricts who can invoke Claude
 
 ## Quick Start
 
@@ -153,9 +134,40 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
    - Manage Messages (for reaction cleanup)
    - Read Message History
 
-## Webhook Integration
+## GitHub + Claude Code Automation
 
-Trigger Claude Code tasks from CI/CD pipelines (e.g. GitHub Actions) via Discord webhooks.
+The webhook trigger system lets you build fully autonomous CI/CD workflows where Claude Code acts as an intelligent agent — not just running scripts, but understanding code changes and making decisions.
+
+### Example: Automated Documentation Sync
+
+On every push to main, Claude Code:
+1. Pulls the latest changes and analyzes the diff
+2. Updates English documentation if source code changed
+3. Translates to Japanese (or any target languages)
+4. Creates a PR with a bilingual summary
+5. Enables auto-merge — PR merges automatically when CI passes
+
+**GitHub Actions workflow:**
+
+```yaml
+# .github/workflows/docs-sync.yml
+name: Documentation Sync
+on:
+  push:
+    branches: [main]
+jobs:
+  trigger:
+    # Skip commits from docs-sync itself (infinite loop prevention)
+    if: "!contains(github.event.head_commit.message, '[docs-sync]')"
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{"content": "🔄 docs-sync"}'
+```
+
+**Bot configuration:**
 
 ```python
 from claude_discord import WebhookTriggerCog, WebhookTrigger, ClaudeRunner
@@ -164,7 +176,7 @@ runner = ClaudeRunner(command="claude", model="sonnet")
 
 triggers = {
     "🔄 docs-sync": WebhookTrigger(
-        prompt="Update documentation based on latest code changes.",
+        prompt="Analyze changes, update docs, create a PR with bilingual summary, enable auto-merge.",
         working_dir="/home/user/my-project",
         timeout=600,
     ),
@@ -182,29 +194,32 @@ await bot.add_cog(WebhookTriggerCog(
 ))
 ```
 
-**How it works:**
-1. Set up a Discord webhook in your channel
-2. Send a message matching the trigger prefix (e.g. `🔄 docs-sync`)
-3. The Cog creates a thread and runs Claude Code with the configured prompt
-4. Results are streamed back to the thread in real-time
+**Security:** Only webhook messages are processed. Optional `allowed_webhook_ids` for stricter control. Prompts are defined server-side — webhooks only select which trigger to fire.
 
-**Security:** Only webhook messages are processed. Optional `allowed_webhook_ids` for stricter control. Prompts are server-side — webhooks only select which trigger to fire.
+### Example: Auto-Approve Owner PRs
 
-### GitHub Actions Example
+Automatically approve and auto-merge your own PRs after CI passes:
 
 ```yaml
-# .github/workflows/docs-sync.yml
+# .github/workflows/auto-approve.yml
+name: Auto Approve Owner PRs
 on:
-  push:
-    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
 jobs:
-  trigger:
+  auto-approve:
+    if: github.event.pull_request.user.login == 'your-username'
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
     steps:
-      - run: |
-          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
-            -H "Content-Type: application/json" \
-            -d '{"content": "🔄 docs-sync"}'
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr review "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --approve
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash
 ```
 
 ## Auto-Upgrade
@@ -225,8 +240,6 @@ await bot.add_cog(AutoUpgradeCog(bot, config))
 ```
 
 **Pipeline:** Upstream push → CI webhook → `🔄 bot-upgrade` → `uv lock --upgrade-package` → `uv sync` → service restart.
-
-Custom commands are supported via `upgrade_command` and `sync_command` parameters.
 
 ## REST API
 
@@ -289,9 +302,9 @@ claude_discord/
   main.py                  # Standalone entry point
   bot.py                   # Discord Bot class
   cogs/
-    claude_chat.py         # Main chat Cog (thread creation, message handling)
+    claude_chat.py         # Interactive chat (thread creation, message handling)
     skill_command.py       # /skill slash command with autocomplete
-    webhook_trigger.py     # Webhook → Claude Code task execution
+    webhook_trigger.py     # Webhook → Claude Code task execution (CI/CD)
     auto_upgrade.py        # Webhook → package upgrade + restart
     _run_helper.py         # Shared Claude CLI execution logic
   claude/
@@ -314,20 +327,10 @@ claude_discord/
 
 ### Design Philosophy
 
-- **No custom AI logic** — Claude Code handles all reasoning, tool use, and context
-- **No memory system** — Claude Code's built-in sessions + CLAUDE.md handle memory
-- **No tool definitions** — Claude Code has its own comprehensive tool set
-- **No plugin system** — Add capabilities by configuring Claude Code, not this bot
-- **Framework's job is purely UI** — Accept messages, show status, deliver responses
-
-### Security
-
-- `asyncio.create_subprocess_exec` (not shell) prevents command injection
-- Session IDs validated with strict regex before use
-- `--` separator prevents prompt injection via flag interpretation
-- Bot token and secrets stripped from the subprocess environment
-- `allowed_user_ids` restricts who can invoke Claude
-- Simple codebase (~800 LOC) — easy to audit yourself
+- **CLI spawn, not API** — We invoke `claude -p --output-format stream-json`, giving us full Claude Code features (CLAUDE.md, skills, tools, memory) for free
+- **Discord as glue** — Discord provides the UI, threading, notifications, and webhook infrastructure
+- **Framework, not application** — Install as a package, add Cogs to your existing bot, configure via code
+- **Security by simplicity** — ~2500 lines of auditable Python, no shell execution, no arbitrary code paths
 
 ## Testing
 
@@ -348,11 +351,11 @@ This means:
 - **Bug reports and PRs are welcome** — Claude Code will likely be used to address them too
 - **This is a real-world example of AI-authored open source software** — use it as a reference for what Claude Code can build
 
-The project was built in a single day (2026-02-18) through iterative conversation with Claude Code, starting from requirements and ending with a working, tested, documented package.
+The project started on 2026-02-18 and continues to evolve through iterative conversation with Claude Code.
 
 ## Real-World Example
 
-**[EbiBot](https://github.com/ebibibi/discord-bot)** — A personal Discord bot that uses claude-code-discord-bridge as a package dependency. Includes custom Cogs for push notifications, Todoist watchdog, and automated documentation sync. See it as a reference for how to build your own bot on top of this framework.
+**[EbiBot](https://github.com/ebibibi/discord-bot)** — A personal Discord bot that uses claude-code-discord-bridge as a package dependency. Includes automated documentation sync (English + Japanese), push notifications, Todoist watchdog, and CI/CD integration with GitHub Actions. See it as a reference for how to build your own bot on top of this framework.
 
 ## Inspired By
 
