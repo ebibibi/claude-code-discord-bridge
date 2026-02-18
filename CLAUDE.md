@@ -75,9 +75,11 @@ uv run python -m claude_discord.main
 - Never silently swallow errors in business logic — log them
 - CLI subprocess errors should yield a `StreamEvent` with `error` field, not raise exceptions
 
-### Security (Critical)
+### Security (Critical — Auto-Enforced)
 
-This project runs arbitrary Claude Code sessions. Security is non-negotiable:
+This project runs arbitrary Claude Code sessions. Security is non-negotiable.
+
+**Before every commit**, run the security audit (see `.claude/skills/security-audit/SKILL.md`):
 
 - **Always `create_subprocess_exec`**: Never use `shell=True`. The prompt is a direct argument, not shell-interpolated.
 - **`--` separator**: Always use `--` before the prompt argument to prevent flag injection
@@ -85,6 +87,8 @@ This project runs arbitrary Claude Code sessions. Security is non-negotiable:
 - **Skill name validation**: Strict regex `^[\w-]+$` before passing to Claude
 - **Environment stripping**: `DISCORD_BOT_TOKEN` and other secrets are removed from the subprocess env so Claude's Bash tool can't read them
 - **No `dangerously_skip_permissions` by default**: This flag exists for advanced users who understand the risk
+
+If you modify `runner.py`, `_run_helper.py`, or any Cog, the security audit is **mandatory** before committing.
 
 ### Naming
 
@@ -94,13 +98,22 @@ This project runs arbitrary Claude Code sessions. Security is non-negotiable:
 - Private: prefix with `_` (e.g., `_build_args`, `_run_helper.py`)
 - Constants: `UPPER_SNAKE_CASE`
 
-### Testing
+### Testing (TDD Enforced)
+
+**All new features and bug fixes MUST follow TDD: write tests FIRST, then implement.**
+
+1. **RED**: Write a failing test → `uv run pytest tests/test_xxx.py -v` → confirm it FAILS
+2. **GREEN**: Write minimal code to pass → confirm it PASSES
+3. **REFACTOR**: Clean up, keeping tests green
+4. **VERIFY**: `uv run ruff check claude_discord/ && uv run pytest tests/ -v --cov=claude_discord`
+
+See `.claude/skills/tdd/SKILL.md` for detailed patterns per module type.
 
 - Use `pytest` with `pytest-asyncio` (auto mode)
 - Test files go in `tests/` mirroring the source structure
-- Pure logic (parser, chunker, types) should have thorough unit tests
-- Discord-dependent code (Cogs, StatusManager) may use mocks
-- Aim for meaningful coverage — don't test obvious getters/setters, do test edge cases
+- Pure logic (parser, chunker, types): 90%+ coverage
+- Discord-dependent code (Cogs, StatusManager): use mocks, 30%+ coverage
+- **Never write implementation code without a corresponding test**
 
 ## Project Structure
 

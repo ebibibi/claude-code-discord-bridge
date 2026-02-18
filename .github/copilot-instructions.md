@@ -22,7 +22,9 @@ Discord frontend for Claude Code CLI. Python 3.10+ with discord.py v2.
 - `claude_discord/discord_ui/` — Status reactions, message chunking, embeds
 - `tests/` — pytest suite
 
-## Testing
+## Testing (TDD Enforced)
+
+**Write tests FIRST, then implement.** Follow RED → GREEN → REFACTOR for all new features and bug fixes.
 
 ```bash
 uv run pytest tests/ -v --cov=claude_discord
@@ -30,7 +32,8 @@ uv run ruff check claude_discord/
 uv run ruff format --check claude_discord/
 ```
 
-## Security
+## Security (Mandatory Pre-Commit)
 
 This project spawns Claude Code CLI as a subprocess. All user input flows through to CLI args.
 Never interpolate user input into shell commands. Strip secrets from subprocess env.
+Run security audit before committing changes to runner.py, _run_helper.py, or any Cog.
