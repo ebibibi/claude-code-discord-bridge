@@ -250,7 +250,7 @@ dependencies = [
     { name = "python-dotenv" },
 ]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -262,13 +262,16 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20,<1.0" },
     { name = "discord-py", specifier = ">=2.4,<3.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "python-dotenv", specifier = ">=1.0,<2.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
 ]
-provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "pytest-cov", specifier = ">=5.0" },
+    { name = "ruff", specifier = ">=0.4" },
+]
 
 [[package]]
 name = "colorama"
