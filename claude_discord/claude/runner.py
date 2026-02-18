@@ -67,6 +67,7 @@ class ClaudeRunner:
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=env,
+            limit=10 * 1024 * 1024,  # 10MB — stream-json lines can be large
         )
 
         try:
