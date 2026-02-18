@@ -35,8 +35,8 @@ _ALLOWED_MIME_PREFIXES = (
     "application/json",
     "application/xml",
 )
-_MAX_ATTACHMENT_BYTES = 50_000   # 50 KB per file
-_MAX_TOTAL_BYTES = 100_000       # 100 KB across all attachments
+_MAX_ATTACHMENT_BYTES = 50_000  # 50 KB per file
+_MAX_TOTAL_BYTES = 100_000  # 100 KB across all attachments
 _MAX_ATTACHMENTS = 5
 
 
