@@ -7,10 +7,45 @@ on:
 jobs:
   trigger-docs-sync:
     # Skip if the commit is from docs-sync itself (infinite loop prevention)
-    if: "!contains(github.event.head_commit.message, '[docs-sync]')"
+    if: >-
+      !contains(github.event.head_commit.message, '[docs-sync]') &&
+      !contains(github.event.head_commit.message, 'docs-sync/')
     runs-on: ubuntu-latest
     steps:
+      - name: Check for recent docs-sync activity
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Skip if a docs-sync PR was merged within the last 5 minutes
+          # (prevents re-trigger from conflict resolution merges)
+          RECENT_PR=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state merged \
+            --search "head:docs-sync/ merged:>=$(date -u -d '5 minutes ago' '+%Y-%m-%dT%H:%M:%S')" \
+            --json number,mergedAt \
+            --limit 1)
+
+          if [ "$(echo "$RECENT_PR" | jq length)" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "⏭️ Skipping: docs-sync PR was recently merged"
+          fi
+
+          # Also skip if there's already an open docs-sync PR
+          OPEN_PR=$(gh pr list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "head:docs-sync/" \
+            --json number \
+            --limit 1)
+
+          if [ "$(echo "$OPEN_PR" | jq length)" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "⏭️ Skipping: docs-sync PR already open"
+          fi
+
       - name: Trigger docs-sync via Discord webhook
+        if: steps.check.outputs.skip != 'true'
         env:
           WEBHOOK_URL: ${{ secrets.DOCS_SYNC_WEBHOOK_URL }}
         run: |
