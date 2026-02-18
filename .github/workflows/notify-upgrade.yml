@@ -1,0 +1,21 @@
+name: Notify EbiBot Upgrade
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  trigger-upgrade:
+    # Skip docs-sync commits (no code change = no upgrade needed)
+    if: "!contains(github.event.head_commit.message, '[docs-sync]')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger EbiBot auto-upgrade via Discord webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.DOCS_SYNC_WEBHOOK_URL }}
+        run: |
+          # Tell EbiBot to pull the latest bridge package and restart
+          curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d '{"content":"🔄 ebibot-upgrade"}' \
+            "$WEBHOOK_URL"
