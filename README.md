@@ -49,6 +49,9 @@ GitHub PR (auto-merge)  ←  git push  ←  Claude Code  ←──┘
 - **Session persistence** — Continue conversations across messages via `--resume`
 - **Skill execution** — Run Claude Code skills (`/skill goodmorning`) via slash commands with autocomplete
 - **Concurrent sessions** — Run multiple sessions in parallel (configurable limit)
+- **Stop without clearing** — `/stop` halts a running session while preserving it for resume
+- **Attachment support** — Text-type file attachments are automatically appended to the prompt (up to 5 files, 50 KB each)
+- **Timeout notifications** — Dedicated embed with elapsed seconds and actionable guidance when a session times out
 
 ### CI/CD Automation
 - **Webhook triggers** — Trigger Claude Code tasks from GitHub Actions or any CI/CD system
