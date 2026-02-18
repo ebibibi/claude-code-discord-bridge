@@ -210,6 +210,10 @@ This means:
 
 The project was built in a single day (2026-02-18) through iterative conversation with Claude Code, starting from requirements and ending with a working, tested, documented package.
 
+## Real-World Example
+
+**[EbiBot](https://github.com/ebibibi/discord-bot)** — A personal Discord bot that uses claude-code-discord-bridge as a package dependency. Includes custom Cogs for push notifications, Todoist watchdog, and automated documentation sync. See it as a reference for how to build your own bot on top of this framework.
+
 ## Inspired By
 
 - [OpenClaw](https://github.com/openclaw/openclaw) — Emoji status reactions, message debouncing, fence-aware chunking
