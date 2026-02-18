@@ -199,9 +199,7 @@ class AutoUpgradeCog(commands.Cog):
                 await thread.send(f"✅ Sessions finished ({elapsed}s). Restarting now...")
                 return
 
-        await thread.send(
-            f"⚠️ Drain timeout ({self._drain_timeout}s elapsed) — restarting anyway."
-        )
+        await thread.send(f"⚠️ Drain timeout ({self._drain_timeout}s elapsed) — restarting anyway.")
 
     async def _run_step(
         self,

@@ -140,9 +140,7 @@ class SkillCommandCog(commands.Cog):
 
     def _is_claude_thread(self, channel: discord.abc.GuildChannel | discord.Thread) -> bool:
         """Check if the channel is a thread under the configured claude channel."""
-        return (
-            isinstance(channel, discord.Thread) and channel.parent_id == self.claude_channel_id
-        )
+        return isinstance(channel, discord.Thread) and channel.parent_id == self.claude_channel_id
 
     @app_commands.command(name="skill", description="Run a Claude Code skill")
     @app_commands.describe(
