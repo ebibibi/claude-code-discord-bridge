@@ -6,7 +6,7 @@ Use Claude Code from your phone. A thin Discord frontend that gives you **full C
 
 ## Why This Exists
 
-I run 3-4 projects in parallel with Claude Code. On my phone (via [StarMax](https://apps.apple.com/app/id6504527606)), managing multiple terminal sessions became painful — which session was which project? What was I doing in each one? The context-switching overhead killed my productivity.
+I run 3-4 projects in parallel with Claude Code. On my phone via [Termux](https://termux.dev/) + tmux, managing multiple terminal sessions became painful — which tmux window was which project? What was I doing in each one? The context-switching overhead killed my productivity.
 
 **Discord solves this perfectly:**
 
