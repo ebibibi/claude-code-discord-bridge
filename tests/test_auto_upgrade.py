@@ -214,6 +214,112 @@ class TestUpgradeSteps:
         )
 
 
+class TestDrainCheck:
+    """Test graceful-drain-before-restart behaviour."""
+
+    def _make_cog_with_restart(
+        self,
+        bot: MagicMock,
+        drain_check=None,
+        drain_timeout: int = 300,
+        drain_poll_interval: int = 10,
+    ) -> AutoUpgradeCog:
+        config = UpgradeConfig(
+            package_name="pkg",
+            restart_command=["sudo", "systemctl", "restart", "bot.service"],
+            working_dir="/tmp",
+        )
+        return AutoUpgradeCog(
+            bot=bot,
+            config=config,
+            drain_check=drain_check,
+            drain_timeout=drain_timeout,
+            drain_poll_interval=drain_poll_interval,
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_drain_check_skips_waiting(
+        self, bot: MagicMock,
+    ) -> None:
+        """When drain_check is None, _drain returns immediately."""
+        cog = self._make_cog_with_restart(bot)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        with patch(_PATCH_SLEEP, new_callable=AsyncMock) as mock_sleep:
+            await cog._drain(thread)
+
+        mock_sleep.assert_not_called()
+        thread.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_drain_check_true_returns_immediately(
+        self, bot: MagicMock,
+    ) -> None:
+        """When drain_check already returns True, no polling occurs."""
+        cog = self._make_cog_with_restart(bot, drain_check=lambda: True)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        with patch(_PATCH_SLEEP, new_callable=AsyncMock) as mock_sleep:
+            await cog._drain(thread)
+
+        mock_sleep.assert_not_called()
+        thread.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_drain_waits_until_check_passes(
+        self, bot: MagicMock,
+    ) -> None:
+        """drain_check False→True: polls once then proceeds."""
+        poll_count = 0
+
+        def drain_check() -> bool:
+            nonlocal poll_count
+            poll_count += 1
+            return poll_count > 1  # False first, True second
+
+        cog = self._make_cog_with_restart(
+            bot, drain_check=drain_check, drain_poll_interval=5,
+        )
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        sleep_calls: list[float] = []
+
+        async def capture_sleep(s: float) -> None:
+            sleep_calls.append(s)
+
+        with patch(_PATCH_SLEEP, side_effect=capture_sleep):
+            await cog._drain(thread)
+
+        assert sleep_calls == [5]
+        send_texts = " ".join(str(c) for c in thread.send.call_args_list)
+        assert "waiting for active sessions" in send_texts
+        assert "Sessions finished" in send_texts
+
+    @pytest.mark.asyncio
+    async def test_drain_timeout_proceeds_anyway(
+        self, bot: MagicMock,
+    ) -> None:
+        """When drain_check never returns True, returns after timeout."""
+        cog = self._make_cog_with_restart(
+            bot,
+            drain_check=lambda: False,
+            drain_timeout=20,
+            drain_poll_interval=10,
+        )
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        with patch(_PATCH_SLEEP, new_callable=AsyncMock):
+            await cog._drain(thread)
+
+        # Posts timeout warning, then returns (restart proceeds)
+        send_texts = " ".join(str(c) for c in thread.send.call_args_list)
+        assert "timeout" in send_texts.lower()
+
+
 class TestConcurrency:
     """Test concurrent execution prevention."""
 
@@ -261,3 +367,38 @@ class TestUpgradeConfigDataclass:
             "pip", "install", "--upgrade", "my-pkg",
         ]
         assert config.sync_command == ["pip", "check"]
+
+
+class TestActiveSessionCount:
+    """Tests for ClaudeChatCog.active_session_count property."""
+
+    def test_count_starts_at_zero(self) -> None:
+        from claude_discord.cogs.claude_chat import ClaudeChatCog
+        from claude_discord.claude.runner import ClaudeRunner
+
+        bot = MagicMock()
+        bot.channel_id = 999
+        cog = ClaudeChatCog(
+            bot=bot,
+            repo=MagicMock(),
+            runner=MagicMock(spec=ClaudeRunner),
+        )
+        assert cog.active_session_count == 0
+
+    def test_count_reflects_runners(self) -> None:
+        from claude_discord.cogs.claude_chat import ClaudeChatCog
+        from claude_discord.claude.runner import ClaudeRunner
+
+        bot = MagicMock()
+        bot.channel_id = 999
+        cog = ClaudeChatCog(
+            bot=bot,
+            repo=MagicMock(),
+            runner=MagicMock(spec=ClaudeRunner),
+        )
+        cog._active_runners[1] = MagicMock()
+        cog._active_runners[2] = MagicMock()
+        assert cog.active_session_count == 2
+
+        del cog._active_runners[1]
+        assert cog.active_session_count == 1

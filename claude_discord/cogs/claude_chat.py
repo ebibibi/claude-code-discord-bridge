@@ -59,6 +59,11 @@ class ClaudeChatCog(commands.Cog):
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, ClaudeRunner] = {}
 
+    @property
+    def active_session_count(self) -> int:
+        """Number of Claude sessions currently running in this cog."""
+        return len(self._active_runners)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         """Handle incoming messages."""

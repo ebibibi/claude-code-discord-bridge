@@ -47,7 +47,7 @@ GitHub PR (auto-merge)  ←  git push  ←  Claude Code  ←──┘
 - **Tool result display** — Tool use results shown as embeds in real-time
 - **Extended thinking** — Claude's reasoning appears as spoiler-tagged embeds (click to reveal)
 - **Session persistence** — Continue conversations across messages via `--resume`
-- **Skill execution** — Run Claude Code skills (`/skill goodmorning`) via slash commands with autocomplete
+- **Skill execution** — Run Claude Code skills via `/skill` with autocomplete, optional arguments, and in-thread resume
 - **Concurrent sessions** — Run multiple sessions in parallel (configurable limit)
 - **Stop without clearing** — `/stop` halts a running session while preserving it for resume
 - **Attachment support** — Text-type file attachments are automatically appended to the prompt (up to 5 files, 50 KB each)
@@ -64,6 +64,22 @@ GitHub PR (auto-merge)  ←  git push  ←  Claude Code  ←──┘
 - **Flag injection prevention** — `--` separator before all prompts
 - **Secret isolation** — Bot token and secrets stripped from subprocess environment
 - **User authorization** — `allowed_user_ids` restricts who can invoke Claude
+
+## Skills
+
+Run [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code) directly from Discord via the `/skill` slash command.
+
+```
+/skill name:goodmorning                      → runs /goodmorning
+/skill name:todoist args:filter "today"      → runs /todoist filter "today"
+/skills                                      → lists all available skills
+```
+
+**Features:**
+- **Autocomplete** — Type to filter; names and descriptions are searchable
+- **Arguments** — Pass additional arguments via the `args` parameter
+- **In-thread resume** — Use `/skill` inside an existing Claude thread to run the skill within the current session instead of creating a new thread
+- **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh interval, no restart needed)
 
 ## Quick Start
 

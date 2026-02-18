@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -70,12 +71,31 @@ class AutoUpgradeCog(commands.Cog):
             working_dir="/home/user/my-bot",
             restart_command=["sudo", "systemctl", "restart", "my-bot.service"],
         )
-        await bot.add_cog(AutoUpgradeCog(bot, config))
+        await bot.add_cog(AutoUpgradeCog(bot, config, drain_check=lambda: not active_sessions))
+
+    Args:
+        bot: The Discord bot instance.
+        config: Upgrade configuration.
+        drain_check: Optional callable that returns True when it is safe to restart
+            (e.g. no active user sessions). Called repeatedly until True or timeout.
+        drain_timeout: Maximum seconds to wait for drain_check to return True.
+            After this, the restart proceeds regardless. Default: 300s.
+        drain_poll_interval: Seconds between drain_check polls. Default: 10s.
     """
 
-    def __init__(self, bot: commands.Bot, config: UpgradeConfig) -> None:
+    def __init__(
+        self,
+        bot: commands.Bot,
+        config: UpgradeConfig,
+        drain_check: Callable[[], bool] | None = None,
+        drain_timeout: int = 300,
+        drain_poll_interval: int = 10,
+    ) -> None:
         self.bot = bot
         self.config = config
+        self._drain_check = drain_check
+        self._drain_timeout = drain_timeout
+        self._drain_poll_interval = drain_poll_interval
         self._lock = asyncio.Lock()
 
     @commands.Cog.listener()
@@ -134,6 +154,7 @@ class AutoUpgradeCog(commands.Cog):
 
             # Step 3: Optional restart
             if self.config.restart_command:
+                await self._drain(thread)
                 await thread.send("🔄 Restarting...")
                 await trigger_message.add_reaction("✅")
                 await asyncio.sleep(1)
@@ -156,6 +177,31 @@ class AutoUpgradeCog(commands.Cog):
             logger.exception("Auto-upgrade error")
             await thread.send("❌ Upgrade failed with an unexpected error.")
             await trigger_message.add_reaction("❌")
+
+    async def _drain(self, thread: discord.Thread) -> None:
+        """Wait until drain_check returns True or drain_timeout elapses.
+
+        If no drain_check is configured, returns immediately.
+        Posts status updates to the Discord thread while waiting.
+        """
+        if self._drain_check is None or self._drain_check():
+            return
+
+        await thread.send(
+            f"⏳ Upgrade ready — waiting for active sessions to finish "
+            f"(max {self._drain_timeout}s)..."
+        )
+        elapsed = 0
+        while elapsed < self._drain_timeout:
+            await asyncio.sleep(self._drain_poll_interval)
+            elapsed += self._drain_poll_interval
+            if self._drain_check():
+                await thread.send(f"✅ Sessions finished ({elapsed}s). Restarting now...")
+                return
+
+        await thread.send(
+            f"⚠️ Drain timeout ({self._drain_timeout}s elapsed) — restarting anyway."
+        )
 
     async def _run_step(
         self,
