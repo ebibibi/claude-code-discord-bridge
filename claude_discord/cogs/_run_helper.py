@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,7 @@ from ..discord_ui.embeds import (
     session_complete_embed,
     session_start_embed,
     thinking_embed,
+    timeout_embed,
     tool_result_embed,
     tool_use_embed,
 )
@@ -200,7 +202,7 @@ async def run_claude_in_thread(
                     await streamer.finalize()
 
                 if event.error:
-                    await thread.send(embed=error_embed(event.error))
+                    await thread.send(embed=_make_error_embed(event.error))
                     if status:
                         await status.set_error()
                 else:
@@ -235,3 +237,14 @@ def _truncate_result(content: str) -> str:
     if len(content) <= TOOL_RESULT_MAX_CHARS:
         return content
     return content[:TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+
+
+_TIMEOUT_PATTERN = re.compile(r"Timed out after (\d+) seconds")
+
+
+def _make_error_embed(error: str) -> discord.Embed:
+    """Return a timeout_embed for timeout errors, error_embed otherwise."""
+    m = _TIMEOUT_PATTERN.match(error)
+    if m:
+        return timeout_embed(int(m.group(1)))
+    return error_embed(error)

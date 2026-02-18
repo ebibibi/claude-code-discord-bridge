@@ -16,9 +16,11 @@ from claude_discord.claude.types import (
 from claude_discord.cogs._run_helper import (
     TOOL_RESULT_MAX_CHARS,
     StreamingMessageManager,
+    _make_error_embed,
     _truncate_result,
     run_claude_in_thread,
 )
+from claude_discord.discord_ui.embeds import timeout_embed
 
 
 class TestTruncateResult:
@@ -292,3 +294,65 @@ class TestRunClaudeInThread:
         # Should not raise even with repo=None
         result = await run_claude_in_thread(thread, runner, None, "test", None)
         assert result == "sess-1"
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_uses_timeout_embed(
+        self, thread: MagicMock, runner: MagicMock, repo: MagicMock
+    ) -> None:
+        """Timeout errors should use timeout_embed, not the generic error_embed."""
+        events = [
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                error="Timed out after 300 seconds",
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+
+        await run_claude_in_thread(thread, runner, repo, "test", None)
+
+        embed_calls = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert any("timed out" in (c.kwargs["embed"].title or "").lower() for c in embed_calls)
+        # Must NOT be the generic "Error" embed
+        assert not any(c.kwargs["embed"].title == "❌ Error" for c in embed_calls)
+
+    @pytest.mark.asyncio
+    async def test_non_timeout_error_uses_error_embed(
+        self, thread: MagicMock, runner: MagicMock, repo: MagicMock
+    ) -> None:
+        """Non-timeout errors should still use the generic error_embed."""
+        events = [
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                error="CLI exited with code 1",
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+
+        await run_claude_in_thread(thread, runner, repo, "test", None)
+
+        embed_calls = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert any("Error" in (c.kwargs["embed"].title or "") for c in embed_calls)
+
+
+class TestMakeErrorEmbed:
+    """Unit tests for the _make_error_embed router function."""
+
+    def test_timeout_message_returns_timeout_embed(self) -> None:
+        embed = _make_error_embed("Timed out after 300 seconds")
+        assert "timed out" in embed.title.lower()
+
+    def test_timeout_message_includes_seconds(self) -> None:
+        embed = _make_error_embed("Timed out after 120 seconds")
+        assert "120" in embed.description
+
+    def test_generic_error_returns_error_embed(self) -> None:
+        embed = _make_error_embed("Something went wrong")
+        assert embed.title == "❌ Error"
+        assert "Something went wrong" in embed.description
+
+    def test_partial_timeout_text_uses_error_embed(self) -> None:
+        # "Timed out" not at start — should NOT match
+        embed = _make_error_embed("Process Timed out after 300 seconds")
+        assert embed.title == "❌ Error"

@@ -107,3 +107,30 @@ def error_embed(error: str) -> discord.Embed:
         description=error[:4000],
         color=COLOR_ERROR,
     )
+
+
+def timeout_embed(seconds: int) -> discord.Embed:
+    """Create an embed for session timeout with actionable guidance."""
+    return discord.Embed(
+        title="\u23f1\ufe0f Session timed out",
+        description=(
+            f"No response received for {seconds} seconds.\n\n"
+            "**What to do:**\n"
+            "\u2022 Send a message to resume the session\n"
+            "\u2022 Use `/clear` to start fresh"
+        ),
+        color=COLOR_ERROR,
+    )
+
+
+def stopped_embed() -> discord.Embed:
+    """Create an embed for a manually stopped session."""
+    return discord.Embed(
+        title="\u23f9\ufe0f Session stopped",
+        description=(
+            "The session was stopped.\n\n"
+            "The session is preserved \u2014 send a message to resume, "
+            "or use `/clear` to start fresh."
+        ),
+        color=0xFFA500,  # Orange — not an error, just interrupted
+    )
