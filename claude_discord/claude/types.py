@@ -99,6 +99,7 @@ class StreamEvent:
     """A parsed event from the Claude Code stream-json output."""
 
     message_type: MessageType
+    raw: dict = field(default_factory=dict)
     session_id: str | None = None
     text: str | None = None
     tool_use: ToolUseEvent | None = None
