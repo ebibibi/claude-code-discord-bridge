@@ -53,6 +53,9 @@ I run 3-4 projects in parallel with Claude Code. On my phone via [Termux](https:
 
 - **Thread = Session** — Each task gets its own Discord thread, mapped 1:1 to a Claude Code session
 - **Real-time status** — Emoji reactions show what Claude is doing (🧠 thinking, 🛠️ reading files, 💻 editing, 🌐 web search)
+- **Streaming text** — Intermediate assistant text appears as Claude works, not just at the end
+- **Tool result display** — Tool use embeds update in place to show what each tool returned
+- **Extended thinking** — Claude's reasoning appears as spoiler-tagged embeds (click to reveal)
 - **Session persistence** — Continue conversations across messages via `--resume`
 - **Skill execution** — Run Claude Code skills (`/skill goodmorning`) via slash commands with autocomplete
 - **Fence-aware splitting** — Long responses split at natural boundaries, never breaking code blocks
@@ -195,7 +198,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-48 tests covering parser, chunker, repository, and runner logic.
+71 tests covering parser, chunker, repository, runner, streaming, and run-helper logic.
 
 ## How This Project Was Built
 
