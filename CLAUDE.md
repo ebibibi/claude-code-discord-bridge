@@ -13,22 +13,45 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 - **Python 3.10+** with discord.py v2
 - **Cog pattern** for modular features
 - **Repository pattern** for data access (SQLite via aiosqlite)
-- **asyncio.subprocess** for Claude Code CLI invocation
+- **asyncio.subprocess** for Claude Code CLI invocation (never shell=True)
 
 ## Key Design Decisions
 
 1. **CLI spawn, not API**: We invoke `claude -p --output-format stream-json` as a subprocess, not the Anthropic API directly. This gives us all Claude Code features (CLAUDE.md, skills, tools, memory) for free.
 2. **Thread = Session**: Each Discord thread maps 1:1 to a Claude Code session ID. Replies in a thread continue the same session via `--resume`.
-3. **Emoji reactions for status**: Non-intrusive progress indication on the user's message.
+3. **Emoji reactions for status**: Non-intrusive progress indication on the user's message. Debounced to avoid Discord rate limits.
 4. **Fence-aware chunking**: Never split Discord messages inside a code block.
 5. **Installable package**: `claude_discord` is a proper Python package. Consumers install via `uv add git+...` or `pip install git+...`, not by copying files.
 6. **Shared run helper**: `cogs/_run_helper.py` centralizes Claude CLI execution logic used by both ClaudeChatCog and SkillCommandCog.
 
-## Package Management
+## Development
 
-Uses **uv** for fast dependency management. No venv setup needed.
+### Setup
 
-## Running (standalone)
+```bash
+git clone https://github.com/ebibibi/claude-discord.git
+cd claude-discord
+uv sync --dev
+```
+
+### Running Tests
+
+```bash
+uv run pytest tests/ -v --cov=claude_discord
+```
+
+All tests must pass before submitting a PR. CI runs on Python 3.10, 3.11, and 3.12.
+
+### Linting & Formatting
+
+```bash
+uv run ruff check claude_discord/    # lint
+uv run ruff format claude_discord/   # format
+```
+
+CI enforces both `ruff check` and `ruff format --check`. Fix all issues before pushing.
+
+### Running (standalone)
 
 ```bash
 cp .env.example .env
@@ -36,11 +59,48 @@ cp .env.example .env
 uv run python -m claude_discord.main
 ```
 
-## Testing
+## Code Conventions
 
-```bash
-uv run pytest tests/ -v --cov=claude_discord
-```
+### Style
+
+- **Formatter/Linter**: ruff (config in `pyproject.toml`)
+- **Type hints**: Required on all function signatures
+- **Python**: 3.10+ — use `from __future__ import annotations` in every file
+- **Line length**: 100 characters max
+- **Imports**: Sorted by ruff (`I` rule). Use `TYPE_CHECKING` for type-only imports
+
+### Error Handling
+
+- Use `contextlib.suppress(discord.HTTPException)` for Discord API calls that may fail (reactions, message edits)
+- Never silently swallow errors in business logic — log them
+- CLI subprocess errors should yield a `StreamEvent` with `error` field, not raise exceptions
+
+### Security (Critical)
+
+This project runs arbitrary Claude Code sessions. Security is non-negotiable:
+
+- **Always `create_subprocess_exec`**: Never use `shell=True`. The prompt is a direct argument, not shell-interpolated.
+- **`--` separator**: Always use `--` before the prompt argument to prevent flag injection
+- **Session ID validation**: Strict regex `^[a-f0-9\-]+$` before passing to `--resume`
+- **Skill name validation**: Strict regex `^[\w-]+$` before passing to Claude
+- **Environment stripping**: `DISCORD_BOT_TOKEN` and other secrets are removed from the subprocess env so Claude's Bash tool can't read them
+- **No `dangerously_skip_permissions` by default**: This flag exists for advanced users who understand the risk
+
+### Naming
+
+- Files: `snake_case.py`
+- Classes: `PascalCase` (e.g., `ClaudeRunner`, `StatusManager`)
+- Functions/methods: `snake_case`
+- Private: prefix with `_` (e.g., `_build_args`, `_run_helper.py`)
+- Constants: `UPPER_SNAKE_CASE`
+
+### Testing
+
+- Use `pytest` with `pytest-asyncio` (auto mode)
+- Test files go in `tests/` mirroring the source structure
+- Pure logic (parser, chunker, types) should have thorough unit tests
+- Discord-dependent code (Cogs, StatusManager) may use mocks
+- Aim for meaningful coverage — don't test obvious getters/setters, do test edge cases
 
 ## Project Structure
 
@@ -61,21 +121,43 @@ claude_discord/          # Installable Python package
     models.py            # SQLite schema
     repository.py        # Session CRUD operations
   discord_ui/
-    status.py            # Emoji reaction status manager
+    status.py            # Emoji reaction status manager (debounced)
     chunker.py           # Fence-aware message splitting
     embeds.py            # Discord embed builders
   utils/
     logger.py            # Logging setup
-tests/                   # pytest test suite (48 tests)
+tests/                   # pytest test suite
 pyproject.toml           # Package metadata + dependencies
 uv.lock                  # Dependency lock file
 CONTRIBUTING.md          # Contribution guidelines
 ```
 
-## Commit Style
+### Adding a New Cog
 
-```
-<type>: <description>
-```
+1. Create `claude_discord/cogs/your_cog.py`
+2. If it runs Claude CLI, use `_run_helper.run_claude_in_thread()` — don't duplicate the streaming logic
+3. Export from `claude_discord/cogs/__init__.py`
+4. Add to `claude_discord/__init__.py` public API
+5. Write tests in `tests/test_your_cog.py`
 
-Types: feat, fix, refactor, docs, test, chore, security
+### Adding a New Discord UI Component
+
+1. Add to the appropriate file in `claude_discord/discord_ui/`
+2. Export from `__init__.py` if it's part of the public API
+3. Test edge cases (empty strings, very long strings, Unicode, code blocks)
+
+## Git & PR Workflow
+
+- **Branch from `main`**: `feature/description`, `fix/description`, `docs/description`
+- **CI must pass**: All 3 Python versions x (ruff check + ruff format + pytest)
+- **No direct push to main**: Always create a PR
+- **Squash merge preferred**: Keeps main history clean
+- **Commit style**: `<type>: <description>` — types: feat, fix, refactor, docs, test, chore, security
+
+## What Does NOT Belong Here
+
+- Personal bot configuration (tokens, channel IDs, user IDs)
+- Server-specific Cogs or workflows
+- Direct Anthropic API calls (we use Claude Code CLI, not the API)
+- Heavy dependencies that most users won't need
+- Anything that requires secrets to import the package
