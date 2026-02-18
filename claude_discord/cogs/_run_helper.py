@@ -120,7 +120,7 @@ class StreamingMessageManager:
 async def run_claude_in_thread(
     thread: discord.Thread,
     runner: ClaudeRunner,
-    repo: SessionRepository,
+    repo: SessionRepository | None,
     prompt: str,
     session_id: str | None,
     status: StatusManager | None = None,
@@ -131,6 +131,7 @@ async def run_claude_in_thread(
         thread: Discord thread to post results to.
         runner: A fresh (cloned) ClaudeRunner instance.
         repo: Session repository for persisting thread-session mappings.
+              Pass None for automated workflows that don't need session persistence.
         prompt: The user's message or skill invocation.
         session_id: Optional session ID to resume. None for new sessions.
         status: Optional StatusManager for emoji reactions on the user's message.
@@ -146,7 +147,8 @@ async def run_claude_in_thread(
             # System message: capture session_id
             if event.message_type == MessageType.SYSTEM and event.session_id:
                 state.session_id = event.session_id
-                await repo.save(thread.id, state.session_id)
+                if repo:
+                    await repo.save(thread.id, state.session_id)
                 if not session_id:
                     await thread.send(embed=session_start_embed(state.session_id))
 
@@ -215,7 +217,8 @@ async def run_claude_in_thread(
                         await status.set_done()
 
                 if event.session_id:
-                    await repo.save(thread.id, event.session_id)
+                    if repo:
+                        await repo.save(thread.id, event.session_id)
                     state.session_id = event.session_id
 
     except Exception:

@@ -269,3 +269,26 @@ class TestRunClaudeInThread:
         ]
         final_msgs = [c for c in text_messages if c.args[0] == "Final answer."]
         assert len(final_msgs) == 1
+
+    @pytest.mark.asyncio
+    async def test_repo_none_skips_save(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """When repo is None (automated workflows), session save should be skipped."""
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-1"),
+            StreamEvent(message_type=MessageType.ASSISTANT, text="Done."),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                text="Done.",
+                session_id="sess-1",
+                cost_usd=0.01,
+                duration_ms=500,
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+
+        # Should not raise even with repo=None
+        result = await run_claude_in_thread(thread, runner, None, "test", None)
+        assert result == "sess-1"
