@@ -94,6 +94,7 @@ class ClaudeRunner:
             permission_mode=self.permission_mode,
             working_dir=self.working_dir,
             timeout_seconds=self.timeout_seconds,
+            allowed_tools=self.allowed_tools,
         )
 
     async def kill(self) -> None:
