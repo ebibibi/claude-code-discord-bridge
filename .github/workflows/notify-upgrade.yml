@@ -1,13 +1,18 @@
 name: Notify EbiBot Upgrade
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches: [main]
 
 jobs:
   trigger-upgrade:
-    # Skip docs-sync commits (no code change = no upgrade needed)
-    if: "!contains(github.event.head_commit.message, '[docs-sync]')"
+    # Only run when a PR is actually merged (not just closed), and skip docs-sync PRs.
+    # Note: github.event.pull_request.title is used only in the if: expression,
+    # which is evaluated by GitHub Actions — not bash. No injection risk here.
+    if: |
+      github.event.pull_request.merged == true &&
+      !contains(github.event.pull_request.title, '[docs-sync]')
     runs-on: ubuntu-latest
     steps:
       - name: Trigger EbiBot auto-upgrade via Discord webhook
