@@ -68,9 +68,10 @@ uv run ruff format claude_discord/
 ## プロジェクト構造
 
 - `claude_discord/claude/` — Claude Code CLI との連携（runner、parser、types）
-- `claude_discord/cogs/` — Discord.py の Cog（chat、skill コマンド）
-- `claude_discord/database/` — SQLite セッション永続化
+- `claude_discord/cogs/` — Discord.py の Cog（chat、skill コマンド、webhook トリガー、自動アップグレード）
+- `claude_discord/database/` — SQLite セッションおよび通知の永続化
 - `claude_discord/discord_ui/` — Discord UI コンポーネント（status、chunker、embeds）
+- `claude_discord/ext/` — オプション拡張（REST API サーバー — aiohttp が必要）
 - `tests/` — pytest テストスイート
 
 ## 変更の提出

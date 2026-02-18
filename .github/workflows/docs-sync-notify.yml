@@ -1,0 +1,30 @@
+name: Docs Sync Failure Notification
+on:
+  check_suite:
+    types: [completed]
+jobs:
+  notify-failure:
+    if: >-
+      github.event.check_suite.conclusion == 'failure' &&
+      startsWith(github.event.check_suite.head_branch, 'docs-sync/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find the PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.check_suite.head_branch }}
+        run: |
+          PR_URL=$(gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json url --jq '.url' 2>/dev/null || echo "")
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+      - name: Notify Discord
+        env:
+          WEBHOOK_URL: ${{ secrets.DOCS_SYNC_WEBHOOK_URL }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          BRANCH: ${{ github.event.check_suite.head_branch }}
+        run: |
+          MSG="🚨 **docs-sync CI failed** on \`${BRANCH}\`"
+          if [ -n "$PR_URL" ]; then MSG="${MSG}\nPR: ${PR_URL}"; fi
+          MSG="${MSG}\nAuto-merge will not proceed. Manual review needed."
+          curl -s -o /dev/null -H "Content-Type: application/json" \
+            -d "{\"content\": \"${MSG}\"}" "$WEBHOOK_URL"

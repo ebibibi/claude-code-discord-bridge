@@ -9,77 +9,63 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-スマートフォンから [Claude Code](https://docs.anthropic.com/en/docs/claude-code) を使う。Discord スレッドを通じて **Claude Code CLI へのフルアクセス** を提供する薄いフロントエンド — ターミナルから離れているときのモバイル開発向けに設計されています。
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) を Discord と GitHub に接続するフレームワーク。**インタラクティブチャット、CI/CD 自動化、GitHub ワークフロー統合**のために Claude Code CLI と Discord をブリッジします。
+
+Claude Code はターミナルでも素晴らしいですが、もっと多くのことができます。このブリッジを使えば、**GitHub の開発ワークフローで Claude Code を活用**できます：ドキュメントの自動同期、PR のレビューとマージ、GitHub Actions からトリガーされる任意の Claude Code タスクの実行。すべて Discord をユニバーサルな接着剤として使います。
 
 **[English](../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[한국어](../ko/README.md)** | **[Español](../es/README.md)** | **[Português](../pt-BR/README.md)** | **[Français](../fr/README.md)**
 
-> **免責事項:** このプロジェクトは Anthropic とは無関係であり、Anthropic による承認や公式な関係はありません。「Claude」および「Claude Code」は Anthropic, PBC の商標です。これは Claude Code CLI と連携する独立したオープンソースツールです。
+> **免責事項:** このプロジェクトは Anthropic とは無関係であり、承認や公式な関係はありません。「Claude」および「Claude Code」は Anthropic, PBC の商標です。これは Claude Code CLI と連携する独立したオープンソースツールです。
 
-> **Claude Code によって全て構築されました。** このプロジェクトは Anthropic の AI コーディングエージェントである Claude Code 自身によって設計・実装・テスト・ドキュメント化されました。人間の著者はソースコードを手動で読んでいません。詳細は[このプロジェクトの作り方](#このプロジェクトの作り方)をご覧ください。
+> **Claude Code によって完全構築。** このプロジェクトは Anthropic の AI コーディングエージェントである Claude Code 自身によって設計・実装・テスト・ドキュメント化されました。人間の著者はソースコードを読んでいません。詳細は[このプロジェクトの構築方法](#このプロジェクトの構築方法)をご覧ください。
 
-## なぜこれが存在するのか
+## 2つの使い方
 
-私は Claude Code を使って 3〜4 個のプロジェクトを並行して進めています。[Termux](https://termux.dev/) + tmux を使ってスマートフォンから操作していましたが、複数のターミナルセッションの管理が辛くなってきました — どの tmux ウィンドウがどのプロジェクトか？それぞれで何をしていたか？コンテキスト切り替えのオーバーヘッドが生産性を下げていました。
+### 1. インタラクティブチャット（モバイル / デスクトップ）
 
-**Discord がこれを完璧に解決します:**
-
-- 各プロジェクトの会話は**名前付きスレッド** — 一目でスキャンできる
-- スレッドは全履歴を保持 — 数時間後に戻っても続きから再開できる
-- 絵文字リアクションでステータスが一目でわかる — ターミナル出力をスクロールする必要なし
-- Discord は無料で、あらゆるスマートフォンで動き、通知もネイティブに処理される
-
-## これが何であるか（そして何でないか）
-
-**これは:** Discord と Claude Code CLI の間に特化したブリッジです。`claude -p --output-format stream-json` をサブプロセスとして起動し、出力を解析して Discord に投稿します。それだけです。
-
-**これではない:** 機能豊富な Discord Bot、AI チャットボットフレームワーク、Claude Code ターミナル体験の代替品。カスタム AI ロジック、プラグインシステム、管理ダッシュボードはありません。
-
-**重い処理は Claude Code 環境が担います。** CLAUDE.md、スキル、ツール、メモリ、MCP サーバー — これらはすべてターミナルと全く同じように動作します。このブリッジは UI レイヤーを提供するだけです。
-
-**セキュリティモデル:** 自分だけがアクセスできるチャンネルで、プライベートな Discord サーバーで実行してください。Bot は意図的にシンプルに設計されています — 機能が少ないほど攻撃面が少ない。自分でビルドすれば、全コードを読むことができ、外部に情報を送信するものは何もありません。
-
-## 比較
-
-| | claude-code-discord-bridge | [OpenClaw](https://github.com/openclaw/openclaw) & 類似 |
-|---|---|---|
-| **フォーカス** | モバイルファースト Claude Code アクセス | フル機能 Discord AI Bot |
-| **AI バックエンド** | Claude Code CLI (subprocess) | 直接 API 呼び出し |
-| **機能** | 最小限: スレッド、ステータス、チャンキング | 豊富: プラグイン、管理、マルチモデル |
-| **設定** | 既存の Claude Code 設定 | Bot 固有の設定 |
-| **スキル/ツール** | Claude Code から継承 | Bot 設定で定義 |
-| **対象ユーザー** | すでに Claude Code を使っている開発者 | AI Discord Bot を求める人 |
-| **複雑さ** | ~800 行の Python | 数千行 |
-
-**Discord AI チャットボットが欲しい場合は**、OpenClaw や類似プロジェクトを使ってください — それらの方がはるかに機能豊富です。
-
-**スマートフォンから Claude Code を使いたい場合**、既存のプロジェクトコンテキスト、スキル、ツールをすべて持って — それがこのためのものです。
-
-## 機能
-
-- **Thread = Session** — 各タスクが独自の Discord スレッドを持ち、Claude Code セッションと 1:1 でマッピング
-- **リアルタイムステータス** — 絵文字リアクションで Claude が何をしているか表示 (🧠 考え中、🛠️ ファイル読み取り、💻 編集中、🌐 Web 検索)
-- **ストリーミングテキスト** — Claude が作業中に中間テキストをリアルタイム表示（最後だけでなく）
-- **ツール結果表示** — ツール使用の embed がその場で更新され、各ツールが返した内容を表示
-- **拡張思考** — Claude の推論がスポイラー形式の embed で表示（クリックで展開）
-- **セッション永続化** — `--resume` による複数メッセージをまたいだ会話継続
-- **スキル実行** — スラッシュコマンドとオートコンプリートで Claude Code スキルを実行 (`/skill goodmorning`)
-- **フェンス対応分割** — 長い応答をコードブロックを壊さずに自然な境界で分割
-- **並行セッション** — 複数のセッションを並行実行（設定可能な上限）
-- **セキュリティ強化** — シェルインジェクションなし、subprocess 環境からシークレットを除去、ユーザー認証
-
-## 仕組み
+スマートフォンや Discord が使える任意のデバイスから Claude Code を利用。各会話はセッション永続化付きのスレッドになります。
 
 ```
 あなた (Discord)  →  Bridge  →  Claude Code CLI
-       ↑                                      ↓
-       ←──────── stream-json 出力 ────────────←
+       ↑                                ↓
+       ←──── stream-json 出力 ─────────←
 ```
 
-1. 設定した Discord チャンネルにメッセージを送信
-2. Bot がスレッドを作成して Claude Code セッションを開始
-3. stream-json 出力をリアルタイムで解析してステータスを更新
-4. Claude の応答をスレッドに投稿
-5. スレッドに返信して会話を継続
+### 2. CI/CD 自動化（GitHub → Discord → Claude Code → GitHub）
+
+GitHub Actions から Discord webhook 経由で Claude Code タスクをトリガー。Claude Code は自律的に動作 — コードを読み、ドキュメントを更新し、PR を作成し、自動マージを有効化します。
+
+```
+GitHub Actions  →  Discord Webhook  →  Bridge  →  Claude Code CLI
+                                                         ↓
+GitHub PR (自動マージ)  ←  git push  ←  Claude Code  ←──┘
+```
+
+**実例:** main へのプッシュごとに、Claude Code が自動的に変更を分析し、英語と日本語のドキュメントを更新し、バイリンガルな要約付き PR を作成し、自動マージを有効化します。人間の介入は不要です。
+
+## 機能
+
+### インタラクティブチャット
+- **Thread = Session** — 各タスクが独自の Discord スレッドを持ち、Claude Code セッションと 1:1 でマッピング
+- **リアルタイムステータス** — 絵文字リアクションで Claude の状態を表示（🧠 思考中、🛠️ ファイル読み取り、💻 編集中、🌐 Web 検索）
+- **ストリーミングテキスト** — Claude の作業中にテキストがリアルタイムで表示
+- **ツール結果表示** — ツール使用結果がリアルタイムで embed として表示
+- **拡張思考** — Claude の推論がスポイラータグ付き embed で表示（クリックで展開）
+- **セッション永続化** — `--resume` による複数メッセージをまたいだ会話継続
+- **スキル実行** — スラッシュコマンドとオートコンプリートで Claude Code スキルを実行（`/skill goodmorning`）
+- **並行セッション** — 複数セッションを並列実行（設定可能な上限）
+
+### CI/CD 自動化
+- **Webhook トリガー** — GitHub Actions や任意の CI/CD システムから Claude Code タスクをトリガー
+- **自動アップグレード** — 上流パッケージがリリースされたときに Bot を自動更新
+- **REST API** — 外部ツールから Discord へのプッシュ通知（オプション、aiohttp が必要）
+
+### セキュリティ
+- **シェルインジェクション防止** — `asyncio.create_subprocess_exec` のみ使用、`shell=True` は一切なし
+- **セッション ID 検証** — `--resume` に渡す前に厳格な正規表現で検証
+- **フラグインジェクション防止** — すべてのプロンプト前に `--` セパレーター
+- **シークレット分離** — Bot トークンとシークレットを subprocess 環境から除去
+- **ユーザー認証** — `allowed_user_ids` で Claude を呼び出せるユーザーを制限
 
 ## クイックスタート
 
@@ -97,7 +83,7 @@ git clone https://github.com/ebibibi/claude-code-discord-bridge.git
 cd claude-code-discord-bridge
 
 cp .env.example .env
-# .env をボットトークンとチャンネル ID で編集
+# .env を Bot トークンとチャンネル ID で編集
 
 uv run python -m claude_discord.main
 ```
@@ -133,8 +119,8 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 
 | 変数名 | 説明 | デフォルト |
 |--------|------|-----------|
-| `DISCORD_BOT_TOKEN` | Discord Bot トークン | (必須) |
-| `DISCORD_CHANNEL_ID` | Claude チャット用チャンネル ID | (必須) |
+| `DISCORD_BOT_TOKEN` | Discord Bot トークン | （必須） |
+| `DISCORD_CHANNEL_ID` | Claude チャット用チャンネル ID | （必須） |
 | `CLAUDE_COMMAND` | Claude Code CLI へのパス | `claude` |
 | `CLAUDE_MODEL` | 使用するモデル | `sonnet` |
 | `CLAUDE_PERMISSION_MODE` | CLI のパーミッションモード | `acceptEdits` |
@@ -155,6 +141,167 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
    - Manage Messages（リアクション削除のため）
    - Read Message History（メッセージ履歴の読み取り）
 
+## GitHub + Claude Code 自動化
+
+Webhook トリガーシステムにより、Claude Code がインテリジェントエージェントとして動作する完全自律型 CI/CD ワークフローを構築できます — スクリプトを実行するだけでなく、コード変更を理解して判断を下します。
+
+### 例: 自動ドキュメント同期
+
+main へのプッシュごとに Claude Code が:
+1. 最新の変更をプルして diff を分析
+2. ソースコードが変更されていれば英語ドキュメントを更新
+3. 日本語（または任意の対象言語）に翻訳
+4. バイリンガルな要約付き PR を作成
+5. 自動マージを有効化 — CI 通過後に PR が自動マージ
+
+**GitHub Actions ワークフロー:**
+
+```yaml
+# .github/workflows/docs-sync.yml
+name: Documentation Sync
+on:
+  push:
+    branches: [main]
+jobs:
+  trigger:
+    # docs-sync 自身のコミットをスキップ（無限ループ防止）
+    if: "!contains(github.event.head_commit.message, '[docs-sync]')"
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{"content": "🔄 docs-sync"}'
+```
+
+**Bot の設定:**
+
+```python
+from claude_discord import WebhookTriggerCog, WebhookTrigger, ClaudeRunner
+
+runner = ClaudeRunner(command="claude", model="sonnet")
+
+triggers = {
+    "🔄 docs-sync": WebhookTrigger(
+        prompt="変更を分析し、ドキュメントを更新し、バイリンガルな要約付き PR を作成し、自動マージを有効化。",
+        working_dir="/home/user/my-project",
+        timeout=600,
+    ),
+    "🚀 deploy": WebhookTrigger(
+        prompt="ステージング環境にデプロイ。",
+        timeout=300,
+    ),
+}
+
+await bot.add_cog(WebhookTriggerCog(
+    bot=bot,
+    runner=runner,
+    triggers=triggers,
+    channel_ids={YOUR_CHANNEL_ID},
+))
+```
+
+**セキュリティ:** webhook メッセージのみ処理されます。より厳格な制御には `allowed_webhook_ids` オプションがあります。プロンプトはサーバー側で定義 — webhook はどのトリガーを発火するかを選択するだけです。
+
+### 例: オーナー PR の自動承認
+
+CI 通過後に自分の PR を自動承認・自動マージ:
+
+```yaml
+# .github/workflows/auto-approve.yml
+name: Auto Approve Owner PRs
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+jobs:
+  auto-approve:
+    if: github.event.pull_request.user.login == 'your-username'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr review "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --approve
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash
+```
+
+## 自動アップグレード
+
+上流パッケージがリリースされたときに Bot を自動アップグレード。
+
+```python
+from claude_discord import AutoUpgradeCog, UpgradeConfig
+
+config = UpgradeConfig(
+    package_name="claude-code-discord-bridge",
+    trigger_prefix="🔄 bot-upgrade",
+    working_dir="/home/user/my-bot",
+    restart_command=["sudo", "systemctl", "restart", "my-bot.service"],
+)
+
+await bot.add_cog(AutoUpgradeCog(bot, config))
+```
+
+**パイプライン:** 上流プッシュ → CI webhook → `🔄 bot-upgrade` → `uv lock --upgrade-package` → `uv sync` → サービス再起動。
+
+## REST API
+
+外部ツールから Discord へのプッシュ通知のためのオプション REST API。aiohttp が必要:
+
+```bash
+uv add "claude-code-discord-bridge[api]"
+```
+
+```python
+from claude_discord import NotificationRepository
+from claude_discord.ext.api_server import ApiServer
+
+repo = NotificationRepository("data/notifications.db")
+await repo.init_db()
+
+api = ApiServer(
+    repo=repo,
+    bot=bot,
+    default_channel_id=YOUR_CHANNEL_ID,
+    host="127.0.0.1",
+    port=8080,
+    api_secret="your-secret-token",  # オプションの Bearer 認証
+)
+await api.start()
+```
+
+### エンドポイント
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| GET | `/api/health` | ヘルスチェック |
+| POST | `/api/notify` | 即時通知の送信 |
+| POST | `/api/schedule` | 後で通知をスケジュール |
+| GET | `/api/scheduled` | 保留中の通知一覧 |
+| DELETE | `/api/scheduled/{id}` | スケジュール済み通知のキャンセル |
+
+### 使用例
+
+```bash
+# ヘルスチェック
+curl http://localhost:8080/api/health
+
+# 通知の送信
+curl -X POST http://localhost:8080/api/notify \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
+  -d '{"message": "ビルド成功！", "title": "CI/CD"}'
+
+# 通知のスケジュール
+curl -X POST http://localhost:8080/api/schedule \
+  -H "Content-Type: application/json" \
+  -d '{"message": "PR をレビューする時間です", "scheduled_at": "2026-01-01T09:00:00"}'
+```
+
 ## アーキテクチャ
 
 ```
@@ -162,8 +309,10 @@ claude_discord/
   main.py                  # スタンドアロンエントリーポイント
   bot.py                   # Discord Bot クラス
   cogs/
-    claude_chat.py         # メイン chat Cog（スレッド作成、メッセージ処理）
+    claude_chat.py         # インタラクティブチャット（スレッド作成、メッセージ処理）
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
+    webhook_trigger.py     # Webhook → Claude Code タスク実行（CI/CD）
+    auto_upgrade.py        # Webhook → パッケージアップグレード + 再起動
     _run_helper.py         # 共有 Claude CLI 実行ロジック
   claude/
     runner.py              # Claude CLI subprocess マネージャー
@@ -172,30 +321,23 @@ claude_discord/
   database/
     models.py              # SQLite スキーマ
     repository.py          # セッション CRUD 操作
+    notification_repo.py   # スケジュール通知 CRUD
   discord_ui/
     status.py              # 絵文字リアクションステータスマネージャー（デバウンス付き）
     chunker.py             # フェンス対応メッセージ分割
     embeds.py              # Discord embed ビルダー
+  ext/
+    api_server.py          # REST API サーバー（オプション、aiohttp が必要）
   utils/
     logger.py              # ロギング設定
 ```
 
 ### 設計思想
 
-- **カスタム AI ロジックなし** — 推論、ツール使用、コンテキストはすべて Claude Code が処理
-- **メモリシステムなし** — Claude Code の組み込みセッション + CLAUDE.md がメモリを担当
-- **ツール定義なし** — Claude Code が独自の包括的なツールセットを持つ
-- **プラグインシステムなし** — この Bot ではなく Claude Code を設定して機能を追加
-- **フレームワークの仕事は純粋に UI** — メッセージを受け取り、ステータスを表示し、応答を届ける
-
-### セキュリティ
-
-- `asyncio.create_subprocess_exec`（シェルなし）でコマンドインジェクションを防止
-- セッション ID は使用前に厳格な正規表現で検証
-- `--` セパレーターでフラグ解釈によるプロンプトインジェクションを防止
-- Bot トークンとシークレットを subprocess 環境から除去
-- `allowed_user_ids` で Claude を呼び出せるユーザーを制限
-- シンプルなコードベース（~800 LOC）— 自分で監査しやすい
+- **CLI スポーン、API ではない** — `claude -p --output-format stream-json` を呼び出し、Claude Code の全機能（CLAUDE.md、スキル、ツール、メモリ）を無料で利用
+- **Discord を接着剤として** — Discord が UI、スレッディング、通知、webhook インフラを提供
+- **フレームワーク、アプリケーションではない** — パッケージとしてインストールし、既存の Bot に Cog を追加、コードで設定
+- **シンプルさによるセキュリティ** — 約 2500 行の監査可能な Python、シェル実行なし、任意のコードパスなし
 
 ## テスト
 
@@ -203,9 +345,9 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-71 件のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、run-helper ロジックをカバーしています。
+131 件のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、webhook トリガー、自動アップグレード、REST API をカバーしています。
 
-## このプロジェクトの作り方
+## このプロジェクトの構築方法
 
 **このコードベース全体は [Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — Anthropic の AI コーディングエージェント — によって書かれました。人間の著者（[@ebibibi](https://github.com/ebibibi)）は自然言語で要件と方向性を提供しましたが、ソースコードを手動で読んだり編集したりしていません。
 
@@ -214,18 +356,18 @@ uv run pytest tests/ -v --cov=claude_discord
 - **すべてのコードは AI 生成** — アーキテクチャ、実装、テスト、ドキュメント
 - **人間の著者はコードレベルでの正確性を保証できません** — 確信が必要な場合はソースを確認してください
 - **バグレポートと PR を歓迎します** — Claude Code を使って対応することになるでしょう
-- **これは AI が著したオープンソースソフトウェアの実世界の例** — Claude Code が何を構築できるかのリファレンスとして使ってください
+- **これは AI が著したオープンソースソフトウェアの実例です** — Claude Code が何を構築できるかのリファレンスとして
 
-このプロジェクトは 2026-02-18 の 1 日で、要件から始まり動作するテスト済みのドキュメント付きパッケージとして、Claude Code との反復的な会話を通じて構築されました。
+このプロジェクトは 2026-02-18 に開始され、Claude Code との反復的な会話を通じて進化し続けています。
 
-## 実世界の例
+## 実例
 
-**[EbiBot](https://github.com/ebibibi/discord-bot)** — claude-code-discord-bridge をパッケージ依存関係として使っている個人 Discord Bot。プッシュ通知、Todoist ウォッチドッグ、自動ドキュメント同期のカスタム Cog を含みます。このフレームワークの上に自分の Bot を構築する方法のリファレンスとして参照してください。
+**[EbiBot](https://github.com/ebibibi/discord-bot)** — claude-code-discord-bridge をパッケージ依存関係として使用する個人 Discord Bot。自動ドキュメント同期（英語 + 日本語）、プッシュ通知、Todoist ウォッチドッグ、GitHub Actions との CI/CD 統合を含みます。このフレームワーク上に自分の Bot を構築する際のリファレンスとしてご利用ください。
 
 ## インスパイアされたプロジェクト
 
 - [OpenClaw](https://github.com/openclaw/openclaw) — 絵文字ステータスリアクション、メッセージデバウンシング、フェンス対応チャンキング
-- [claude-code-discord-bot](https://github.com/timoconnellaus/claude-code-discord-bot) — CLI 起動 + stream-json アプローチ
+- [claude-code-discord-bot](https://github.com/timoconnellaus/claude-code-discord-bot) — CLI スポーン + stream-json アプローチ
 - [claude-code-discord](https://github.com/zebbern/claude-code-discord) — パーミッション制御パターン
 - [claude-sandbox-bot](https://github.com/RhysSullivan/claude-sandbox-bot) — スレッドごとの会話モデル
 
