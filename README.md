@@ -6,6 +6,8 @@
 
 Connect [Claude Code](https://docs.anthropic.com/en/docs/claude-code) to Discord and GitHub. A framework that bridges Claude Code CLI with Discord for **interactive chat, CI/CD automation, and GitHub workflow integration**.
 
+Claude Code is great in the terminal — but it can do much more. This bridge lets you **use Claude Code in your GitHub development workflow**: automatically sync documentation, review and merge PRs, and run any Claude Code task triggered by GitHub Actions. All through Discord as the universal glue.
+
 **[日本語](docs/ja/README.md)** | **[简体中文](docs/zh-CN/README.md)** | **[한국어](docs/ko/README.md)** | **[Español](docs/es/README.md)** | **[Português](docs/pt-BR/README.md)** | **[Français](docs/fr/README.md)**
 
 > **Disclaimer:** This project is not affiliated with, endorsed by, or officially connected to Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic, PBC. This is an independent open-source tool that interfaces with the Claude Code CLI.
