@@ -125,6 +125,8 @@ claude_discord/          # Installable Python package
   cogs/
     claude_chat.py       # Main chat Cog (thread creation, message handling)
     skill_command.py     # /skill slash command with autocomplete
+    webhook_trigger.py   # Webhook → Claude Code task execution (CI/CD)
+    auto_upgrade.py      # Webhook → package upgrade + restart
     _run_helper.py       # Shared Claude CLI execution logic (DRY)
   claude/
     runner.py            # Claude CLI subprocess manager
@@ -133,10 +135,13 @@ claude_discord/          # Installable Python package
   database/
     models.py            # SQLite schema
     repository.py        # Session CRUD operations
+    notification_repo.py # Scheduled notification CRUD (REST API)
   discord_ui/
     status.py            # Emoji reaction status manager (debounced)
     chunker.py           # Fence-aware message splitting
     embeds.py            # Discord embed builders
+  ext/
+    api_server.py        # REST API server (optional, requires aiohttp)
   utils/
     logger.py            # Logging setup
 tests/                   # pytest test suite
