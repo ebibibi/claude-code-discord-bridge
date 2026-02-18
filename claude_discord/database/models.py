@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import aiosqlite
 import logging
+
+import aiosqlite
 
 logger = logging.getLogger(__name__)
 

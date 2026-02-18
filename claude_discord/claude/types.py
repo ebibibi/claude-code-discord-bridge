@@ -119,4 +119,4 @@ class SessionState:
     session_id: str | None = None
     thread_id: int = 0
     accumulated_text: str = ""
-    active_tools: dict[str, "discord.Message"] = field(default_factory=dict)
+    active_tools: dict[str, discord.Message] = field(default_factory=dict)

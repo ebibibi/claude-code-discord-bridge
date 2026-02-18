@@ -10,12 +10,12 @@ import logging
 from typing import Any
 
 from .types import (
+    TOOL_CATEGORIES,
     ContentBlockType,
     MessageType,
     StreamEvent,
     ToolCategory,
     ToolUseEvent,
-    TOOL_CATEGORIES,
 )
 
 logger = logging.getLogger(__name__)

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import aiosqlite
 import logging
 from dataclasses import dataclass
+
+import aiosqlite
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +80,10 @@ class SessionRepository:
     async def cleanup_old(self, days: int = 30) -> int:
         """Delete sessions older than N days. Returns count deleted."""
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute(
-                "DELETE FROM sessions WHERE julianday('now', 'localtime') - julianday(last_used_at) >= ?",
-                (days,),
+            query = (
+                "DELETE FROM sessions"
+                " WHERE julianday('now', 'localtime') - julianday(last_used_at) >= ?"
             )
+            cursor = await db.execute(query, (days,))
             await db.commit()
             return cursor.rowcount

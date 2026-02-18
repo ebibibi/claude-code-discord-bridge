@@ -78,7 +78,7 @@ class ClaudeRunner:
         try:
             async for event in self._read_stream():
                 yield event
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("Claude CLI timed out after %ds", self.timeout_seconds)
             yield StreamEvent(
                 raw={},
@@ -89,7 +89,7 @@ class ClaudeRunner:
         finally:
             await self._cleanup()
 
-    def clone(self) -> "ClaudeRunner":
+    def clone(self) -> ClaudeRunner:
         """Create a fresh runner with the same configuration but no active process."""
         return ClaudeRunner(
             command=self.command,
@@ -107,7 +107,7 @@ class ClaudeRunner:
             self._process.terminate()
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._process.kill()
                 await self._process.wait()
 

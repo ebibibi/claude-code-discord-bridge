@@ -7,6 +7,7 @@ Debounced to avoid Discord API rate limits.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 import discord
@@ -89,10 +90,8 @@ class StatusManager:
         if self._debounce_task and not self._debounce_task.done():
             self._debounce_task.cancel()
         if self._current_emoji:
-            try:
+            with contextlib.suppress(discord.HTTPException, AttributeError):
                 await self._message.remove_reaction(self._current_emoji, self._message.guild.me)
-            except (discord.HTTPException, AttributeError):
-                pass
             self._current_emoji = None
 
     async def _set_status(self, emoji: str) -> None:
@@ -114,19 +113,15 @@ class StatusManager:
 
             # Remove old emoji
             if self._current_emoji:
-                try:
+                with contextlib.suppress(discord.HTTPException, AttributeError):
                     await self._message.remove_reaction(
                         self._current_emoji, self._message.guild.me
                     )
-                except (discord.HTTPException, AttributeError):
-                    pass
 
             # Add new emoji
             if self._target_emoji:
-                try:
+                with contextlib.suppress(discord.HTTPException):
                     await self._message.add_reaction(self._target_emoji)
-                except discord.HTTPException:
-                    pass
 
             self._current_emoji = self._target_emoji
 

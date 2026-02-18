@@ -19,10 +19,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..claude.runner import ClaudeRunner
-from ..claude.types import MessageType
+from ..database.repository import SessionRepository
 from ..discord_ui.chunker import chunk_message
-from ..discord_ui.embeds import error_embed, session_complete_embed, session_start_embed
-from ..discord_ui.status import StatusManager
+from ._run_helper import run_claude_in_thread
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +75,7 @@ class SkillCommandCog(commands.Cog):
     def __init__(
         self,
         bot: commands.Bot,
-        repo,
+        repo: SessionRepository,
         runner: ClaudeRunner,
         claude_channel_id: int,
         skills_dir: Path | str | None = None,
@@ -110,12 +109,10 @@ class SkillCommandCog(commands.Cog):
             s for s in self._skills
             if current_lower in s["name"].lower() or current_lower in s["description"].lower()
         ]
-        # Trim description to fit Discord's 100-char limit for Choice name
         choices = []
         for s in matches[:25]:
             label = s["name"]
             if s["description"]:
-                # Show "name — short description" in the dropdown
                 short_desc = s["description"][:60]
                 if len(s["description"]) > 60:
                     short_desc += "…"
@@ -123,40 +120,37 @@ class SkillCommandCog(commands.Cog):
             choices.append(app_commands.Choice(name=label[:100], value=s["name"]))
         return choices
 
-    @app_commands.command(name="skill", description="Claude Codeスキルを実行する")
-    @app_commands.describe(name="実行するスキル名（入力で絞り込み）")
+    @app_commands.command(name="skill", description="Run a Claude Code skill")
+    @app_commands.describe(name="Skill name (type to filter)")
     @app_commands.autocomplete(name=_skill_name_autocomplete)
     async def run_skill(self, interaction: discord.Interaction, name: str) -> None:
         """Run a Claude Code skill by name."""
         if not self._is_authorized(interaction.user.id):
             await interaction.response.send_message(
-                "このコマンドを使う権限がありません。", ephemeral=True
+                "You don't have permission to use this command.", ephemeral=True
             )
             return
 
         # Validate skill name — only alphanumeric, hyphens, underscores
         if not re.match(r"^[\w-]+$", name):
             await interaction.response.send_message(
-                f"無効なスキル名です: `{name}`", ephemeral=True
+                f"Invalid skill name: `{name}`", ephemeral=True
             )
             return
 
-        # Find matching skill (allow partial match for direct typing)
         matched = next((s for s in self._skills if s["name"] == name), None)
         if not matched:
             await interaction.response.send_message(
-                f"スキル `{name}` が見つかりません。`/skill` でオートコンプリートを使ってください。",
+                f"Skill `{name}` not found. Use `/skill` with autocomplete.",
                 ephemeral=True,
             )
             return
 
-        # Defer so we can take time creating thread + running Claude
         await interaction.response.defer()
 
-        # Create a thread in the Claude channel for output
         channel = self.bot.get_channel(self.claude_channel_id)
         if not isinstance(channel, discord.TextChannel):
-            await interaction.followup.send("Claudeチャンネルが見つかりません。", ephemeral=True)
+            await interaction.followup.send("Claude channel not found.", ephemeral=True)
             return
 
         thread = await channel.create_thread(
@@ -165,74 +159,35 @@ class SkillCommandCog(commands.Cog):
         )
 
         await interaction.followup.send(
-            f"🚀 スキル `/{name}` を実行します → {thread.mention}"
+            f"Running `/{name}` → {thread.mention}"
         )
 
-        # The prompt is the skill invocation as Claude Code understands it
-        prompt = f"/{name}"
-        await self._run_claude_in_thread(thread, prompt, session_id=None)
+        runner = self.runner.clone()
+        await run_claude_in_thread(
+            thread=thread,
+            runner=runner,
+            repo=self.repo,
+            prompt=f"/{name}",
+            session_id=None,
+        )
 
-    @app_commands.command(name="skills", description="利用可能なスキル一覧を表示する")
+    @app_commands.command(name="skills", description="List available Claude Code skills")
     async def list_skills(self, interaction: discord.Interaction) -> None:
         """Show all available skills."""
         if not self._is_authorized(interaction.user.id):
             await interaction.response.send_message(
-                "このコマンドを使う権限がありません。", ephemeral=True
+                "You don't have permission to use this command.", ephemeral=True
             )
             return
 
-        lines = [f"**Claude Code スキル一覧** ({len(self._skills)}個)\n"]
+        lines = [f"**Claude Code Skills** ({len(self._skills)})\n"]
         for s in self._skills:
             desc = s["description"][:60] + "…" if len(s["description"]) > 60 else s["description"]
             lines.append(f"• `{s['name']}` — {desc}" if desc else f"• `{s['name']}`")
 
-        # Discord message limit is 2000 chars; split if needed
         text = "\n".join(lines)
         for chunk in chunk_message(text):
             if interaction.response.is_done():
                 await interaction.followup.send(chunk, ephemeral=True)
             else:
                 await interaction.response.send_message(chunk, ephemeral=True)
-
-    async def _run_claude_in_thread(
-        self,
-        thread: discord.Thread,
-        prompt: str,
-        session_id: str | None,
-    ) -> None:
-        """Execute Claude Code CLI and stream results to the thread."""
-        # Create a status proxy on the thread itself (no original message, use thread)
-        runner = self.runner.clone()
-
-        accumulated_text = ""
-        final_session_id = session_id
-
-        try:
-            async for event in runner.run(prompt, session_id=session_id):
-                if event.message_type == MessageType.SYSTEM and event.session_id:
-                    final_session_id = event.session_id
-                    await self.repo.save(thread.id, final_session_id)
-                    if not session_id:
-                        await thread.send(embed=session_start_embed(final_session_id))
-
-                if event.message_type == MessageType.ASSISTANT:
-                    if event.text:
-                        accumulated_text = event.text
-
-                if event.is_complete:
-                    if event.error:
-                        await thread.send(embed=error_embed(event.error))
-                    else:
-                        response_text = event.text or accumulated_text
-                        if response_text:
-                            for chunk in chunk_message(response_text):
-                                await thread.send(chunk)
-                        await thread.send(
-                            embed=session_complete_embed(event.cost_usd, event.duration_ms)
-                        )
-                    if event.session_id:
-                        await self.repo.save(thread.id, event.session_id)
-
-        except Exception:
-            logger.exception("Error running skill /%s in thread %d", prompt, thread.id)
-            await thread.send(embed=error_embed("スキル実行中にエラーが発生しました。"))

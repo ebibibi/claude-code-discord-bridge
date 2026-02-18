@@ -22,6 +22,7 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 3. **Emoji reactions for status**: Non-intrusive progress indication on the user's message.
 4. **Fence-aware chunking**: Never split Discord messages inside a code block.
 5. **Installable package**: `claude_discord` is a proper Python package. Consumers install via `uv add git+...` or `pip install git+...`, not by copying files.
+6. **Shared run helper**: `cogs/_run_helper.py` centralizes Claude CLI execution logic used by both ClaudeChatCog and SkillCommandCog.
 
 ## Package Management
 
@@ -45,11 +46,13 @@ uv run pytest tests/ -v --cov=claude_discord
 
 ```
 claude_discord/          # Installable Python package
-  __init__.py
+  __init__.py            # Public API exports
   main.py                # Standalone entry point
   bot.py                 # Discord Bot class
   cogs/
     claude_chat.py       # Main chat Cog (thread creation, message handling)
+    skill_command.py     # /skill slash command with autocomplete
+    _run_helper.py       # Shared Claude CLI execution logic (DRY)
   claude/
     runner.py            # Claude CLI subprocess manager
     parser.py            # stream-json event parser
@@ -63,7 +66,16 @@ claude_discord/          # Installable Python package
     embeds.py            # Discord embed builders
   utils/
     logger.py            # Logging setup
-tests/                   # pytest test suite (36 tests)
+tests/                   # pytest test suite (48 tests)
 pyproject.toml           # Package metadata + dependencies
 uv.lock                  # Dependency lock file
+CONTRIBUTING.md          # Contribution guidelines
 ```
+
+## Commit Style
+
+```
+<type>: <description>
+```
+
+Types: feat, fix, refactor, docs, test, chore, security

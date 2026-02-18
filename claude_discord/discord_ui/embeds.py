@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import discord
 
-from ..claude.types import ToolUseEvent, ToolCategory
+from ..claude.types import ToolCategory, ToolUseEvent
 
 # Colors
 COLOR_INFO = 0x5865F2  # Discord blurple
