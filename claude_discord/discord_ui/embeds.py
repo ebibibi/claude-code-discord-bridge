@@ -178,30 +178,3 @@ def stopped_embed() -> discord.Embed:
         ),
         color=0xFFA500,  # Orange — not an error, just interrupted
     )
-
-
-COLOR_RELAY = 0x00BCD4  # Cyan — distinct from info/success/error
-
-
-def relay_sent_embed(target: discord.Thread, message: str) -> discord.Embed:
-    """Confirmation embed posted in the source thread after a relay."""
-    preview = message[:200] + ("…" if len(message) > 200 else "")
-    embed = discord.Embed(
-        title="\U0001f4e4 Relayed",
-        description=f"Message sent to {target.mention}\n\n> {preview}",
-        color=COLOR_RELAY,
-    )
-    embed.add_field(name="Jump", value=f"[Go to {target.name}]({target.jump_url})", inline=False)
-    return embed
-
-
-def relay_received_embed(source: discord.Thread, message: str) -> discord.Embed:
-    """Attribution embed posted in the target thread when a relay arrives."""
-    preview = message[:200] + ("…" if len(message) > 200 else "")
-    embed = discord.Embed(
-        title="\U0001f4e8 Relayed message",
-        description=f"From {source.mention}\n\n> {preview}",
-        color=COLOR_RELAY,
-    )
-    embed.add_field(name="Jump", value=f"[Go to {source.name}]({source.jump_url})", inline=False)
-    return embed

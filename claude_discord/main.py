@@ -14,7 +14,6 @@ from dotenv import load_dotenv
 from .bot import ClaudeDiscordBot
 from .claude.runner import ClaudeRunner
 from .cogs.claude_chat import ClaudeChatCog
-from .cogs.thread_relay import ThreadRelayCog
 from .database.models import init_db
 from .database.repository import SessionRepository
 from .utils.logger import setup_logging
@@ -81,15 +80,8 @@ async def main() -> None:
         max_concurrent=int(config["max_concurrent"]),
     )
 
-    relay_cog = ThreadRelayCog(
-        bot=bot,
-        repo=repo,
-        runner=runner,
-    )
-
     async with bot:
         await bot.add_cog(cog)
-        await bot.add_cog(relay_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)

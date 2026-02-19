@@ -4,7 +4,6 @@ from .auto_upgrade import AutoUpgradeCog
 from .claude_chat import ClaudeChatCog
 from .session_manage import SessionManageCog
 from .skill_command import SkillCommandCog
-from .thread_relay import ThreadRelayCog
 from .webhook_trigger import WebhookTriggerCog
 
 __all__ = [
@@ -12,6 +11,5 @@ __all__ = [
     "ClaudeChatCog",
     "SessionManageCog",
     "SkillCommandCog",
-    "ThreadRelayCog",
     "WebhookTriggerCog",
 ]
