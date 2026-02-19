@@ -131,6 +131,12 @@ def _parse_result(data: dict[str, Any], event: StreamEvent) -> None:
     event.cost_usd = data.get("cost_usd")
     event.duration_ms = data.get("duration_ms")
 
+    usage = data.get("usage", {})
+    if usage:
+        event.input_tokens = usage.get("input_tokens")
+        event.output_tokens = usage.get("output_tokens")
+        event.cache_read_tokens = usage.get("cache_read_input_tokens")
+
     # Final text from result
     result_text = data.get("result", "")
     if result_text:
