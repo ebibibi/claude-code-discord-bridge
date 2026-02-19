@@ -25,6 +25,7 @@ from .discord_ui.embeds import (
     tool_use_embed,
 )
 from .discord_ui.status import StatusManager
+from .protocols import DrainAware
 
 __all__ = [
     # Core
@@ -37,6 +38,7 @@ __all__ = [
     "WebhookTrigger",
     "AutoUpgradeCog",
     "UpgradeConfig",
+    "DrainAware",
     "NotificationRepository",
     # Types
     "MessageType",

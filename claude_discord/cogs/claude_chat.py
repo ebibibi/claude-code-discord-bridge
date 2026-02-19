@@ -64,6 +64,11 @@ class ClaudeChatCog(commands.Cog):
         """Number of Claude sessions currently running in this cog."""
         return len(self._active_runners)
 
+    @property
+    def active_count(self) -> int:
+        """Alias for active_session_count (satisfies DrainAware protocol)."""
+        return self.active_session_count
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
         """Handle incoming messages."""

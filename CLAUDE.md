@@ -122,6 +122,7 @@ See `.claude/skills/tdd/SKILL.md` for detailed patterns per module type.
 ```
 claude_discord/          # Installable Python package
   __init__.py            # Public API exports
+  protocols.py           # Shared protocols (DrainAware)
   main.py                # Standalone entry point
   bot.py                 # Discord Bot class
   cogs/

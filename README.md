@@ -262,6 +262,23 @@ await bot.add_cog(AutoUpgradeCog(bot, config))
 
 **Pipeline:** Upstream push → CI webhook → `🔄 bot-upgrade` → `uv lock --upgrade-package` → `uv sync` → service restart.
 
+### Graceful Drain (DrainAware)
+
+Before restarting, AutoUpgradeCog waits for all active sessions to finish. Any Cog that implements an `active_count` property (satisfying the `DrainAware` protocol) is automatically discovered — no manual `drain_check` lambda needed.
+
+Built-in DrainAware Cogs: `ClaudeChatCog`, `WebhookTriggerCog`.
+
+To make your own Cog drain-aware, just add an `active_count` property:
+
+```python
+class MyCog(commands.Cog):
+    @property
+    def active_count(self) -> int:
+        return len(self._running_tasks)
+```
+
+You can still pass an explicit `drain_check` callable to override auto-discovery.
+
 ## REST API
 
 Optional REST API for pushing notifications to Discord from external tools. Requires aiohttp:
