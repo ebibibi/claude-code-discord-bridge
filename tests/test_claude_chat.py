@@ -76,19 +76,19 @@ class TestStopCommand:
         assert call_kwargs.get("ephemeral") is True
 
     @pytest.mark.asyncio
-    async def test_stop_calls_runner_kill(self) -> None:
-        """Using /stop with an active runner calls runner.kill()."""
+    async def test_stop_calls_runner_interrupt(self) -> None:
+        """Using /stop with an active runner calls runner.interrupt()."""
         cog = _make_cog()
         thread_id = 12345
         interaction = _make_thread_interaction(thread_id=thread_id)
 
         mock_runner = MagicMock()
-        mock_runner.kill = AsyncMock()
+        mock_runner.interrupt = AsyncMock()
         cog._active_runners[thread_id] = mock_runner
 
         await cog.stop_session.callback(cog, interaction)
 
-        mock_runner.kill.assert_called_once()
+        mock_runner.interrupt.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_stop_does_not_delete_session_from_db(self) -> None:
@@ -98,7 +98,7 @@ class TestStopCommand:
         interaction = _make_thread_interaction(thread_id=thread_id)
 
         mock_runner = MagicMock()
-        mock_runner.kill = AsyncMock()
+        mock_runner.interrupt = AsyncMock()
         cog._active_runners[thread_id] = mock_runner
 
         await cog.stop_session.callback(cog, interaction)
@@ -114,7 +114,7 @@ class TestStopCommand:
         interaction = _make_thread_interaction(thread_id=thread_id)
 
         mock_runner = MagicMock()
-        mock_runner.kill = AsyncMock()
+        mock_runner.interrupt = AsyncMock()
         cog._active_runners[thread_id] = mock_runner
 
         await cog.stop_session.callback(cog, interaction)
@@ -130,7 +130,7 @@ class TestStopCommand:
         interaction = _make_thread_interaction(thread_id=thread_id)
 
         mock_runner = MagicMock()
-        mock_runner.kill = AsyncMock()
+        mock_runner.interrupt = AsyncMock()
         cog._active_runners[thread_id] = mock_runner
 
         await cog.stop_session.callback(cog, interaction)

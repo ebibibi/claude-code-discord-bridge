@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import signal as signal_module
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -134,3 +136,93 @@ class TestClone:
         assert cloned.dangerously_skip_permissions == runner.dangerously_skip_permissions
         assert cloned.include_partial_messages == runner.include_partial_messages
         assert cloned._process is None
+
+
+class TestInterrupt:
+    """Tests for interrupt() method."""
+
+    @pytest.mark.asyncio
+    async def test_interrupt_no_process_is_noop(self) -> None:
+        """interrupt() on a runner with no process should not raise."""
+        runner = ClaudeRunner()
+        await runner.interrupt()  # should not raise
+
+    @pytest.mark.asyncio
+    async def test_interrupt_already_exited_is_noop(self) -> None:
+        """interrupt() when process already exited should not send a signal."""
+        runner = ClaudeRunner()
+        mock_process = MagicMock()
+        mock_process.returncode = 0
+        runner._process = mock_process
+        await runner.interrupt()
+        mock_process.send_signal.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_sends_sigint(self) -> None:
+        """interrupt() sends SIGINT to the running process."""
+        runner = ClaudeRunner()
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        mock_process.wait = AsyncMock(return_value=0)
+        runner._process = mock_process
+
+        await runner.interrupt()
+
+        mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
+
+    @pytest.mark.asyncio
+    async def test_interrupt_falls_back_to_kill_on_timeout(self) -> None:
+        """interrupt() calls kill() if the process doesn't stop within the timeout."""
+        runner = ClaudeRunner()
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        mock_process.wait = AsyncMock(return_value=0)
+        runner._process = mock_process
+
+        with (
+            patch("asyncio.wait_for", side_effect=TimeoutError),
+            patch.object(runner, "kill", new_callable=AsyncMock) as mock_kill,
+        ):
+            await runner.interrupt()
+
+        mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
+        mock_kill.assert_called_once()
+
+
+class TestSignalKillSuppression:
+    """Tests that signal-killed processes (negative returncode) don't emit error events."""
+
+    @pytest.mark.asyncio
+    async def test_signal_kill_does_not_yield_error_event(self) -> None:
+        """A process killed by signal (returncode < 0) exits silently — no error embed."""
+        runner = ClaudeRunner()
+        mock_process = AsyncMock()
+        mock_process.stdout = AsyncMock()
+        mock_process.stderr = AsyncMock()
+        mock_process.returncode = -2  # SIGINT kill
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.stderr.read = AsyncMock(return_value=b"")
+        mock_process.wait = AsyncMock(return_value=-2)
+        runner._process = mock_process
+
+        events = [event async for event in runner._read_stream()]
+        error_events = [e for e in events if e.error]
+        assert error_events == [], "Signal kill should not produce error events"
+
+    @pytest.mark.asyncio
+    async def test_positive_nonzero_returncode_yields_error(self) -> None:
+        """A process that exits with a positive non-zero code yields an error event."""
+        runner = ClaudeRunner()
+        mock_process = AsyncMock()
+        mock_process.stdout = AsyncMock()
+        mock_process.stderr = AsyncMock()
+        mock_process.returncode = 1
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.stderr.read = AsyncMock(return_value=b"error details")
+        mock_process.wait = AsyncMock(return_value=1)
+        runner._process = mock_process
+
+        events = [event async for event in runner._read_stream()]
+        error_events = [e for e in events if e.error]
+        assert len(error_events) == 1
+        assert "1" in error_events[0].error

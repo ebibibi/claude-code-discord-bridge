@@ -23,6 +23,7 @@ from ..concurrency import SessionRegistry
 from ..database.repository import SessionRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
+from ..discord_ui.views import StopView
 from ._run_helper import run_claude_in_thread
 
 if TYPE_CHECKING:
@@ -117,7 +118,7 @@ class ClaudeChatCog(commands.Cog):
             )
             return
 
-        await runner.kill()
+        await runner.interrupt()
         # _active_runners cleanup is handled by _run_claude's finally block.
         # We intentionally do NOT delete from the session DB so the user can resume.
         await interaction.response.send_message(embed=stopped_embed())
@@ -228,6 +229,9 @@ class ClaudeChatCog(commands.Cog):
             runner = self.runner.clone()
             self._active_runners[thread.id] = runner
 
+            stop_view = StopView(runner)
+            stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
+
             try:
                 await run_claude_in_thread(
                     thread=thread,
@@ -239,4 +243,5 @@ class ClaudeChatCog(commands.Cog):
                     registry=self._registry,
                 )
             finally:
+                await stop_view.disable(stop_msg)
                 self._active_runners.pop(thread.id, None)
