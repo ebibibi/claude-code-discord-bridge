@@ -7,6 +7,8 @@ import logging
 import discord
 from discord.ext import commands
 
+from .concurrency import SessionRegistry
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,6 +25,7 @@ class ClaudeDiscordBot(commands.Bot):
             intents=intents,
         )
         self.channel_id = channel_id
+        self.session_registry = SessionRegistry()
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "?")

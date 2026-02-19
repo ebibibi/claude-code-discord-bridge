@@ -78,7 +78,7 @@ class WebhookTriggerCog(commands.Cog):
         self.triggers = triggers
         self.allowed_webhook_ids = allowed_webhook_ids
         self.channel_ids = channel_ids
-        self._registry = registry
+        self._registry = registry or getattr(bot, "session_registry", None)
         self._locks: dict[str, asyncio.Lock] = {prefix: asyncio.Lock() for prefix in triggers}
         self._active_count: int = 0
 

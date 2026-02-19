@@ -58,7 +58,7 @@ class ClaudeChatCog(commands.Cog):
         self.runner = runner
         self._max_concurrent = max_concurrent
         self._allowed_user_ids = allowed_user_ids
-        self._registry = registry
+        self._registry = registry or getattr(bot, "session_registry", None)
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, ClaudeRunner] = {}
 

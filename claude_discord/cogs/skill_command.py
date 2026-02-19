@@ -94,7 +94,7 @@ class SkillCommandCog(commands.Cog):
         self.runner = runner
         self.claude_channel_id = claude_channel_id
         self._allowed_user_ids = allowed_user_ids
-        self._registry = registry
+        self._registry = registry or getattr(bot, "session_registry", None)
 
         # Default to ~/.claude/skills/
         if skills_dir is None:

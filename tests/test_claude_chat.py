@@ -13,6 +13,7 @@ from claude_discord.cogs.claude_chat import (
     _MAX_TOTAL_BYTES,
     ClaudeChatCog,
 )
+from claude_discord.concurrency import SessionRegistry
 
 
 def _make_cog() -> ClaudeChatCog:
@@ -320,3 +321,28 @@ class TestBuildPrompt:
         assert "alpha" in result
         assert "b.md" in result
         assert "beta" in result
+
+
+class TestRegistryAutoDiscovery:
+    """Registry should be auto-discovered from bot.session_registry."""
+
+    def test_auto_discovers_from_bot(self) -> None:
+        """When registry=None, Cog picks up bot.session_registry."""
+        bot = MagicMock()
+        bot.session_registry = SessionRegistry()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        assert cog._registry is bot.session_registry
+
+    def test_explicit_registry_takes_precedence(self) -> None:
+        """When registry is explicitly passed, it wins over bot attribute."""
+        bot = MagicMock()
+        bot.session_registry = SessionRegistry()
+        explicit = SessionRegistry()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), registry=explicit)
+        assert cog._registry is explicit
+
+    def test_no_bot_attribute_falls_back_to_none(self) -> None:
+        """When bot has no session_registry, _registry stays None."""
+        bot = MagicMock(spec=[])  # no attributes
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        assert cog._registry is None
