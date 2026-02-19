@@ -152,6 +152,34 @@ class TestScanCliSessions:
         sessions = scan_cli_sessions(str(tmp_path))
         assert sessions[0].summary == "Real prompt here"
 
+    def test_scan_handles_content_blocks_list(self, tmp_path):
+        """Content can be a list of content blocks instead of a string."""
+        session_id = "444ddddd-1234-5678-9abc-def012345678"
+        _write_session_jsonl(
+            tmp_path / f"{session_id}.jsonl",
+            session_id,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": session_id,
+                    "cwd": "/home/project",
+                    "timestamp": "2026-02-19T10:00:00.000Z",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Fix the login bug"},
+                            {"type": "text", "text": " and add tests"},
+                        ],
+                    },
+                },
+            ],
+        )
+        sessions = scan_cli_sessions(str(tmp_path))
+        assert len(sessions) == 1
+        assert "Fix the login bug" in sessions[0].summary
+        assert "add tests" in sessions[0].summary
+
     def test_scan_skips_xml_prefixed_content(self, tmp_path):
         session_id = "111aaaaa-1234-5678-9abc-def012345678"
         _write_session_jsonl(

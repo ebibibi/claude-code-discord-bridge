@@ -119,6 +119,18 @@ def _parse_session_file(path: Path, *, max_lines: int = 20) -> CliSession | None
 
                 content = data.get("message", {}).get("content", "")
 
+                # content can be a list of content blocks — extract text
+                if isinstance(content, list):
+                    text_parts = [
+                        block.get("text", "")
+                        for block in content
+                        if isinstance(block, dict) and block.get("type") == "text"
+                    ]
+                    content = " ".join(text_parts) if text_parts else ""
+
+                if not isinstance(content, str) or not content:
+                    continue
+
                 # Skip XML-prefixed content (internal commands)
                 if content.startswith("<"):
                     continue
