@@ -48,6 +48,9 @@ _STYLE_CHOICES = [
     app_commands.Choice(name="Message threads (visible in channel)", value=THREAD_STYLE_MESSAGE),
 ]
 
+SETTING_SYNC_SINCE_DAYS = "sync_since_days"
+_DEFAULT_SINCE_DAYS = 3
+
 
 class SessionManageCog(commands.Cog):
     """Cog for session listing, resume info, and CLI sync commands."""
@@ -73,27 +76,46 @@ class SessionManageCog(commands.Cog):
             return style
         return THREAD_STYLE_CHANNEL
 
+    async def _get_since_days(self) -> int:
+        """Get the configured since_days filter, defaulting to 3."""
+        if self.settings_repo is None:
+            return _DEFAULT_SINCE_DAYS
+        raw = await self.settings_repo.get(SETTING_SYNC_SINCE_DAYS)
+        if raw is not None and raw.isdigit():
+            return int(raw)
+        return _DEFAULT_SINCE_DAYS
+
     @app_commands.command(
         name="sync-settings",
         description="View or change session sync settings",
     )
-    @app_commands.describe(thread_style="How synced sessions appear in Discord")
+    @app_commands.describe(
+        thread_style="How synced sessions appear in Discord",
+        since_days="Only sync sessions from the last N days (default: 3)",
+    )
     @app_commands.choices(thread_style=_STYLE_CHOICES)
     async def sync_settings(
         self,
         interaction: discord.Interaction,
         thread_style: str | None = None,
+        since_days: int | None = None,
     ) -> None:
         """View or change sync settings. Without arguments, shows current settings."""
         current_style = await self._get_thread_style()
+        current_since = await self._get_since_days()
+        updated = False
 
         if thread_style is not None and thread_style in _VALID_THREAD_STYLES:
             if self.settings_repo is not None:
                 await self.settings_repo.set(SETTING_SYNC_THREAD_STYLE, thread_style)
             current_style = thread_style
-            action = "updated"
-        else:
-            action = "current"
+            updated = True
+
+        if since_days is not None and since_days >= 0:
+            if self.settings_repo is not None:
+                await self.settings_repo.set(SETTING_SYNC_SINCE_DAYS, str(since_days))
+            current_since = since_days
+            updated = True
 
         style_desc = {
             THREAD_STYLE_CHANNEL: (
@@ -106,14 +128,24 @@ class SessionManageCog(commands.Cog):
             ),
         }
 
+        since_desc = (
+            f"\U0001f4c5 **{current_since} days** — only sessions from the last "
+            f"{current_since} day(s) are synced"
+            if current_since > 0
+            else "\U0001f4c5 **No limit** — all sessions are synced"
+        )
+
         embed = discord.Embed(
             title="\u2699\ufe0f Sync Settings",
             description=(
-                f"**Thread style**: {current_style}\n\n{style_desc.get(current_style, '')}"
+                f"**Thread style**: {current_style}\n"
+                f"{style_desc.get(current_style, '')}\n\n"
+                f"**Since days**: {current_since}\n"
+                f"{since_desc}"
             ),
-            color=COLOR_SUCCESS if action == "updated" else COLOR_INFO,
+            color=COLOR_SUCCESS if updated else COLOR_INFO,
         )
-        if action == "updated":
+        if updated:
             embed.set_footer(text="Setting updated! New syncs will use this style.")
 
         await interaction.response.send_message(embed=embed)
@@ -217,9 +249,12 @@ class SessionManageCog(commands.Cog):
         await interaction.response.defer()
 
         thread_style = await self._get_thread_style()
+        since_days = await self._get_since_days()
 
         # Run CPU/IO-heavy scan in a thread to avoid blocking the event loop
-        cli_sessions = await asyncio.to_thread(scan_cli_sessions, self.cli_sessions_path)
+        cli_sessions = await asyncio.to_thread(
+            scan_cli_sessions, self.cli_sessions_path, since_days=since_days
+        )
         raw_channel = self.bot.get_channel(self.bot.channel_id)
 
         imported = 0

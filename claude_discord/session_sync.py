@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,7 @@ def scan_cli_sessions(
     *,
     limit: int = 50,
     max_lines_per_file: int = 20,
+    since_days: int = 0,
 ) -> list[CliSession]:
     """Scan a Claude Code projects directory for sessions.
 
@@ -59,6 +61,8 @@ def scan_cli_sessions(
         max_lines_per_file: Maximum lines to read per file when searching for
                             the first user message. Prevents reading entire
                             multi-MB session files.
+        since_days: Only include files modified within the last N days.
+                    Set to 0 (default) for no time filter.
 
     Returns:
         List of CliSession objects discovered, sorted by timestamp descending.
@@ -72,6 +76,11 @@ def scan_cli_sessions(
 
     # Filter to session files only
     jsonl_files = [p for p in jsonl_files if _SESSION_FILE_PATTERN.match(p.name)]
+
+    # Filter by modification time if since_days is set
+    if since_days > 0:
+        cutoff = time.time() - (since_days * 86400)
+        jsonl_files = [p for p in jsonl_files if p.stat().st_mtime >= cutoff]
 
     # Sort by modification time (newest first) and apply limit
     jsonl_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
