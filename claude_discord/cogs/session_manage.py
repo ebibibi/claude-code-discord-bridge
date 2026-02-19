@@ -8,6 +8,7 @@ Provides slash commands for viewing and managing Claude Code sessions:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -147,7 +148,8 @@ class SessionManageCog(commands.Cog):
 
         await interaction.response.defer()
 
-        cli_sessions = scan_cli_sessions(self.cli_sessions_path)
+        # Run CPU/IO-heavy scan in a thread to avoid blocking the event loop
+        cli_sessions = await asyncio.to_thread(scan_cli_sessions, self.cli_sessions_path)
         raw_channel = self.bot.get_channel(self.bot.channel_id)
 
         imported = 0

@@ -269,6 +269,94 @@ class TestScanCliSessions:
         assert len(sessions) == 1
         assert sessions[0].summary == "Valid line"
 
+    def test_scan_respects_limit(self, tmp_path):
+        """Only the newest N sessions should be returned when limit is set."""
+        import os
+
+        for i in range(5):
+            sid = f"aaa{i:05d}-1234-5678-9abc-def012345678"
+            path = tmp_path / f"{sid}.jsonl"
+            _write_session_jsonl(
+                path,
+                sid,
+                [
+                    {
+                        "type": "user",
+                        "isMeta": False,
+                        "sessionId": sid,
+                        "cwd": "/home",
+                        "timestamp": f"2026-02-19T1{i}:00:00.000Z",
+                        "message": {"role": "user", "content": f"Task {i}"},
+                    },
+                ],
+            )
+            # Ensure distinct mtimes
+            os.utime(path, (1000000 + i * 100, 1000000 + i * 100))
+
+        sessions = scan_cli_sessions(str(tmp_path), limit=3)
+        assert len(sessions) == 3
+
+    def test_scan_limit_zero_returns_all(self, tmp_path):
+        """limit=0 should return all sessions."""
+        for i in range(5):
+            sid = f"bbb{i:05d}-1234-5678-9abc-def012345678"
+            _write_session_jsonl(
+                tmp_path / f"{sid}.jsonl",
+                sid,
+                [
+                    {
+                        "type": "user",
+                        "isMeta": False,
+                        "sessionId": sid,
+                        "cwd": "/home",
+                        "timestamp": f"2026-02-19T1{i}:00:00.000Z",
+                        "message": {"role": "user", "content": f"Task {i}"},
+                    },
+                ],
+            )
+        sessions = scan_cli_sessions(str(tmp_path), limit=0)
+        assert len(sessions) == 5
+
+    def test_scan_max_lines_stops_early(self, tmp_path):
+        """If the user message is beyond max_lines, it should not be found."""
+        sid = "ccc00000-1234-5678-9abc-def012345678"
+        jsonl_path = tmp_path / f"{sid}.jsonl"
+        # Write 25 assistant lines then one user line
+        with open(jsonl_path, "w") as f:
+            for i in range(25):
+                f.write(
+                    json.dumps(
+                        {
+                            "type": "assistant",
+                            "sessionId": sid,
+                            "timestamp": f"2026-02-19T10:00:{i:02d}.000Z",
+                            "message": {"role": "assistant", "content": f"resp {i}"},
+                        }
+                    )
+                    + "\n"
+                )
+            f.write(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "isMeta": False,
+                        "sessionId": sid,
+                        "cwd": "/home",
+                        "timestamp": "2026-02-19T10:01:00.000Z",
+                        "message": {"role": "user", "content": "Late user message"},
+                    }
+                )
+                + "\n"
+            )
+        # max_lines=5 should miss the user message at line 26
+        sessions = scan_cli_sessions(str(tmp_path), max_lines_per_file=5)
+        assert len(sessions) == 0
+
+        # max_lines=30 should find it
+        sessions = scan_cli_sessions(str(tmp_path), max_lines_per_file=30)
+        assert len(sessions) == 1
+        assert sessions[0].summary == "Late user message"
+
     def test_cli_session_dataclass(self):
         s = CliSession(
             session_id="test-id",

@@ -32,13 +32,24 @@ class CliSession:
     timestamp: str | None
 
 
-def scan_cli_sessions(base_path: str) -> list[CliSession]:
+def scan_cli_sessions(
+    base_path: str,
+    *,
+    limit: int = 50,
+    max_lines_per_file: int = 20,
+) -> list[CliSession]:
     """Scan a Claude Code projects directory for sessions.
 
     Args:
         base_path: Path to scan. Can be a project directory (containing .jsonl
                    files directly) or the parent ~/.claude/projects/ directory
                    (containing project subdirectories).
+        limit: Maximum number of sessions to return. Files are sorted by
+               modification time (newest first) and only the newest ``limit``
+               files are parsed. Set to 0 for no limit.
+        max_lines_per_file: Maximum lines to read per file when searching for
+                            the first user message. Prevents reading entire
+                            multi-MB session files.
 
     Returns:
         List of CliSession objects discovered, sorted by timestamp descending.
@@ -47,15 +58,20 @@ def scan_cli_sessions(base_path: str) -> list[CliSession]:
     if not base.is_dir():
         return []
 
-    sessions: list[CliSession] = []
-
     # Collect all .jsonl files — either directly in base_path or in subdirectories
     jsonl_files = list(base.glob("*.jsonl")) + list(base.glob("*/*.jsonl"))
 
+    # Filter to session files only
+    jsonl_files = [p for p in jsonl_files if _SESSION_FILE_PATTERN.match(p.name)]
+
+    # Sort by modification time (newest first) and apply limit
+    jsonl_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if limit > 0:
+        jsonl_files = jsonl_files[:limit]
+
+    sessions: list[CliSession] = []
     for jsonl_path in jsonl_files:
-        if not _SESSION_FILE_PATTERN.match(jsonl_path.name):
-            continue
-        session = _parse_session_file(jsonl_path)
+        session = _parse_session_file(jsonl_path, max_lines=max_lines_per_file)
         if session:
             sessions.append(session)
 
@@ -64,11 +80,11 @@ def scan_cli_sessions(base_path: str) -> list[CliSession]:
     return sessions
 
 
-def _parse_session_file(path: Path) -> CliSession | None:
+def _parse_session_file(path: Path, *, max_lines: int = 20) -> CliSession | None:
     """Parse a single session JSONL file to extract metadata.
 
-    Reads lines until the first real user message (non-meta, non-XML-prefixed)
-    is found, then uses it as the session summary.
+    Reads up to ``max_lines`` lines searching for the first real user message
+    (non-meta, non-XML-prefixed) to use as the session summary.
     """
     session_id = path.stem
     working_dir: str | None = None
@@ -77,7 +93,11 @@ def _parse_session_file(path: Path) -> CliSession | None:
 
     try:
         with open(path) as f:
+            lines_read = 0
             for line in f:
+                lines_read += 1
+                if lines_read > max_lines:
+                    break
                 line = line.strip()
                 if not line:
                     continue
