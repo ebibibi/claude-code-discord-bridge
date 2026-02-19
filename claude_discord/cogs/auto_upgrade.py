@@ -16,15 +16,11 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
 
 from ..protocols import DrainAware
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
