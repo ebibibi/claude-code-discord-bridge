@@ -18,7 +18,7 @@ from discord.ext import commands
 
 from ..database.repository import SessionRepository
 from ..discord_ui.embeds import COLOR_INFO, COLOR_SUCCESS
-from ..session_sync import scan_cli_sessions
+from ..session_sync import extract_recent_messages, scan_cli_sessions
 
 if TYPE_CHECKING:
     from ..bot import ClaudeDiscordBot
@@ -211,6 +211,36 @@ class SessionManageCog(commands.Cog):
             embed.set_footer(text=f"Session: {cli_session.session_id[:8]}...")
 
             await thread.send(embed=embed)
+
+            # Post recent conversation messages for context
+            recent = await asyncio.to_thread(
+                extract_recent_messages,
+                self.cli_sessions_path,
+                cli_session.session_id,
+                count=6,
+                max_content_len=500,
+            )
+            if recent:
+                lines: list[str] = []
+                for msg in recent:
+                    if msg.role == "user":
+                        lines.append(f"**You:** {msg.content}")
+                    else:
+                        lines.append(f"**Claude:** {msg.content}")
+
+                # Split into chunks that fit Discord's 2000 char limit
+                chunk = ""
+                for line in lines:
+                    candidate = f"{chunk}\n\n{line}" if chunk else line
+                    if len(candidate) > 1900:
+                        if chunk:
+                            await thread.send(chunk)
+                        chunk = line[:1900]
+                    else:
+                        chunk = candidate
+                if chunk:
+                    await thread.send(chunk)
+
             imported += 1
 
         # Send result

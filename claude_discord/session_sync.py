@@ -23,6 +23,15 @@ _MAX_SUMMARY_LEN = 100
 
 
 @dataclass(frozen=True)
+class SessionMessage:
+    """A single message from a CLI session conversation."""
+
+    role: str  # "user" or "assistant"
+    content: str  # Truncated text content
+    timestamp: str | None
+
+
+@dataclass(frozen=True)
 class CliSession:
     """A session discovered from Claude Code CLI storage."""
 
@@ -117,18 +126,8 @@ def _parse_session_file(path: Path, *, max_lines: int = 20) -> CliSession | None
                 if data.get("isMeta"):
                     continue
 
-                content = data.get("message", {}).get("content", "")
-
-                # content can be a list of content blocks — extract text
-                if isinstance(content, list):
-                    text_parts = [
-                        block.get("text", "")
-                        for block in content
-                        if isinstance(block, dict) and block.get("type") == "text"
-                    ]
-                    content = " ".join(text_parts) if text_parts else ""
-
-                if not isinstance(content, str) or not content:
+                content = _extract_content_text(data.get("message", {}).get("content", ""))
+                if not content:
                     continue
 
                 # Skip XML-prefixed content (internal commands)
@@ -155,3 +154,98 @@ def _parse_session_file(path: Path, *, max_lines: int = 20) -> CliSession | None
         summary=summary,
         timestamp=timestamp,
     )
+
+
+def _extract_content_text(content: object) -> str:
+    """Extract plain text from a message content field.
+
+    Content can be a string or a list of content blocks.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        return " ".join(parts) if parts else ""
+    return ""
+
+
+def extract_recent_messages(
+    base_path: str,
+    session_id: str,
+    *,
+    count: int = 5,
+    max_content_len: int = 300,
+) -> list[SessionMessage]:
+    """Extract the most recent user/assistant messages from a session file.
+
+    Reads the JSONL file for the given session and returns the last ``count``
+    conversation turns (user + assistant pairs).
+
+    Args:
+        base_path: The base path to search for session files.
+        session_id: The session UUID to look up.
+        count: Number of recent messages to return.
+        max_content_len: Maximum character length per message content.
+
+    Returns:
+        List of SessionMessage, ordered chronologically (oldest first).
+    """
+    base = Path(base_path)
+    # Find the session file
+    candidates = list(base.glob(f"**/{session_id}.jsonl"))
+    if not candidates:
+        return []
+
+    path = candidates[0]
+    all_messages: list[SessionMessage] = []
+
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg_type = data.get("type")
+                if msg_type not in ("user", "assistant"):
+                    continue
+
+                # Skip meta messages
+                if data.get("isMeta"):
+                    continue
+
+                content = _extract_content_text(data.get("message", {}).get("content", ""))
+                if not content:
+                    continue
+
+                # Skip XML-prefixed internal content
+                if content.startswith("<"):
+                    continue
+
+                role = "user" if msg_type == "user" else "assistant"
+                truncated = content[:max_content_len]
+                if len(content) > max_content_len:
+                    truncated += "..."
+
+                all_messages.append(
+                    SessionMessage(
+                        role=role,
+                        content=truncated,
+                        timestamp=data.get("timestamp"),
+                    )
+                )
+
+    except OSError:
+        logger.debug("Failed to read session file: %s", path, exc_info=True)
+        return []
+
+    # Return last N messages
+    return all_messages[-count:]

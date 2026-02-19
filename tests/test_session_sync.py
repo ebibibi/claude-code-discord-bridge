@@ -9,7 +9,7 @@ import pytest
 
 from claude_discord.database.models import init_db
 from claude_discord.database.repository import SessionRepository
-from claude_discord.session_sync import CliSession, scan_cli_sessions
+from claude_discord.session_sync import CliSession, extract_recent_messages, scan_cli_sessions
 
 
 @pytest.fixture
@@ -394,3 +394,184 @@ class TestScanCliSessions:
         )
         assert s.session_id == "test-id"
         assert s.working_dir == "/home"
+
+
+class TestExtractRecentMessages:
+    """Test extracting recent conversation messages from a session file."""
+
+    def test_extract_basic(self, tmp_path):
+        sid = "aaa00000-1234-5678-9abc-def012345678"
+        _write_session_jsonl(
+            tmp_path / f"{sid}.jsonl",
+            sid,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:00.000Z",
+                    "message": {"role": "user", "content": "Hello"},
+                },
+                {
+                    "type": "assistant",
+                    "sessionId": sid,
+                    "timestamp": "2026-02-19T10:00:01.000Z",
+                    "message": {"role": "assistant", "content": "Hi there!"},
+                },
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:02.000Z",
+                    "message": {"role": "user", "content": "Fix the bug"},
+                },
+                {
+                    "type": "assistant",
+                    "sessionId": sid,
+                    "timestamp": "2026-02-19T10:00:03.000Z",
+                    "message": {"role": "assistant", "content": "Done!"},
+                },
+            ],
+        )
+        messages = extract_recent_messages(str(tmp_path), sid, count=4)
+        assert len(messages) == 4
+        assert messages[0].role == "user"
+        assert messages[0].content == "Hello"
+        assert messages[1].role == "assistant"
+        assert messages[1].content == "Hi there!"
+        assert messages[2].role == "user"
+        assert messages[2].content == "Fix the bug"
+        assert messages[3].role == "assistant"
+        assert messages[3].content == "Done!"
+
+    def test_extract_returns_last_n(self, tmp_path):
+        sid = "bbb00000-1234-5678-9abc-def012345678"
+        messages_data = []
+        for i in range(10):
+            role = "user" if i % 2 == 0 else "assistant"
+            msg = {
+                "type": role,
+                "sessionId": sid,
+                "timestamp": f"2026-02-19T10:00:{i:02d}.000Z",
+                "message": {"role": role, "content": f"Message {i}"},
+            }
+            if role == "user":
+                msg["isMeta"] = False
+                msg["cwd"] = "/home"
+            messages_data.append(msg)
+        _write_session_jsonl(tmp_path / f"{sid}.jsonl", sid, messages_data)
+        result = extract_recent_messages(str(tmp_path), sid, count=3)
+        assert len(result) == 3
+        assert result[0].content == "Message 7"
+        assert result[1].content == "Message 8"
+        assert result[2].content == "Message 9"
+
+    def test_extract_truncates_long_content(self, tmp_path):
+        sid = "ccc00000-1234-5678-9abc-def012345678"
+        _write_session_jsonl(
+            tmp_path / f"{sid}.jsonl",
+            sid,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:00.000Z",
+                    "message": {"role": "user", "content": "x" * 500},
+                },
+            ],
+        )
+        result = extract_recent_messages(str(tmp_path), sid, count=5, max_content_len=50)
+        assert len(result) == 1
+        assert len(result[0].content) == 53  # 50 + "..."
+        assert result[0].content.endswith("...")
+
+    def test_extract_skips_meta_and_xml(self, tmp_path):
+        sid = "ddd00000-1234-5678-9abc-def012345678"
+        _write_session_jsonl(
+            tmp_path / f"{sid}.jsonl",
+            sid,
+            [
+                {
+                    "type": "user",
+                    "isMeta": True,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:00.000Z",
+                    "message": {"role": "user", "content": "meta stuff"},
+                },
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:01.000Z",
+                    "message": {"role": "user", "content": "<xml>internal</xml>"},
+                },
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:02.000Z",
+                    "message": {"role": "user", "content": "Real message"},
+                },
+            ],
+        )
+        result = extract_recent_messages(str(tmp_path), sid, count=10)
+        assert len(result) == 1
+        assert result[0].content == "Real message"
+
+    def test_extract_not_found(self, tmp_path):
+        result = extract_recent_messages(str(tmp_path), "nonexistent-id")
+        assert result == []
+
+    def test_extract_content_blocks(self, tmp_path):
+        sid = "eee00000-1234-5678-9abc-def012345678"
+        _write_session_jsonl(
+            tmp_path / f"{sid}.jsonl",
+            sid,
+            [
+                {
+                    "type": "assistant",
+                    "sessionId": sid,
+                    "timestamp": "2026-02-19T10:00:00.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "Here is the fix"},
+                            {"type": "text", "text": " for your bug"},
+                        ],
+                    },
+                },
+            ],
+        )
+        result = extract_recent_messages(str(tmp_path), sid, count=5)
+        assert len(result) == 1
+        assert "fix" in result[0].content
+
+    def test_extract_in_subdirectory(self, tmp_path):
+        """Session file can be in a project subdirectory."""
+        sid = "fff00000-1234-5678-9abc-def012345678"
+        subdir = tmp_path / "-home-user-project"
+        subdir.mkdir()
+        _write_session_jsonl(
+            subdir / f"{sid}.jsonl",
+            sid,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:00.000Z",
+                    "message": {"role": "user", "content": "From subdir"},
+                },
+            ],
+        )
+        result = extract_recent_messages(str(tmp_path), sid, count=5)
+        assert len(result) == 1
+        assert result[0].content == "From subdir"
