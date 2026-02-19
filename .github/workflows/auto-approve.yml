@@ -20,3 +20,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash
+      - name: Wait for merge and notify EbiBot
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WEBHOOK_URL: ${{ secrets.DOCS_SYNC_WEBHOOK_URL }}
+        run: |
+          # GITHUB_TOKEN merges don't trigger other workflows (push/PR events).
+          # So we poll for merge completion and send the webhook directly.
+          for i in $(seq 1 30); do
+            STATE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state)
+            if [ "$STATE" = "MERGED" ]; then
+              echo "PR merged! Sending upgrade webhook..."
+              curl -s -o /dev/null -w "%{http_code}" \
+                -H "Content-Type: application/json" \
+                -d '{"content":"🔄 ebibot-upgrade"}' \
+                "$WEBHOOK_URL"
+              exit 0
+            fi
+            echo "Waiting for merge... ($i/30)"
+            sleep 10
+          done
+          echo "PR not merged within 5 minutes, skipping webhook"
