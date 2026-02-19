@@ -191,7 +191,7 @@ class ClaudeRunner:
         if self._process.returncode is None:
             await asyncio.wait_for(self._process.wait(), timeout=10)
 
-        if self._process.returncode and self._process.returncode != 0:
+        if self._process.returncode is not None and self._process.returncode > 0:
             stderr_data = b""
             if self._process.stderr:
                 stderr_data = await self._process.stderr.read()
