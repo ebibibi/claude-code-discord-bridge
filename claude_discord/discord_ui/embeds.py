@@ -12,6 +12,7 @@ COLOR_SUCCESS = 0x57F287  # Green
 COLOR_ERROR = 0xED4245  # Red
 COLOR_TOOL = 0xFEE75C  # Yellow
 COLOR_THINKING = 0x9B59B6  # Purple
+COLOR_ASK = 0x3498DB  # Blue — question-like
 
 
 CATEGORY_ICON: dict[ToolCategory, str] = {
@@ -153,6 +154,16 @@ def timeout_embed(seconds: int) -> discord.Embed:
             "\u2022 Use `/clear` to start fresh"
         ),
         color=COLOR_ERROR,
+    )
+
+
+def ask_embed(question: str, header: str = "") -> discord.Embed:
+    """Create an embed for an AskUserQuestion interactive prompt."""
+    title = f"❓ {header}" if header else "❓ Claude needs your input"
+    return discord.Embed(
+        title=title[:256],
+        description=question[:4096],
+        color=COLOR_ASK,
     )
 
 

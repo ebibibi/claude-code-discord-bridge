@@ -11,6 +11,8 @@ from typing import Any
 
 from .types import (
     TOOL_CATEGORIES,
+    AskOption,
+    AskQuestion,
     ContentBlockType,
     MessageType,
     StreamEvent,
@@ -83,12 +85,15 @@ def _parse_assistant(data: dict[str, Any], event: StreamEvent) -> None:
         elif block_type == ContentBlockType.TOOL_USE.value:
             tool_name = block.get("name", "unknown")
             category = TOOL_CATEGORIES.get(tool_name, ToolCategory.OTHER)
+            tool_input = block.get("input", {})
             event.tool_use = ToolUseEvent(
                 tool_id=block.get("id", ""),
                 tool_name=tool_name,
-                tool_input=block.get("input", {}),
+                tool_input=tool_input,
                 category=category,
             )
+            if tool_name == "AskUserQuestion":
+                event.ask_questions = _parse_ask_questions(tool_input)
 
         elif block_type == ContentBlockType.THINKING.value:
             thinking_text = block.get("thinking", "")
@@ -149,3 +154,27 @@ def _parse_result(data: dict[str, Any], event: StreamEvent) -> None:
     subtype = data.get("subtype", "")
     if subtype == "error":
         event.error = data.get("error", "Unknown error")
+
+
+def _parse_ask_questions(tool_input: dict[str, Any]) -> list[AskQuestion]:
+    """Parse AskUserQuestion tool input into a list of AskQuestion objects."""
+    questions_raw = tool_input.get("questions", [])
+    result: list[AskQuestion] = []
+    for q in questions_raw:
+        options = [
+            AskOption(
+                label=o.get("label", ""),
+                description=o.get("description", ""),
+            )
+            for o in q.get("options", [])
+            if o.get("label")
+        ]
+        result.append(
+            AskQuestion(
+                question=q.get("question", ""),
+                header=q.get("header", ""),
+                multi_select=bool(q.get("multiSelect", False)),
+                options=options,
+            )
+        )
+    return result

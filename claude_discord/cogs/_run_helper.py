@@ -16,11 +16,13 @@ from typing import TYPE_CHECKING
 import discord
 
 from ..claude.runner import ClaudeRunner
-from ..claude.types import MessageType, SessionState
+from ..claude.types import AskQuestion, MessageType, SessionState
 from ..concurrency import SessionRegistry
 from ..database.repository import SessionRepository
+from ..discord_ui.ask_view import AskView
 from ..discord_ui.chunker import chunk_message
 from ..discord_ui.embeds import (
+    ask_embed,
     error_embed,
     redacted_thinking_embed,
     session_complete_embed,
@@ -165,6 +167,10 @@ async def run_claude_in_thread(
     state = SessionState(session_id=session_id, thread_id=thread.id)
     streamer = StreamingMessageManager(thread)
 
+    # Set when AskUserQuestion is detected mid-stream. After the runner is
+    # interrupted and the stream drains, we show Discord UI and resume.
+    pending_ask: list[AskQuestion] | None = None
+
     try:
         async for event in runner.run(prompt, session_id=session_id):
             # System message: capture session_id
@@ -174,6 +180,11 @@ async def run_claude_in_thread(
                     await repo.save(thread.id, state.session_id)
                 if not session_id:
                     await thread.send(embed=session_start_embed(state.session_id))
+
+            # While draining a runner that was interrupted for AskUserQuestion,
+            # skip all further event processing.
+            if pending_ask is not None:
+                continue
 
             # Assistant message: text, thinking, or tool use
             if event.message_type == MessageType.ASSISTANT:
@@ -203,6 +214,12 @@ async def run_claude_in_thread(
                     embed = tool_use_embed(event.tool_use, in_progress=True)
                     msg = await thread.send(embed=embed)
                     state.active_tools[event.tool_use.tool_id] = msg
+
+                # AskUserQuestion detected — interrupt the runner and await UI
+                if event.ask_questions:
+                    pending_ask = event.ask_questions
+                    await runner.interrupt()
+                    continue
 
             # User message (tool result) — update tool embed with result
             if event.message_type == MessageType.USER and event.tool_result_id:
@@ -259,9 +276,29 @@ async def run_claude_in_thread(
         await thread.send(embed=error_embed("An unexpected error occurred."))
         if status:
             await status.set_error()
+        return state.session_id
     finally:
         if registry is not None:
             registry.unregister(thread.id)
+
+    # After the stream ends, handle pending AskUserQuestion by showing Discord
+    # UI and resuming the session with the user's answer.
+    if pending_ask and state.session_id:
+        answer_prompt = await _collect_ask_answers(thread, pending_ask)
+        if answer_prompt:
+            logger.info(
+                "Resuming session %s after AskUserQuestion answer",
+                state.session_id,
+            )
+            return await run_claude_in_thread(
+                thread=thread,
+                runner=runner.clone(),
+                repo=repo,
+                prompt=answer_prompt,
+                session_id=state.session_id,
+                status=status,
+                registry=registry,
+            )
 
     return state.session_id
 
@@ -274,6 +311,37 @@ def _truncate_result(content: str) -> str:
 
 
 _TIMEOUT_PATTERN = re.compile(r"Timed out after (\d+) seconds")
+
+
+async def _collect_ask_answers(
+    thread: discord.Thread,
+    questions: list[AskQuestion],
+) -> str | None:
+    """Show Discord UI for each question and return the formatted answer string.
+
+    Processes questions sequentially (one at a time). Returns a human-readable
+    string that will be injected as a new human turn when resuming the session,
+    or None if the user did not respond to any question.
+    """
+    parts: list[str] = []
+    for q in questions:
+        view = AskView(q)
+        await thread.send(embed=ask_embed(q.question, q.header), view=view)
+        selected = await view.wait_for_answer()
+        if not selected:
+            logger.info("AskUserQuestion timed out or got no answer for: %r", q.question)
+            continue
+        answer_text = ", ".join(selected)
+        parts.append(f"**{q.question}**\nAnswer: {answer_text}")
+
+    if not parts:
+        return None
+
+    return (
+        "[Response to AskUserQuestion]\n\n"
+        + "\n\n".join(parts)
+        + "\n\nPlease continue based on these answers."
+    )
 
 
 def _make_error_embed(error: str) -> discord.Embed:

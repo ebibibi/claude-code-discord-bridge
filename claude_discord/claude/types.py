@@ -36,6 +36,7 @@ class ToolCategory(Enum):
     COMMAND = "command"
     WEB = "web"
     THINK = "think"
+    ASK = "ask"
     OTHER = "other"
 
 
@@ -52,7 +53,26 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
     "WebFetch": ToolCategory.WEB,
     "WebSearch": ToolCategory.WEB,
     "Task": ToolCategory.OTHER,
+    "AskUserQuestion": ToolCategory.ASK,
 }
+
+
+@dataclass
+class AskOption:
+    """A single selectable option in an AskUserQuestion prompt."""
+
+    label: str
+    description: str = ""
+
+
+@dataclass
+class AskQuestion:
+    """A single question from an AskUserQuestion tool call."""
+
+    question: str
+    header: str = ""
+    multi_select: bool = False
+    options: list[AskOption] = field(default_factory=list)
 
 
 @dataclass
@@ -107,6 +127,7 @@ class StreamEvent:
     tool_result_content: str | None = None
     thinking: str | None = None
     has_redacted_thinking: bool = False
+    ask_questions: list[AskQuestion] | None = None
     is_complete: bool = False
     cost_usd: float | None = None
     duration_ms: int | None = None
