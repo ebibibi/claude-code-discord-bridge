@@ -48,8 +48,16 @@ def scan_cli_sessions(
     limit: int = 50,
     max_lines_per_file: int = 20,
     since_days: int = 0,
+    since_hours: int = 0,
+    min_results: int = 0,
 ) -> list[CliSession]:
     """Scan a Claude Code projects directory for sessions.
+
+    Supports two-tier filtering: first returns sessions modified within
+    ``since_hours``.  If fewer than ``min_results`` are found, fills up
+    to ``min_results`` from the most recently modified files regardless
+    of age.  This ensures there are always enough results while
+    prioritising recent activity.
 
     Args:
         base_path: Path to scan. Can be a project directory (containing .jsonl
@@ -62,7 +70,16 @@ def scan_cli_sessions(
                             the first user message. Prevents reading entire
                             multi-MB session files.
         since_days: Only include files modified within the last N days.
-                    Set to 0 (default) for no time filter.
+                    Set to 0 (default) for no time filter.  Ignored when
+                    ``since_hours`` is set.
+        since_hours: Primary time filter — include files modified within the
+                     last N hours.  When set together with ``min_results``,
+                     enables two-tier filtering.  Set to 0 (default) for no
+                     hour-based filter.
+        min_results: Minimum number of results to return.  When the time
+                     filter yields fewer files, the most recently modified
+                     files are added until this minimum is reached (or all
+                     files are exhausted).  Set to 0 (default) for no minimum.
 
     Returns:
         List of CliSession objects discovered, sorted by timestamp descending.
@@ -77,13 +94,30 @@ def scan_cli_sessions(
     # Filter to session files only
     jsonl_files = [p for p in jsonl_files if _SESSION_FILE_PATTERN.match(p.name)]
 
-    # Filter by modification time if since_days is set
-    if since_days > 0:
+    # Sort by modification time (newest first) — needed for both filter paths
+    jsonl_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    # --- Two-tier filtering (since_hours + min_results) ---
+    if since_hours > 0:
+        cutoff = time.time() - (since_hours * 3600)
+        recent = [p for p in jsonl_files if p.stat().st_mtime >= cutoff]
+        if min_results > 0 and len(recent) < min_results:
+            # Fill up to min_results from most recent (already sorted)
+            seen = set(id(p) for p in recent)
+            for p in jsonl_files:
+                if id(p) not in seen:
+                    recent.append(p)
+                if len(recent) >= min_results:
+                    break
+            jsonl_files = recent
+        else:
+            jsonl_files = recent
+    # --- Legacy since_days filter (backward compat) ---
+    elif since_days > 0:
         cutoff = time.time() - (since_days * 86400)
         jsonl_files = [p for p in jsonl_files if p.stat().st_mtime >= cutoff]
 
-    # Sort by modification time (newest first) and apply limit
-    jsonl_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    # Apply limit
     if limit > 0:
         jsonl_files = jsonl_files[:limit]
 

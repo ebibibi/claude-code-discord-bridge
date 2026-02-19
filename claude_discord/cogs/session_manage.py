@@ -51,6 +51,11 @@ _STYLE_CHOICES = [
 SETTING_SYNC_SINCE_DAYS = "sync_since_days"
 _DEFAULT_SINCE_DAYS = 3
 
+SETTING_SYNC_SINCE_HOURS = "sync_since_hours"
+_DEFAULT_SINCE_HOURS = 24
+SETTING_SYNC_MIN_RESULTS = "sync_min_results"
+_DEFAULT_MIN_RESULTS = 10
+
 
 class SessionManageCog(commands.Cog):
     """Cog for session listing, resume info, and CLI sync commands."""
@@ -85,24 +90,45 @@ class SessionManageCog(commands.Cog):
             return int(raw)
         return _DEFAULT_SINCE_DAYS
 
+    async def _get_since_hours(self) -> int:
+        """Get the configured since_hours filter, defaulting to 24."""
+        if self.settings_repo is None:
+            return _DEFAULT_SINCE_HOURS
+        raw = await self.settings_repo.get(SETTING_SYNC_SINCE_HOURS)
+        if raw is not None and raw.isdigit():
+            return int(raw)
+        return _DEFAULT_SINCE_HOURS
+
+    async def _get_min_results(self) -> int:
+        """Get the configured min_results fallback, defaulting to 10."""
+        if self.settings_repo is None:
+            return _DEFAULT_MIN_RESULTS
+        raw = await self.settings_repo.get(SETTING_SYNC_MIN_RESULTS)
+        if raw is not None and raw.isdigit():
+            return int(raw)
+        return _DEFAULT_MIN_RESULTS
+
     @app_commands.command(
         name="sync-settings",
         description="View or change session sync settings",
     )
     @app_commands.describe(
         thread_style="How synced sessions appear in Discord",
-        since_days="Only sync sessions from the last N days (default: 3)",
+        since_hours="Sync sessions active within the last N hours (default: 24)",
+        min_results="Minimum sessions to sync even if outside time window (default: 10)",
     )
     @app_commands.choices(thread_style=_STYLE_CHOICES)
     async def sync_settings(
         self,
         interaction: discord.Interaction,
         thread_style: str | None = None,
-        since_days: int | None = None,
+        since_hours: int | None = None,
+        min_results: int | None = None,
     ) -> None:
         """View or change sync settings. Without arguments, shows current settings."""
         current_style = await self._get_thread_style()
-        current_since = await self._get_since_days()
+        current_hours = await self._get_since_hours()
+        current_min = await self._get_min_results()
         updated = False
 
         if thread_style is not None and thread_style in _VALID_THREAD_STYLES:
@@ -111,10 +137,16 @@ class SessionManageCog(commands.Cog):
             current_style = thread_style
             updated = True
 
-        if since_days is not None and since_days >= 0:
+        if since_hours is not None and since_hours >= 0:
             if self.settings_repo is not None:
-                await self.settings_repo.set(SETTING_SYNC_SINCE_DAYS, str(since_days))
-            current_since = since_days
+                await self.settings_repo.set(SETTING_SYNC_SINCE_HOURS, str(since_hours))
+            current_hours = since_hours
+            updated = True
+
+        if min_results is not None and min_results >= 0:
+            if self.settings_repo is not None:
+                await self.settings_repo.set(SETTING_SYNC_MIN_RESULTS, str(min_results))
+            current_min = min_results
             updated = True
 
         style_desc = {
@@ -128,11 +160,18 @@ class SessionManageCog(commands.Cog):
             ),
         }
 
-        since_desc = (
-            f"\U0001f4c5 **{current_since} days** — only sessions from the last "
-            f"{current_since} day(s) are synced"
-            if current_since > 0
-            else "\U0001f4c5 **No limit** — all sessions are synced"
+        hours_desc = (
+            f"\U0001f552 **{current_hours}h** — sessions active within the last "
+            f"{current_hours} hour(s)"
+            if current_hours > 0
+            else "\U0001f552 **No time filter** — all sessions considered"
+        )
+
+        min_desc = (
+            f"\U0001f4ca **{current_min}** — if fewer than {current_min} sessions "
+            f"match the time filter, fill up to {current_min} from most recent"
+            if current_min > 0
+            else "\U0001f4ca **No minimum** — strict time filter only"
         )
 
         embed = discord.Embed(
@@ -140,8 +179,10 @@ class SessionManageCog(commands.Cog):
             description=(
                 f"**Thread style**: {current_style}\n"
                 f"{style_desc.get(current_style, '')}\n\n"
-                f"**Since days**: {current_since}\n"
-                f"{since_desc}"
+                f"**Since hours**: {current_hours}\n"
+                f"{hours_desc}\n\n"
+                f"**Min results**: {current_min}\n"
+                f"{min_desc}"
             ),
             color=COLOR_SUCCESS if updated else COLOR_INFO,
         )
@@ -249,11 +290,15 @@ class SessionManageCog(commands.Cog):
         await interaction.response.defer()
 
         thread_style = await self._get_thread_style()
-        since_days = await self._get_since_days()
+        since_hours = await self._get_since_hours()
+        min_results = await self._get_min_results()
 
         # Run CPU/IO-heavy scan in a thread to avoid blocking the event loop
         cli_sessions = await asyncio.to_thread(
-            scan_cli_sessions, self.cli_sessions_path, since_days=since_days
+            scan_cli_sessions,
+            self.cli_sessions_path,
+            since_hours=since_hours,
+            min_results=min_results,
         )
         raw_channel = self.bot.get_channel(self.bot.channel_id)
 

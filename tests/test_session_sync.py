@@ -504,6 +504,121 @@ class TestScanSinceDays:
         assert len(sessions) == 1
 
 
+def _create_sessions_with_ages(tmp_path, ages_hours: list[int]) -> list[str]:
+    """Helper: create N session files with specified ages in hours.
+
+    Returns list of session IDs ordered same as ages_hours.
+    """
+    import os
+    import time
+
+    now = time.time()
+    sids: list[str] = []
+    for i, age_h in enumerate(ages_hours):
+        sid = f"aa{i:06d}-1234-5678-9abc-def012345678"
+        path = tmp_path / f"{sid}.jsonl"
+        _write_session_jsonl(
+            path,
+            sid,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": f"2026-02-19T{10 + i:02d}:00:00.000Z",
+                    "message": {"role": "user", "content": f"Session aged {age_h}h"},
+                },
+            ],
+        )
+        mtime = now - (age_h * 3600)
+        os.utime(path, (mtime, mtime))
+        sids.append(sid)
+    return sids
+
+
+class TestTwoTierFiltering:
+    """Test the two-tier filtering: since_hours primary, min_results fallback."""
+
+    def test_all_within_hours_returned(self, tmp_path):
+        """When many sessions are within since_hours, return all of them."""
+        # 15 sessions all within 12 hours
+        _create_sessions_with_ages(tmp_path, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+        sessions = scan_cli_sessions(str(tmp_path), since_hours=24, min_results=10)
+        assert len(sessions) == 15
+
+    def test_fewer_than_min_results_fills_up(self, tmp_path):
+        """When fewer than min_results within since_hours, fill up from most recent."""
+        # 3 within 24h, 7 older → should return 10
+        ages = [1, 12, 20] + [48, 72, 96, 120, 144, 168, 192]
+        _create_sessions_with_ages(tmp_path, ages)
+        sessions = scan_cli_sessions(str(tmp_path), since_hours=24, min_results=10)
+        assert len(sessions) == 10
+
+    def test_zero_within_hours_returns_min_results(self, tmp_path):
+        """When nothing within since_hours, return min_results most recent."""
+        # All older than 48h
+        ages = [49, 50, 72, 96, 120, 144, 168, 192, 216, 240, 264, 288]
+        _create_sessions_with_ages(tmp_path, ages)
+        sessions = scan_cli_sessions(str(tmp_path), since_hours=24, min_results=10)
+        assert len(sessions) == 10
+
+    def test_total_less_than_min_results(self, tmp_path):
+        """When total files < min_results, return all available."""
+        ages = [49, 50, 72]  # 3 files, all old
+        _create_sessions_with_ages(tmp_path, ages)
+        sessions = scan_cli_sessions(str(tmp_path), since_hours=24, min_results=10)
+        assert len(sessions) == 3
+
+    def test_since_hours_zero_disables_time_filter(self, tmp_path):
+        """since_hours=0 should apply limit only, no time filter."""
+        ages = [1, 48, 96, 144]
+        _create_sessions_with_ages(tmp_path, ages)
+        sessions = scan_cli_sessions(str(tmp_path), since_hours=0, min_results=0, limit=50)
+        assert len(sessions) == 4
+
+    def test_min_results_zero_means_strict_time_filter(self, tmp_path):
+        """min_results=0 means only return sessions within since_hours."""
+        ages = [1, 12, 48, 96]  # 2 within 24h, 2 old
+        _create_sessions_with_ages(tmp_path, ages)
+        sessions = scan_cli_sessions(str(tmp_path), since_hours=24, min_results=0)
+        assert len(sessions) == 2
+
+    def test_resumed_session_appears_as_recent(self, tmp_path):
+        """A session file touched recently (resumed) should appear in results."""
+
+        # Create an "old" session but touch it recently (simulating resume)
+        sid = "aee00000-1234-5678-9abc-def012345678"
+        path = tmp_path / f"{sid}.jsonl"
+        _write_session_jsonl(
+            path,
+            sid,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-01-01T10:00:00.000Z",  # Old timestamp in content
+                    "message": {"role": "user", "content": "Old session resumed"},
+                },
+            ],
+        )
+        # mtime is now (just created), so it's within 24h
+        sessions = scan_cli_sessions(str(tmp_path), since_hours=24, min_results=10)
+        assert len(sessions) == 1
+        assert sessions[0].session_id == sid
+
+    def test_backward_compat_since_days_still_works(self, tmp_path):
+        """since_days parameter should still work for backward compatibility."""
+
+        ages_hours = [1, 48, 96]  # 1h, 2 days, 4 days
+        _create_sessions_with_ages(tmp_path, ages_hours)
+        # since_days=1 should only include the 1h-old session
+        sessions = scan_cli_sessions(str(tmp_path), since_days=1)
+        assert len(sessions) == 1
+
+
 class TestExtractRecentMessages:
     """Test extracting recent conversation messages from a session file."""
 
