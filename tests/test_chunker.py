@@ -1,14 +1,14 @@
 """Tests for fence-aware message chunker."""
 
 from claude_discord.discord_ui.chunker import (
-    _chunk_ends_in_table,
     _close_open_fence,
-    _find_chunk_table_header,
-    _is_separator_row,
-    _is_table_continuation_chunk,
     _is_table_line,
+    _wrap_tables_in_fences,
     chunk_message,
 )
+
+TABLE_3ROW = "| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |"
+FENCED_TABLE_3ROW = f"```\n{TABLE_3ROW}\n```"
 
 
 class TestChunkMessage:
@@ -55,9 +55,6 @@ class TestChunkMessage:
         assert all(c.strip() for c in chunks)
 
 
-TABLE_3ROW = "| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |"
-
-
 class TestIsTableLine:
     def test_table_row(self):
         assert _is_table_line("| Col1 | Col2 |")
@@ -75,171 +72,86 @@ class TestIsTableLine:
         assert not _is_table_line("| only starts with pipe")
 
 
+class TestWrapTablesInFences:
+    def test_simple_table_wrapped(self):
+        """A bare table is wrapped in a code fence."""
+        table = "| A | B |\n|---|---|\n| 1 | 2 |"
+        result = _wrap_tables_in_fences(table)
+        assert result == f"```\n{table}\n```\n"
+
+    def test_table_with_surrounding_text(self):
+        """Table embedded in text gets fenced; surrounding text is untouched."""
+        text = "Before.\n\n| A |\n|---|\n| 1 |\n\nAfter."
+        result = _wrap_tables_in_fences(text)
+        assert result.startswith("Before.")
+        assert "```\n| A |" in result
+        assert "| 1 |\n```" in result
+        assert result.endswith("After.")
+
+    def test_table_inside_fence_not_rewrapped(self):
+        """Table rows already inside a code fence are left untouched."""
+        fenced = "```\n| A | B |\n|---|---|\n| 1 | 2 |\n```"
+        result = _wrap_tables_in_fences(fenced)
+        assert result == fenced
+
+    def test_no_table_unchanged(self):
+        """Text without tables passes through unchanged."""
+        text = "Just some regular text.\n\nAnd another paragraph."
+        result = _wrap_tables_in_fences(text)
+        assert result == text
+
+    def test_multiple_tables_each_wrapped(self):
+        """Each table block gets its own pair of fence markers."""
+        text = "| A |\n|---|\n| 1 |\n\nMiddle.\n\n| B |\n|---|\n| 2 |"
+        result = _wrap_tables_in_fences(text)
+        assert result.count("```") == 4  # two open + two close fences
+
+    def test_empty_text(self):
+        assert _wrap_tables_in_fences("") == ""
+
+    def test_code_fence_with_table_syntax_inside_untouched(self):
+        """Pipe-like lines inside an existing code fence are not wrapped."""
+        fenced = "```python\n# | not | a | table |\ncode()\n```"
+        result = _wrap_tables_in_fences(fenced)
+        assert result == fenced
+
+
 class TestTableChunking:
-    def test_table_not_split(self):
-        """A table that fits within a single chunk must not be split."""
+    def test_table_wrapped_in_fence(self):
+        """Tables should be wrapped in a code fence in the output."""
         text = "Intro paragraph.\n\n" + TABLE_3ROW
         chunks = chunk_message(text)
-        assert any(TABLE_3ROW in chunk for chunk in chunks)
+        full = "".join(chunks)
+        assert FENCED_TABLE_3ROW in full
 
-    def test_splits_before_table(self):
-        """Long preamble followed by a table: split before the table, not inside it."""
-        # 880 + "\n\n" (2) + table (~38) = ~920 > max_chars=900
+    def test_splits_before_table_fence(self):
+        """Long preamble followed by a table: the fenced table stays in one chunk."""
         preamble = "X" * 880
         text = preamble + "\n\n" + TABLE_3ROW
         chunks = chunk_message(text, max_chars=900)
         assert len(chunks) >= 2
-        assert any(TABLE_3ROW in chunk for chunk in chunks)
+        # The fenced table should appear intact in one of the chunks
+        assert any(FENCED_TABLE_3ROW in chunk for chunk in chunks)
 
     def test_table_at_message_start(self):
-        """Table at the very start is returned intact if it fits."""
+        """Table at the very start is returned intact (fenced) if it fits."""
         text = TABLE_3ROW + "\n\nTrailing text."
         chunks = chunk_message(text)
-        assert any(TABLE_3ROW in chunk for chunk in chunks)
+        full = "".join(chunks)
+        assert FENCED_TABLE_3ROW in full
 
-    def test_header_and_separator_in_same_chunk(self):
-        """Header and separator rows must never end up in different chunks."""
+    def test_large_table_all_chunks_properly_fenced(self):
+        """Large table split across chunks: every chunk with table content is fenced."""
         header = "| Col |\n|-----|\n"
         many_rows = "| val |\n" * 300  # ~2400 chars — forces multiple splits
         text = header + many_rows
         chunks = chunk_message(text, max_chars=500)
-        for chunk in chunks:
-            lines = [ln for ln in chunk.splitlines() if _is_table_line(ln)]
-            if not lines:
-                continue
-            # A separator-only row as the first table line means the header
-            # ended up in a previous chunk — Discord cannot render that.
-            first_cell = lines[0].replace("|", "").replace("-", "").replace(" ", "")
-            assert first_cell != "", f"Chunk starts with separator row (no header): {chunk[:120]!r}"
-
-
-HEADER_ROW = "| Feature | Status | Notes |"
-SEP_ROW = "|---------|--------|-------|"
-TABLE_HEADER = f"{HEADER_ROW}\n{SEP_ROW}\n"
-
-
-class TestIsSeparatorRow:
-    def test_simple_separator(self):
-        assert _is_separator_row("|---|---|")
-
-    def test_separator_with_spaces(self):
-        assert _is_separator_row("| --- | --- |")
-
-    def test_alignment_colons(self):
-        assert _is_separator_row("|:---|---:|:---:|")
-
-    def test_data_row_not_separator(self):
-        assert not _is_separator_row("| val | ok |")
-
-    def test_header_row_not_separator(self):
-        assert not _is_separator_row("| Col1 | Col2 |")
-
-    def test_non_table_line(self):
-        assert not _is_separator_row("just text")
-
-
-class TestChunkEndsInTable:
-    def test_ends_in_table(self):
-        chunk = "Some text.\n\n| Col |\n|-----|\n| val |"
-        assert _chunk_ends_in_table(chunk)
-
-    def test_ends_outside_table(self):
-        chunk = "| Col |\n|-----|\n| val |\n\nSome text."
-        assert not _chunk_ends_in_table(chunk)
-
-    def test_empty_chunk(self):
-        assert not _chunk_ends_in_table("")
-
-
-class TestFindChunkTableHeader:
-    def test_finds_header(self):
-        chunk = f"{TABLE_HEADER}| item1 | ok | note1 |\n| item2 | ok | note2 |"
-        result = _find_chunk_table_header(chunk)
-        assert result == TABLE_HEADER
-
-    def test_returns_none_when_chunk_ends_outside_table(self):
-        chunk = f"{TABLE_HEADER}| item1 | ok | note1 |\n\nSome trailing text."
-        result = _find_chunk_table_header(chunk)
-        assert result is None
-
-    def test_multiple_tables_returns_last(self):
-        table1 = "| A |\n|---|\n| 1 |"
-        table2 = "| B | C |\n|---|---|\n| 2 | 3 |"
-        chunk = f"{table1}\n\n{table2}\n| 4 | 5 |"  # chunk ends in table2
-        result = _find_chunk_table_header(chunk)
-        assert result == "| B | C |\n|---|---|\n"
-
-
-class TestIsTableContinuationChunk:
-    def test_data_rows_only_is_continuation(self):
-        chunk = "| item35 | ok | note35 |\n| item36 | ok | note36 |"
-        assert _is_table_continuation_chunk(chunk)
-
-    def test_separator_first_is_continuation(self):
-        chunk = "|---|---|\n| val |"
-        assert _is_table_continuation_chunk(chunk)
-
-    def test_proper_header_not_continuation(self):
-        chunk = f"{TABLE_HEADER}| item1 | ok | note1 |"
-        assert not _is_table_continuation_chunk(chunk)
-
-    def test_non_table_chunk_not_continuation(self):
-        chunk = "Just some regular text here."
-        assert not _is_table_continuation_chunk(chunk)
-
-
-class TestTableContinuationChunks:
-    """Tests for the _fix_table_continuations behaviour in chunk_message."""
-
-    def _build_large_table(self, n_rows: int) -> str:
-        rows = "".join(f"| item{j:03d} | ok | note{j:03d} |\n" for j in range(n_rows))
-        return TABLE_HEADER + rows
-
-    def test_large_table_all_chunks_have_header(self):
-        """Every chunk that contains table content must start with header+sep."""
-        table = self._build_large_table(80)  # > 1950 chars, forces multiple splits
-        chunks = chunk_message("Summary:\n\n" + table)
-        assert len(chunks) >= 2, "Expected at least 2 chunks for large table"
-
         for i, chunk in enumerate(chunks):
-            table_lines = [ln for ln in chunk.splitlines() if _is_table_line(ln)]
-            if not table_lines:
-                continue
-            # First table line must be a header (non-separator data row)
-            assert not _is_separator_row(table_lines[0]), (
-                f"Chunk {i} starts with separator (no header): {chunk[:120]!r}"
-            )
-            # Second table line (if present) must be a separator
-            if len(table_lines) >= 2:
-                assert _is_separator_row(table_lines[1]), (
-                    f"Chunk {i} second table line is not separator: {chunk[:120]!r}"
+            if "| val |" in chunk or "| Col |" in chunk:
+                fence_count = chunk.count("```")
+                assert fence_count % 2 == 0, (
+                    f"Chunk {i} has unbalanced fences: {chunk[:120]!r}"
                 )
-
-    def test_small_table_unchanged(self):
-        """A small table that fits in one chunk must not be modified."""
-        table = TABLE_HEADER + "| item1 | ok | note1 |\n"
-        chunks = chunk_message("Intro.\n\n" + table)
-        assert len(chunks) == 1
-        assert table in chunks[0]
-
-    def test_multiple_tables_independent_headers(self):
-        """Each table's continuation gets the right header, not another table's."""
-        table_a = "| Alpha | Beta |\n|-------|------|\n" + "| a | b |\n" * 40
-        table_b = "| Gamma | Delta |\n|-------|-------|\n" + "| c | d |\n" * 40
-        text = table_a + "\nSome text between.\n\n" + table_b
-        chunks = chunk_message(text, max_chars=600)
-
-        for i, chunk in enumerate(chunks):
-            table_lines = [ln for ln in chunk.splitlines() if _is_table_line(ln)]
-            if len(table_lines) < 2:
-                continue
-            # First table line must be a header
-            assert not _is_separator_row(table_lines[0]), (
-                f"Chunk {i} missing header: {chunk[:120]!r}"
-            )
-            assert _is_separator_row(table_lines[1]), (
-                f"Chunk {i} missing separator: {chunk[:120]!r}"
-            )
 
 
 class TestCloseOpenFence:
