@@ -54,6 +54,9 @@ GitHub PR (自動マージ)  ←  git push  ←  Claude Code  ←──┘
 - **セッション永続化** — `--resume` による複数メッセージをまたいだ会話継続
 - **スキル実行** — スラッシュコマンドとオートコンプリートで Claude Code スキルを実行（`/skill goodmorning`）
 - **並行セッション** — 複数セッションを並列実行（設定可能な上限）
+- **インタラクティブな質問** — Claude が `AskUserQuestion` を呼び出すと、Discord ボタンまたは Select Menu を表示し、回答を受け取ってセッションを再開
+- **クロススレッドリレー** — `/relay target:#thread message:"..."` で一方の Claude セッションから別のセッションへメッセージを委譲（マルチエージェント連携パターン）
+- **セッションステータスダッシュボード** — メインチャンネルにピン留めされた live embed で各スレッドの状態（処理中 / 入力待ち）を一覧表示。Claude が返答を待っているときはオーナーを @mention で通知
 
 ### CI/CD 自動化
 - **Webhook トリガー** — GitHub Actions や任意の CI/CD システムから Claude Code タスクをトリガー
@@ -127,6 +130,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLAUDE_WORKING_DIR` | Claude の作業ディレクトリ | カレントディレクトリ |
 | `MAX_CONCURRENT_SESSIONS` | 最大並行セッション数 | `3` |
 | `SESSION_TIMEOUT_SECONDS` | セッション非アクティブタイムアウト | `300` |
+| `DISCORD_OWNER_ID` | Claude が入力待ちのとき @mention する Discord ユーザー ID | （オプション） |
 
 ## Discord Bot のセットアップ
 
@@ -344,6 +348,7 @@ claude_discord/
   cogs/
     claude_chat.py         # インタラクティブチャット（スレッド作成、メッセージ処理）
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
+    thread_relay.py        # /relay スラッシュコマンド（クロススレッド Claude メッセージング）
     webhook_trigger.py     # Webhook → Claude Code タスク実行（CI/CD）
     auto_upgrade.py        # Webhook → パッケージアップグレード + 再起動
     _run_helper.py         # 共有 Claude CLI 実行ロジック
@@ -359,6 +364,8 @@ claude_discord/
     status.py              # 絵文字リアクションステータスマネージャー（デバウンス付き）
     chunker.py             # フェンス対応メッセージ分割
     embeds.py              # Discord embed ビルダー
+    ask_view.py            # AskUserQuestion 用 Discord ボタン / Select Menu
+    thread_dashboard.py    # スレッドごとのセッション状態を表示する live ピン留め embed
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）
   utils/
@@ -378,7 +385,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-131 件のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、webhook トリガー、自動アップグレード、REST API をカバーしています。
+400 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、webhook トリガー、自動アップグレード、REST API、AskUserQuestion UI、スレッドリレー、スレッドステータスダッシュボードをカバーしています。
 
 ## このプロジェクトの構築方法
 
