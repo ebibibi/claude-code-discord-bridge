@@ -10,6 +10,15 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 - Personal instances (e.g. EbiBot) install this as a package and import the Cog. The instance repo handles server-specific config, additional Cogs, and secrets.
 - When adding features: if it's useful to anyone → add here. If it's personal workflow → add in the instance repo.
 
+### Zero-Config Principle (Critical)
+
+**Consumers must get new features by updating the package alone — no code changes required.**
+
+- New features should be enabled by default (auto-discovery, sensible defaults)
+- New constructor parameters must have backward-compatible defaults (`= None`)
+- If a feature requires consumers to wire something up, the design is wrong — fix it in ccdb
+- Consumers should NEVER need to copy, wrap, or subclass ccdb Cogs. If they do, ccdb is missing an extension point
+
 ## Architecture
 
 - **Python 3.10+** with discord.py v2
