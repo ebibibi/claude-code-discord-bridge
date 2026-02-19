@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
 
 from claude_discord.cogs.claude_chat import (
-    ClaudeChatCog,
     _MAX_ATTACHMENT_BYTES,
     _MAX_ATTACHMENTS,
     _MAX_TOTAL_BYTES,
+    ClaudeChatCog,
 )
 
 
@@ -143,6 +143,25 @@ class TestStopCommand:
         assert embed.color.value == 0xFFA500
 
 
+class TestActiveCountAlias:
+    """Tests for ClaudeChatCog.active_count (DrainAware alias)."""
+
+    def test_active_count_equals_active_session_count(self) -> None:
+        """active_count should be an alias for active_session_count."""
+        cog = _make_cog()
+        assert cog.active_count == 0
+        assert cog.active_count == cog.active_session_count
+
+        # Add a fake runner
+        cog._active_runners[1] = MagicMock()
+        assert cog.active_count == 1
+        assert cog.active_count == cog.active_session_count
+
+        cog._active_runners[2] = MagicMock()
+        assert cog.active_count == 2
+        assert cog.active_count == cog.active_session_count
+
+
 class TestBuildPrompt:
     """Tests for the _build_prompt method (attachment handling)."""
 
@@ -220,7 +239,9 @@ class TestBuildPrompt:
     async def test_empty_content_with_attachment(self) -> None:
         """Message with only an attachment (no text) should still work."""
         cog = _make_cog()
-        att = self._make_attachment(filename="code.py", content_type="text/x-python", content=b"print('hi')")
+        att = self._make_attachment(
+            filename="code.py", content_type="text/x-python", content=b"print('hi')"
+        )
         msg = self._make_message(content="", attachments=[att])
 
         result = await cog._build_prompt(msg)
@@ -238,7 +259,7 @@ class TestBuildPrompt:
         ]
         msg = self._make_message(attachments=attachments)
 
-        result = await cog._build_prompt(msg)
+        await cog._build_prompt(msg)
 
         # Extra attachments beyond the limit should not be read
         for att in attachments[_MAX_ATTACHMENTS:]:
@@ -260,7 +281,7 @@ class TestBuildPrompt:
         ]
         msg = self._make_message(attachments=attachments)
 
-        result = await cog._build_prompt(msg)
+        await cog._build_prompt(msg)
 
         # Should stop after total exceeds _MAX_TOTAL_BYTES (~2 files)
         read_count = sum(1 for att in attachments if att.read.called)

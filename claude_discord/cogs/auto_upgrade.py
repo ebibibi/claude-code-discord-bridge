@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
+from ..protocols import DrainAware
+
 if TYPE_CHECKING:
     pass
 
@@ -178,13 +180,27 @@ class AutoUpgradeCog(commands.Cog):
             await thread.send("❌ Upgrade failed with an unexpected error.")
             await trigger_message.add_reaction("❌")
 
+    def _auto_drain_check(self) -> bool:
+        """Check all DrainAware Cogs registered on the bot.
+
+        Returns True when every DrainAware Cog has ``active_count == 0``.
+        If no DrainAware Cogs are found, returns True (safe to restart).
+        """
+        return all(
+            cog.active_count == 0
+            for cog in self.bot.cogs.values()
+            if isinstance(cog, DrainAware) and cog is not self
+        )
+
     async def _drain(self, thread: discord.Thread) -> None:
         """Wait until drain_check returns True or drain_timeout elapses.
 
-        If no drain_check is configured, returns immediately.
+        If an explicit drain_check was provided, uses that.
+        Otherwise, auto-discovers all DrainAware Cogs on the bot.
         Posts status updates to the Discord thread while waiting.
         """
-        if self._drain_check is None or self._drain_check():
+        check = self._drain_check or self._auto_drain_check
+        if check():
             return
 
         await thread.send(
@@ -195,7 +211,7 @@ class AutoUpgradeCog(commands.Cog):
         while elapsed < self._drain_timeout:
             await asyncio.sleep(self._drain_poll_interval)
             elapsed += self._drain_poll_interval
-            if self._drain_check():
+            if check():
                 await thread.send(f"✅ Sessions finished ({elapsed}s). Restarting now...")
                 return
 

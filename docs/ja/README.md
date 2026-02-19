@@ -248,6 +248,23 @@ await bot.add_cog(AutoUpgradeCog(bot, config))
 
 **パイプライン:** 上流プッシュ → CI webhook → `🔄 bot-upgrade` → `uv lock --upgrade-package` → `uv sync` → サービス再起動。
 
+### グレースフルドレイン（DrainAware）
+
+再起動前に、AutoUpgradeCog はすべてのアクティブセッションの完了を待ちます。`active_count` プロパティを持つ Cog（`DrainAware` プロトコルを満たす）は自動的に検出されます — 手動で `drain_check` ラムダを渡す必要はありません。
+
+組み込みの DrainAware Cog: `ClaudeChatCog`、`WebhookTriggerCog`。
+
+独自の Cog をドレイン対応にするには、`active_count` プロパティを追加するだけです:
+
+```python
+class MyCog(commands.Cog):
+    @property
+    def active_count(self) -> int:
+        return len(self._running_tasks)
+```
+
+明示的な `drain_check` コーラブルを渡すことで、自動検出を上書きすることもできます。
+
 ## REST API
 
 外部ツールから Discord へのプッシュ通知のためのオプション REST API。aiohttp が必要:

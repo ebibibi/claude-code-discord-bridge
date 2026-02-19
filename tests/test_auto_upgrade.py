@@ -53,7 +53,8 @@ def _make_message(
 
 
 def _make_process(
-    returncode: int = 0, stdout: bytes = b"ok",
+    returncode: int = 0,
+    stdout: bytes = b"ok",
 ) -> MagicMock:
     proc = MagicMock()
     proc.returncode = returncode
@@ -66,7 +67,8 @@ class TestFiltering:
 
     @pytest.mark.asyncio
     async def test_ignores_non_webhook(
-        self, cog: AutoUpgradeCog,
+        self,
+        cog: AutoUpgradeCog,
     ) -> None:
         msg = _make_message(webhook_id=None)
         msg.create_thread = AsyncMock()
@@ -75,7 +77,8 @@ class TestFiltering:
 
     @pytest.mark.asyncio
     async def test_ignores_unauthorized_webhook(
-        self, bot: MagicMock,
+        self,
+        bot: MagicMock,
     ) -> None:
         config = UpgradeConfig(
             package_name="pkg",
@@ -89,7 +92,8 @@ class TestFiltering:
 
     @pytest.mark.asyncio
     async def test_ignores_wrong_channel(
-        self, bot: MagicMock,
+        self,
+        bot: MagicMock,
     ) -> None:
         config = UpgradeConfig(
             package_name="pkg",
@@ -103,7 +107,8 @@ class TestFiltering:
 
     @pytest.mark.asyncio
     async def test_ignores_wrong_prefix(
-        self, cog: AutoUpgradeCog,
+        self,
+        cog: AutoUpgradeCog,
     ) -> None:
         msg = _make_message(content="Hello")
         msg.create_thread = AsyncMock()
@@ -112,7 +117,8 @@ class TestFiltering:
 
     @pytest.mark.asyncio
     async def test_exact_match_required(
-        self, cog: AutoUpgradeCog,
+        self,
+        cog: AutoUpgradeCog,
     ) -> None:
         """Trigger prefix must be exact match."""
         msg = _make_message(content="🔄 ebibot-upgrade extra")
@@ -130,7 +136,8 @@ class TestUpgradeSteps:
 
     @pytest.mark.asyncio
     async def test_upgrade_failure_adds_error_reaction(
-        self, cog: AutoUpgradeCog,
+        self,
+        cog: AutoUpgradeCog,
     ) -> None:
         """If upgrade step fails, should add error reaction."""
         msg = _make_message()
@@ -145,7 +152,8 @@ class TestUpgradeSteps:
 
     @pytest.mark.asyncio
     async def test_success_adds_check_reaction(
-        self, cog: AutoUpgradeCog,
+        self,
+        cog: AutoUpgradeCog,
     ) -> None:
         """Successful upgrade should add check reaction."""
         msg = _make_message()
@@ -160,7 +168,8 @@ class TestUpgradeSteps:
 
     @pytest.mark.asyncio
     async def test_no_restart_shows_completion(
-        self, cog: AutoUpgradeCog,
+        self,
+        cog: AutoUpgradeCog,
     ) -> None:
         """When no restart_command, show completion message."""
         msg = _make_message()
@@ -177,7 +186,8 @@ class TestUpgradeSteps:
 
     @pytest.mark.asyncio
     async def test_restart_command_fired(
-        self, bot: MagicMock,
+        self,
+        bot: MagicMock,
     ) -> None:
         """Restart command should be fired after upgrade.
 
@@ -187,7 +197,10 @@ class TestUpgradeSteps:
         config = UpgradeConfig(
             package_name="pkg",
             restart_command=[
-                "sudo", "systemctl", "restart", "bot.service",
+                "sudo",
+                "systemctl",
+                "restart",
+                "bot.service",
             ],
             working_dir="/tmp",
         )
@@ -210,7 +223,10 @@ class TestUpgradeSteps:
 
         assert len(exec_calls) == 3
         assert exec_calls[2] == (
-            "sudo", "systemctl", "restart", "bot.service",
+            "sudo",
+            "systemctl",
+            "restart",
+            "bot.service",
         )
 
 
@@ -239,7 +255,8 @@ class TestDrainCheck:
 
     @pytest.mark.asyncio
     async def test_no_drain_check_skips_waiting(
-        self, bot: MagicMock,
+        self,
+        bot: MagicMock,
     ) -> None:
         """When drain_check is None, _drain returns immediately."""
         cog = self._make_cog_with_restart(bot)
@@ -254,7 +271,8 @@ class TestDrainCheck:
 
     @pytest.mark.asyncio
     async def test_drain_check_true_returns_immediately(
-        self, bot: MagicMock,
+        self,
+        bot: MagicMock,
     ) -> None:
         """When drain_check already returns True, no polling occurs."""
         cog = self._make_cog_with_restart(bot, drain_check=lambda: True)
@@ -269,7 +287,8 @@ class TestDrainCheck:
 
     @pytest.mark.asyncio
     async def test_drain_waits_until_check_passes(
-        self, bot: MagicMock,
+        self,
+        bot: MagicMock,
     ) -> None:
         """drain_check False→True: polls once then proceeds."""
         poll_count = 0
@@ -280,7 +299,9 @@ class TestDrainCheck:
             return poll_count > 1  # False first, True second
 
         cog = self._make_cog_with_restart(
-            bot, drain_check=drain_check, drain_poll_interval=5,
+            bot,
+            drain_check=drain_check,
+            drain_poll_interval=5,
         )
         thread = MagicMock(spec=discord.Thread)
         thread.send = AsyncMock()
@@ -300,7 +321,8 @@ class TestDrainCheck:
 
     @pytest.mark.asyncio
     async def test_drain_timeout_proceeds_anyway(
-        self, bot: MagicMock,
+        self,
+        bot: MagicMock,
     ) -> None:
         """When drain_check never returns True, returns after timeout."""
         cog = self._make_cog_with_restart(
@@ -325,7 +347,8 @@ class TestConcurrency:
 
     @pytest.mark.asyncio
     async def test_concurrent_blocked(
-        self, cog: AutoUpgradeCog,
+        self,
+        cog: AutoUpgradeCog,
     ) -> None:
         msg = _make_message()
         await cog._lock.acquire()
@@ -364,17 +387,112 @@ class TestUpgradeConfigDataclass:
             sync_command=["pip", "check"],
         )
         assert config.upgrade_command == [
-            "pip", "install", "--upgrade", "my-pkg",
+            "pip",
+            "install",
+            "--upgrade",
+            "my-pkg",
         ]
         assert config.sync_command == ["pip", "check"]
+
+
+class TestAutoDrainDiscovery:
+    """Test auto-discovery of DrainAware Cogs."""
+
+    def _make_cog_with_restart(
+        self,
+        bot: MagicMock,
+        drain_check=None,
+    ) -> AutoUpgradeCog:
+        config = UpgradeConfig(
+            package_name="pkg",
+            restart_command=["sudo", "systemctl", "restart", "bot.service"],
+            working_dir="/tmp",
+        )
+        return AutoUpgradeCog(bot=bot, config=config, drain_check=drain_check)
+
+    def test_auto_discovers_drain_aware_cogs(self) -> None:
+        """When no explicit drain_check, discovers DrainAware Cogs."""
+        bot = MagicMock(spec=commands.Bot)
+
+        class FakeDrainCog:
+            @property
+            def active_count(self) -> int:
+                return 0
+
+        fake_cog = FakeDrainCog()
+        bot.cogs = MagicMock()
+        cog = self._make_cog_with_restart(bot)
+        bot.cogs.values.return_value = [fake_cog, cog]
+
+        assert cog._auto_drain_check() is True
+
+    def test_auto_drain_check_busy_cog_returns_false(self) -> None:
+        """auto_drain_check returns False when a DrainAware Cog is busy."""
+        bot = MagicMock(spec=commands.Bot)
+
+        class BusyCog:
+            @property
+            def active_count(self) -> int:
+                return 2
+
+        busy_cog = BusyCog()
+        cog = self._make_cog_with_restart(bot)
+        bot.cogs.values.return_value = [busy_cog, cog]
+
+        assert cog._auto_drain_check() is False
+
+    def test_no_drain_aware_cogs_returns_true(self) -> None:
+        """When no DrainAware Cogs exist, safe to restart."""
+        bot = MagicMock(spec=commands.Bot)
+
+        class PlainCog:
+            pass
+
+        bot.cogs.values.return_value = [PlainCog()]
+        cog = self._make_cog_with_restart(bot)
+
+        assert cog._auto_drain_check() is True
+
+    def test_explicit_drain_check_takes_precedence(self) -> None:
+        """Explicit drain_check should be used over auto-discovery."""
+        bot = MagicMock(spec=commands.Bot)
+        explicit_called = False
+
+        def explicit_check() -> bool:
+            nonlocal explicit_called
+            explicit_called = True
+            return True
+
+        # Even with a busy DrainAware cog, explicit check is used
+        class BusyCog:
+            @property
+            def active_count(self) -> int:
+                return 5
+
+        bot.cogs.values.return_value = [BusyCog()]
+        cog = self._make_cog_with_restart(bot, drain_check=explicit_check)
+
+        # The _drain method uses explicit check, not auto
+        assert cog._drain_check is not None
+        assert cog._drain_check() is True
+        assert explicit_called
+
+    def test_auto_drain_excludes_self(self) -> None:
+        """AutoUpgradeCog should not check itself (it's not DrainAware anyway,
+        but if it were, it should exclude itself to avoid deadlock)."""
+        bot = MagicMock(spec=commands.Bot)
+        cog = self._make_cog_with_restart(bot)
+        bot.cogs.values.return_value = [cog]
+
+        assert cog._auto_drain_check() is True
 
 
 class TestActiveSessionCount:
     """Tests for ClaudeChatCog.active_session_count property."""
 
     def test_count_starts_at_zero(self) -> None:
-        from claude_discord.cogs.claude_chat import ClaudeChatCog
         from claude_discord.claude.runner import ClaudeRunner
+        from claude_discord.cogs.claude_chat import ClaudeChatCog
 
         bot = MagicMock()
         bot.channel_id = 999
@@ -386,8 +504,8 @@ class TestActiveSessionCount:
         assert cog.active_session_count == 0
 
     def test_count_reflects_runners(self) -> None:
-        from claude_discord.cogs.claude_chat import ClaudeChatCog
         from claude_discord.claude.runner import ClaudeRunner
+        from claude_discord.cogs.claude_chat import ClaudeChatCog
 
         bot = MagicMock()
         bot.channel_id = 999
