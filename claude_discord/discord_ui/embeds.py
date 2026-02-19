@@ -51,6 +51,9 @@ def session_start_embed(session_id: str | None = None) -> discord.Embed:
 def session_complete_embed(
     cost_usd: float | None = None,
     duration_ms: int | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cache_read_tokens: int | None = None,
 ) -> discord.Embed:
     """Create an embed for session completion."""
     parts: list[str] = []
@@ -59,6 +62,17 @@ def session_complete_embed(
         parts.append(f"\u23f1\ufe0f {seconds:.1f}s")
     if cost_usd is not None:
         parts.append(f"\U0001f4b0 ${cost_usd:.4f}")
+    if input_tokens is not None and output_tokens is not None:
+
+        def _fmt(n: int) -> str:
+            return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+        token_str = f"\U0001f4ca {_fmt(input_tokens)}\u2191 {_fmt(output_tokens)}\u2193"
+        if cache_read_tokens:
+            total = input_tokens + cache_read_tokens
+            hit_pct = int(cache_read_tokens / total * 100) if total else 0
+            token_str += f" ({hit_pct}% cache)"
+        parts.append(token_str)
 
     description = " | ".join(parts) if parts else None
 

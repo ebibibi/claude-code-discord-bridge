@@ -208,3 +208,32 @@ class TestToolDisplayNames:
         )
         event = parse_line(line)
         assert event.tool_use.display_name == "Searching web: python asyncio tutorial"
+
+
+class TestTokenUsage:
+    def test_result_with_usage(self):
+        line = (
+            '{"type": "result", "subtype": "success", "session_id": "s1",'
+            ' "cost_usd": 0.01, "duration_ms": 1000,'
+            ' "usage": {"input_tokens": 500, "output_tokens": 200,'
+            ' "cache_read_input_tokens": 300}}'
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.input_tokens == 500
+        assert event.output_tokens == 200
+        assert event.cache_read_tokens == 300
+
+    def test_result_without_usage(self):
+        line = '{"type": "result", "subtype": "success", "session_id": "s1"}'
+        event = parse_line(line)
+        assert event is not None
+        assert event.input_tokens is None
+        assert event.output_tokens is None
+        assert event.cache_read_tokens is None
+
+    def test_result_with_empty_usage(self):
+        line = '{"type": "result", "subtype": "success", "session_id": "s1", "usage": {}}'
+        event = parse_line(line)
+        assert event is not None
+        assert event.input_tokens is None

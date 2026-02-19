@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from claude_discord.discord_ui.embeds import thinking_embed
+from claude_discord.discord_ui.embeds import session_complete_embed, thinking_embed
 
 
 class TestThinkingEmbed:
@@ -44,3 +44,26 @@ class TestThinkingEmbed:
         embed = thinking_embed("x")
         assert embed.title is not None
         assert "Thinking" in embed.title
+
+
+class TestSessionCompleteEmbed:
+    def test_shows_tokens_when_provided(self) -> None:
+        embed = session_complete_embed(input_tokens=1000, output_tokens=500)
+        assert embed.description is not None
+        assert "1.0k" in embed.description
+        assert "500" in embed.description
+
+    def test_shows_cache_hit_percentage(self) -> None:
+        embed = session_complete_embed(input_tokens=700, output_tokens=100, cache_read_tokens=300)
+        assert embed.description is not None
+        assert "%" in embed.description
+
+    def test_no_tokens_omits_token_line(self) -> None:
+        embed = session_complete_embed(cost_usd=0.01)
+        assert embed.description is not None
+        assert "📊" not in embed.description
+
+    def test_zero_cache_omits_cache_pct(self) -> None:
+        embed = session_complete_embed(input_tokens=500, output_tokens=100, cache_read_tokens=0)
+        assert embed.description is not None
+        assert "%" not in embed.description

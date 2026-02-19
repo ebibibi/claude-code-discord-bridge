@@ -109,6 +109,9 @@ class StreamEvent:
     is_complete: bool = False
     cost_usd: float | None = None
     duration_ms: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
     error: str | None = None
 
 

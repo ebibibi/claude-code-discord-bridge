@@ -233,7 +233,13 @@ async def run_claude_in_thread(
                             await thread.send(chunk)
 
                     await thread.send(
-                        embed=session_complete_embed(event.cost_usd, event.duration_ms)
+                        embed=session_complete_embed(
+                            event.cost_usd,
+                            event.duration_ms,
+                            event.input_tokens,
+                            event.output_tokens,
+                            event.cache_read_tokens,
+                        )
                     )
                     if status:
                         await status.set_done()
