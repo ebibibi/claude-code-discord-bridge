@@ -396,6 +396,114 @@ class TestScanCliSessions:
         assert s.working_dir == "/home"
 
 
+class TestScanSinceDays:
+    """Test the since_days filter on scan_cli_sessions."""
+
+    def test_since_days_excludes_old_files(self, tmp_path):
+        """Files older than since_days should be excluded."""
+        import os
+        import time
+
+        # Recent file (today)
+        recent_id = "aaa11111-1234-5678-9abc-def012345678"
+        _write_session_jsonl(
+            tmp_path / f"{recent_id}.jsonl",
+            recent_id,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": recent_id,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:00.000Z",
+                    "message": {"role": "user", "content": "Recent session"},
+                },
+            ],
+        )
+
+        # Old file (10 days ago)
+        old_id = "bbb22222-1234-5678-9abc-def012345678"
+        old_path = tmp_path / f"{old_id}.jsonl"
+        _write_session_jsonl(
+            old_path,
+            old_id,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": old_id,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-09T10:00:00.000Z",
+                    "message": {"role": "user", "content": "Old session"},
+                },
+            ],
+        )
+        # Set mtime to 10 days ago
+        old_time = time.time() - (10 * 86400)
+        os.utime(old_path, (old_time, old_time))
+
+        sessions = scan_cli_sessions(str(tmp_path), since_days=3)
+        assert len(sessions) == 1
+        assert sessions[0].session_id == recent_id
+
+    def test_since_days_zero_means_no_filter(self, tmp_path):
+        """since_days=0 should not filter any files."""
+        import os
+        import time
+
+        for i, sid in enumerate(
+            ["ccc33333-1234-5678-9abc-def012345678", "ddd44444-1234-5678-9abc-def012345678"]
+        ):
+            path = tmp_path / f"{sid}.jsonl"
+            _write_session_jsonl(
+                path,
+                sid,
+                [
+                    {
+                        "type": "user",
+                        "isMeta": False,
+                        "sessionId": sid,
+                        "cwd": "/home",
+                        "timestamp": f"2026-02-0{i + 1}T10:00:00.000Z",
+                        "message": {"role": "user", "content": f"Session {i}"},
+                    },
+                ],
+            )
+            if i == 1:
+                old_time = time.time() - (30 * 86400)
+                os.utime(path, (old_time, old_time))
+
+        sessions = scan_cli_sessions(str(tmp_path), since_days=0)
+        assert len(sessions) == 2
+
+    def test_since_days_default_is_no_filter(self, tmp_path):
+        """Default behavior (no since_days) should return all sessions."""
+        import os
+        import time
+
+        sid = "eee55555-1234-5678-9abc-def012345678"
+        path = tmp_path / f"{sid}.jsonl"
+        _write_session_jsonl(
+            path,
+            sid,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-01-01T10:00:00.000Z",
+                    "message": {"role": "user", "content": "Ancient session"},
+                },
+            ],
+        )
+        old_time = time.time() - (60 * 86400)
+        os.utime(path, (old_time, old_time))
+
+        sessions = scan_cli_sessions(str(tmp_path))
+        assert len(sessions) == 1
+
+
 class TestExtractRecentMessages:
     """Test extracting recent conversation messages from a session file."""
 
