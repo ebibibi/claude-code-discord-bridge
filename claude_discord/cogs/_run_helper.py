@@ -11,7 +11,6 @@ import contextlib
 import logging
 import re
 import time
-from typing import TYPE_CHECKING
 
 import discord
 
@@ -31,9 +30,6 @@ from ..discord_ui.embeds import (
     tool_use_embed,
 )
 from ..discord_ui.status import StatusManager
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

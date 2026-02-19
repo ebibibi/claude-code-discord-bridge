@@ -7,7 +7,6 @@ Used by the REST API extension for push notifications to Discord.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 import aiosqlite
 
@@ -31,23 +30,6 @@ CREATE TABLE IF NOT EXISTS scheduled_notifications (
 CREATE INDEX IF NOT EXISTS idx_notif_status_scheduled
     ON scheduled_notifications(status, scheduled_at);
 """
-
-
-@dataclass
-class NotificationRecord:
-    """A scheduled notification record."""
-
-    id: int
-    message: str
-    title: str | None
-    color: int
-    scheduled_at: str
-    source: str
-    channel_id: int | None
-    status: str
-    sent_at: str | None
-    error_message: str | None
-    created_at: str
 
 
 class NotificationRepository:

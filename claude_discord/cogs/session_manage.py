@@ -48,9 +48,6 @@ _STYLE_CHOICES = [
     app_commands.Choice(name="Message threads (visible in channel)", value=THREAD_STYLE_MESSAGE),
 ]
 
-SETTING_SYNC_SINCE_DAYS = "sync_since_days"
-_DEFAULT_SINCE_DAYS = 3
-
 SETTING_SYNC_SINCE_HOURS = "sync_since_hours"
 _DEFAULT_SINCE_HOURS = 24
 SETTING_SYNC_MIN_RESULTS = "sync_min_results"
@@ -80,15 +77,6 @@ class SessionManageCog(commands.Cog):
         if style in _VALID_THREAD_STYLES:
             return style
         return THREAD_STYLE_CHANNEL
-
-    async def _get_since_days(self) -> int:
-        """Get the configured since_days filter, defaulting to 3."""
-        if self.settings_repo is None:
-            return _DEFAULT_SINCE_DAYS
-        raw = await self.settings_repo.get(SETTING_SYNC_SINCE_DAYS)
-        if raw is not None and raw.isdigit():
-            return int(raw)
-        return _DEFAULT_SINCE_DAYS
 
     async def _get_since_hours(self) -> int:
         """Get the configured since_hours filter, defaulting to 24."""
