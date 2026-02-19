@@ -1,18 +1,18 @@
 name: Notify EbiBot Upgrade
 
+# Use 'push' instead of 'pull_request: closed' because auto-approve.yml
+# merges with GITHUB_TOKEN, and GITHUB_TOKEN-triggered events don't
+# propagate to other workflows (GitHub security measure).
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [main]
 
 jobs:
   trigger-upgrade:
-    # Only run when a PR is actually merged (not just closed), and skip docs-sync PRs.
-    # Note: github.event.pull_request.title is used only in the if: expression,
-    # which is evaluated by GitHub Actions — not bash. No injection risk here.
-    if: |
-      github.event.pull_request.merged == true &&
-      !contains(github.event.pull_request.title, '[docs-sync]')
+    # Skip docs-sync commits (matched by commit message convention).
+    # Note: head_commit.message is only in the if: expression (evaluated by
+    # GitHub Actions engine, not bash) — no command injection risk.
+    if: "!contains(github.event.head_commit.message, '[docs-sync]')"
     runs-on: ubuntu-latest
     steps:
       - name: Trigger EbiBot auto-upgrade via Discord webhook
