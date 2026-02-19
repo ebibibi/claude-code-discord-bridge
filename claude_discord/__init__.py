@@ -13,6 +13,7 @@ from .claude.runner import ClaudeRunner
 from .claude.types import MessageType, StreamEvent, ToolCategory, ToolUseEvent
 from .cogs.auto_upgrade import AutoUpgradeCog, UpgradeConfig
 from .cogs.claude_chat import ClaudeChatCog
+from .cogs.session_manage import SessionManageCog
 from .cogs.skill_command import SkillCommandCog
 from .cogs.webhook_trigger import WebhookTrigger, WebhookTriggerCog
 from .database.notification_repo import NotificationRepository
@@ -26,13 +27,18 @@ from .discord_ui.embeds import (
 )
 from .discord_ui.status import StatusManager
 from .protocols import DrainAware
+from .session_sync import CliSession, scan_cli_sessions
 
 __all__ = [
     # Core
     "ClaudeRunner",
     "ClaudeChatCog",
+    "SessionManageCog",
     "SkillCommandCog",
     "SessionRepository",
+    # Session Sync
+    "CliSession",
+    "scan_cli_sessions",
     # Webhook & Automation
     "WebhookTriggerCog",
     "WebhookTrigger",

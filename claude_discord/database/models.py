@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 import aiosqlite
@@ -14,17 +15,34 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT NOT NULL,
     working_dir TEXT,
     model TEXT,
+    origin TEXT NOT NULL DEFAULT 'discord',
+    summary TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     last_used_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_last_used ON sessions(last_used_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id);
 """
+
+# Migrations for existing databases that lack new columns.
+_MIGRATIONS = [
+    "ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'discord'",
+    "ALTER TABLE sessions ADD COLUMN summary TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)",
+]
 
 
 async def init_db(db_path: str) -> None:
-    """Initialize the database with the schema."""
+    """Initialize the database with the schema.
+
+    For fresh databases the full SCHEMA is applied. For existing databases
+    the migration statements add any missing columns idempotently.
+    """
     async with aiosqlite.connect(db_path) as db:
         await db.executescript(SCHEMA)
+        for stmt in _MIGRATIONS:
+            with contextlib.suppress(Exception):
+                await db.execute(stmt)
         await db.commit()
     logger.info("Database initialized at %s", db_path)
