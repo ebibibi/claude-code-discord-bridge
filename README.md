@@ -53,7 +53,6 @@ GitHub PR (auto-merge)  ←  git push  ←  Claude Code  ←──┘
 - **Attachment support** — Text-type file attachments are automatically appended to the prompt (up to 5 files, 50 KB each)
 - **Timeout notifications** — Dedicated embed with elapsed seconds and actionable guidance when a session times out
 - **Interactive questions** — When Claude calls `AskUserQuestion`, the bot renders Discord Buttons or a Select Menu and resumes the session with your answer
-- **Cross-thread relay** — `/relay target:#thread message:"..."` lets one Claude session delegate to another, enabling multi-agent coordination patterns
 - **Session status dashboard** — A live pinned embed in the main channel shows which threads are processing vs. waiting for input; owner is @-mentioned when Claude needs a reply
 
 ### CI/CD Automation
@@ -362,7 +361,6 @@ claude_discord/
   cogs/
     claude_chat.py         # Interactive chat (thread creation, message handling)
     skill_command.py       # /skill slash command with autocomplete
-    thread_relay.py        # /relay slash command for cross-thread Claude messaging
     webhook_trigger.py     # Webhook → Claude Code task execution (CI/CD)
     auto_upgrade.py        # Webhook → package upgrade + restart
     _run_helper.py         # Shared Claude CLI execution logic
@@ -376,7 +374,7 @@ claude_discord/
     notification_repo.py   # Scheduled notification CRUD
   discord_ui/
     status.py              # Emoji reaction status manager (debounced)
-    chunker.py             # Fence-aware message splitting
+    chunker.py             # Fence- and table-aware message splitting
     embeds.py              # Discord embed builders
     ask_view.py            # Discord Buttons/Select Menus for AskUserQuestion
     thread_dashboard.py    # Live pinned embed showing session states per thread
@@ -399,7 +397,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-400+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade, REST API, AskUserQuestion UI, thread relay, and thread status dashboard.
+400+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade, REST API, AskUserQuestion UI, and thread status dashboard.
 
 ## How This Project Was Built
 
