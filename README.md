@@ -279,6 +279,22 @@ class MyCog(commands.Cog):
 
 You can still pass an explicit `drain_check` callable to override auto-discovery.
 
+### Restart Approval
+
+For self-update scenarios (e.g. updating the bot from within its own Discord session), enable `restart_approval` to prevent automatic restarts:
+
+```python
+config = UpgradeConfig(
+    package_name="claude-code-discord-bridge",
+    trigger_prefix="🔄 bot-upgrade",
+    working_dir="/home/user/my-bot",
+    restart_command=["sudo", "systemctl", "restart", "my-bot.service"],
+    restart_approval=True,
+)
+```
+
+With `restart_approval=True`, after upgrading the package the bot posts a message asking for approval. React with ✅ to trigger the restart. The bot sends periodic reminders until approved.
+
 ## REST API
 
 Optional REST API for pushing notifications to Discord from external tools. Requires aiohttp:

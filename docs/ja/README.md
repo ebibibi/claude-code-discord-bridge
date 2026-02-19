@@ -265,6 +265,22 @@ class MyCog(commands.Cog):
 
 明示的な `drain_check` コーラブルを渡すことで、自動検出を上書きすることもできます。
 
+### 再起動承認
+
+自己更新シナリオ（Bot 自身の Discord セッションから更新する場合など）では、`restart_approval` を有効にして自動再起動を防止できます:
+
+```python
+config = UpgradeConfig(
+    package_name="claude-code-discord-bridge",
+    trigger_prefix="🔄 bot-upgrade",
+    working_dir="/home/user/my-bot",
+    restart_command=["sudo", "systemctl", "restart", "my-bot.service"],
+    restart_approval=True,
+)
+```
+
+`restart_approval=True` にすると、パッケージ更新後に承認を求めるメッセージが投稿されます。✅ でリアクションすると再起動が実行されます。承認されるまで定期的にリマインダーが送信されます。
+
 ## REST API
 
 外部ツールから Discord へのプッシュ通知のためのオプション REST API。aiohttp が必要:

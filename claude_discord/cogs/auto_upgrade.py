@@ -49,6 +49,9 @@ class UpgradeConfig:
         allowed_webhook_ids: Optional set of allowed webhook IDs.
         channel_ids: Optional set of channel IDs to listen in.
         step_timeout: Timeout in seconds for each subprocess step.
+        restart_approval: If True, wait for a user to react with ✅ before
+            restarting. Useful when the bot is updated from within its own
+            Discord sessions (self-update pattern). Default: False.
     """
 
     package_name: str
@@ -60,6 +63,7 @@ class UpgradeConfig:
     allowed_webhook_ids: set[int] | None = None
     channel_ids: set[int] | None = None
     step_timeout: int = _STEP_TIMEOUT
+    restart_approval: bool = False
 
 
 class AutoUpgradeCog(commands.Cog):
@@ -156,18 +160,10 @@ class AutoUpgradeCog(commands.Cog):
 
             # Step 3: Optional restart
             if self.config.restart_command:
+                if self.config.restart_approval:
+                    await self._wait_for_approval(trigger_message, thread)
                 await self._drain(thread)
-                await thread.send("🔄 Restarting...")
-                await trigger_message.add_reaction("✅")
-                await asyncio.sleep(1)
-                # Fire-and-forget — this may kill our own process.
-                # Uses create_subprocess_exec (not shell=True) — all args are from
-                # UpgradeConfig, not user input. Safe by construction.
-                await asyncio.create_subprocess_exec(
-                    *self.config.restart_command,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
+                await self._restart(trigger_message, thread)
             else:
                 await trigger_message.add_reaction("✅")
                 await thread.send("✅ Upgrade complete (no restart configured).")
@@ -216,6 +212,60 @@ class AutoUpgradeCog(commands.Cog):
                 return
 
         await thread.send(f"⚠️ Drain timeout ({self._drain_timeout}s elapsed) — restarting anyway.")
+
+    async def _wait_for_approval(
+        self,
+        trigger_message: discord.Message,
+        thread: discord.Thread,
+    ) -> None:
+        """Wait for a user to approve the restart by reacting with ✅.
+
+        Posts a notification with a ✅ reaction. When any non-bot user adds
+        the same reaction, approval is granted. Sends periodic reminders
+        every ``_drain_timeout`` seconds while waiting.
+        """
+        approval_msg = await thread.send(
+            "📦 Update installed. React ✅ on this message to restart."
+        )
+        await approval_msg.add_reaction("✅")
+
+        while True:
+            try:
+                event = await self.bot.wait_for(
+                    "raw_reaction_add",
+                    check=lambda e: (
+                        e.message_id == approval_msg.id
+                        and str(e.emoji) == "✅"
+                        and e.user_id != self.bot.user.id
+                    ),
+                    timeout=float(self._drain_timeout),
+                )
+                logger.info("Restart approved by user %s", event.user_id)
+                await thread.send("👍 Restart approved!")
+                return
+            except TimeoutError:
+                await thread.send(
+                    "⏳ Still waiting for restart approval... React ✅ above when ready."
+                )
+
+    async def _restart(
+        self,
+        trigger_message: discord.Message,
+        thread: discord.Thread,
+    ) -> None:
+        """Execute the restart command (fire-and-forget).
+
+        Uses create_subprocess_exec (not shell=True) — all args are from
+        UpgradeConfig, not user input. Safe by construction.
+        """
+        await thread.send("🔄 Restarting...")
+        await trigger_message.add_reaction("✅")
+        await asyncio.sleep(1)
+        await asyncio.create_subprocess_exec(
+            *self.config.restart_command,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
 
     async def _run_step(
         self,

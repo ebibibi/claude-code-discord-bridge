@@ -487,6 +487,156 @@ class TestAutoDrainDiscovery:
         assert cog._auto_drain_check() is True
 
 
+class TestRestartApproval:
+    """Test restart_approval mode."""
+
+    def _make_cog_with_approval(
+        self,
+        bot: MagicMock,
+        restart_approval: bool = True,
+    ) -> AutoUpgradeCog:
+        config = UpgradeConfig(
+            package_name="pkg",
+            restart_command=["sudo", "systemctl", "restart", "bot.service"],
+            working_dir="/tmp",
+            restart_approval=restart_approval,
+        )
+        return AutoUpgradeCog(bot=bot, config=config, drain_poll_interval=5)
+
+    @pytest.mark.asyncio
+    async def test_approval_mode_waits_for_reaction(
+        self,
+        bot: MagicMock,
+    ) -> None:
+        """When restart_approval=True, should post approval message and wait."""
+        cog = self._make_cog_with_approval(bot)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+        approval_msg = MagicMock()
+        approval_msg.id = 99999
+        approval_msg.add_reaction = AsyncMock()
+        thread.send.return_value = approval_msg
+
+        # Simulate immediate approval reaction
+        reaction_event = MagicMock()
+        reaction_event.message_id = 99999
+        reaction_event.emoji = "✅"
+        reaction_event.user_id = 42  # Not the bot
+        bot.user = MagicMock()
+        bot.user.id = 1  # Bot ID
+        bot.wait_for = AsyncMock(return_value=reaction_event)
+
+        await cog._wait_for_approval(MagicMock(), thread)
+
+        # Should have posted the approval message
+        thread.send.assert_any_call("📦 Update installed. React ✅ on this message to restart.")
+        # Should have added the reaction
+        approval_msg.add_reaction.assert_called_once_with("✅")
+        # Should have posted the approval confirmation
+        thread.send.assert_any_call("👍 Restart approved!")
+
+    @pytest.mark.asyncio
+    async def test_approval_mode_sends_reminder_on_timeout(
+        self,
+        bot: MagicMock,
+    ) -> None:
+        """When no reaction within timeout, sends reminder then waits again."""
+        cog = self._make_cog_with_approval(bot)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+        approval_msg = MagicMock()
+        approval_msg.id = 99999
+        approval_msg.add_reaction = AsyncMock()
+        thread.send.return_value = approval_msg
+
+        bot.user = MagicMock()
+        bot.user.id = 1
+
+        call_count = 0
+
+        async def wait_for_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise TimeoutError
+            # Second call: return approval
+            event = MagicMock()
+            event.message_id = 99999
+            event.emoji = "✅"
+            event.user_id = 42
+            return event
+
+        bot.wait_for = AsyncMock(side_effect=wait_for_side_effect)
+
+        await cog._wait_for_approval(MagicMock(), thread)
+
+        # Should have sent a reminder
+        reminder_calls = [str(c) for c in thread.send.call_args_list if "Still waiting" in str(c)]
+        assert len(reminder_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_approval_mode_skips_wait(
+        self,
+        bot: MagicMock,
+    ) -> None:
+        """When restart_approval=False, restart happens without waiting."""
+        config = UpgradeConfig(
+            package_name="pkg",
+            restart_command=["sudo", "systemctl", "restart", "bot.service"],
+            working_dir="/tmp",
+            restart_approval=False,
+        )
+        cog = AutoUpgradeCog(bot=bot, config=config)
+        msg = _make_message(content="🔄 upgrade")
+
+        proc_ok = _make_process()
+        exec_calls: list[tuple] = []
+
+        async def mock_subprocess(*args, **kwargs):
+            exec_calls.append(args)
+            return proc_ok
+
+        with (
+            patch(_PATCH_EXEC, side_effect=mock_subprocess),
+            patch(_PATCH_WAIT, new_callable=AsyncMock, return_value=(b"ok", b"")),
+            patch(_PATCH_SLEEP, new_callable=AsyncMock),
+        ):
+            await cog.on_message(msg)
+
+        # Should have restarted without calling wait_for
+        bot.wait_for = AsyncMock()
+        bot.wait_for.assert_not_called()
+        # restart command should have fired
+        assert len(exec_calls) == 3
+
+    def test_restart_approval_config_default_false(self) -> None:
+        """restart_approval should default to False."""
+        config = UpgradeConfig(package_name="pkg")
+        assert config.restart_approval is False
+
+    @pytest.mark.asyncio
+    async def test_restart_method_fires_command(
+        self,
+        bot: MagicMock,
+    ) -> None:
+        """_restart should send message, react, and fire command."""
+        cog = self._make_cog_with_approval(bot)
+        trigger_msg = MagicMock()
+        trigger_msg.add_reaction = AsyncMock()
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        with (
+            patch(_PATCH_EXEC, new_callable=AsyncMock) as mock_sub,
+            patch(_PATCH_SLEEP, new_callable=AsyncMock),
+        ):
+            await cog._restart(trigger_msg, thread)
+
+        thread.send.assert_called_with("🔄 Restarting...")
+        trigger_msg.add_reaction.assert_called_with("✅")
+        mock_sub.assert_called_once()
+
+
 class TestActiveSessionCount:
     """Tests for ClaudeChatCog.active_session_count property."""
 
