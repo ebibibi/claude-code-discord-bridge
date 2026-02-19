@@ -77,6 +77,12 @@ class WebhookTriggerCog(commands.Cog):
         self.allowed_webhook_ids = allowed_webhook_ids
         self.channel_ids = channel_ids
         self._locks: dict[str, asyncio.Lock] = {prefix: asyncio.Lock() for prefix in triggers}
+        self._active_count: int = 0
+
+    @property
+    def active_count(self) -> int:
+        """Number of currently running webhook-triggered Claude sessions."""
+        return self._active_count
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -137,16 +143,20 @@ class WebhookTriggerCog(commands.Cog):
         if trigger.allowed_tools is not None:
             runner.allowed_tools = trigger.allowed_tools
 
-        session_id = await run_claude_in_thread(
-            thread=thread,
-            runner=runner,
-            repo=None,
-            prompt=trigger.prompt,
-            session_id=None,
-            status=None,
-        )
+        self._active_count += 1
+        try:
+            session_id = await run_claude_in_thread(
+                thread=thread,
+                runner=runner,
+                repo=None,
+                prompt=trigger.prompt,
+                session_id=None,
+                status=None,
+            )
 
-        if session_id:
-            await message.add_reaction("✅")
-        else:
-            await message.add_reaction("❌")
+            if session_id:
+                await message.add_reaction("✅")
+            else:
+                await message.add_reaction("❌")
+        finally:
+            self._active_count -= 1

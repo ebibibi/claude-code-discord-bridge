@@ -84,7 +84,8 @@ class TestWebhookFiltering:
 
     @pytest.mark.asyncio
     async def test_ignores_non_webhook_messages(
-        self, cog: WebhookTriggerCog,
+        self,
+        cog: WebhookTriggerCog,
     ) -> None:
         """Messages without webhook_id should be ignored."""
         msg = _make_message(webhook_id=None)
@@ -152,7 +153,8 @@ class TestWebhookFiltering:
 
     @pytest.mark.asyncio
     async def test_ignores_unmatched_prefix(
-        self, cog: WebhookTriggerCog,
+        self,
+        cog: WebhookTriggerCog,
     ) -> None:
         """Unmatched prefixes are ignored."""
         msg = _make_message(content="Hello world")
@@ -166,7 +168,9 @@ class TestTriggerExecution:
 
     @pytest.mark.asyncio
     async def test_matching_prefix_triggers_run(
-        self, cog: WebhookTriggerCog, runner: MagicMock,
+        self,
+        cog: WebhookTriggerCog,
+        runner: MagicMock,
     ) -> None:
         """A matching prefix should trigger Claude Code execution."""
         msg = _make_message(content="🔄 docs-sync")
@@ -182,7 +186,8 @@ class TestTriggerExecution:
 
     @pytest.mark.asyncio
     async def test_creates_thread(
-        self, cog: WebhookTriggerCog,
+        self,
+        cog: WebhookTriggerCog,
     ) -> None:
         """Trigger execution should create a Discord thread."""
         msg = _make_message(content="🔄 docs-sync")
@@ -193,7 +198,8 @@ class TestTriggerExecution:
 
     @pytest.mark.asyncio
     async def test_success_reaction(
-        self, cog: WebhookTriggerCog,
+        self,
+        cog: WebhookTriggerCog,
     ) -> None:
         """Successful execution should add check reaction."""
         msg = _make_message(content="🔄 docs-sync")
@@ -204,7 +210,8 @@ class TestTriggerExecution:
 
     @pytest.mark.asyncio
     async def test_failure_reaction(
-        self, cog: WebhookTriggerCog,
+        self,
+        cog: WebhookTriggerCog,
     ) -> None:
         """Failed execution should add error reaction."""
         msg = _make_message(content="🔄 docs-sync")
@@ -215,7 +222,9 @@ class TestTriggerExecution:
 
     @pytest.mark.asyncio
     async def test_runner_clone_overrides(
-        self, cog: WebhookTriggerCog, runner: MagicMock,
+        self,
+        cog: WebhookTriggerCog,
+        runner: MagicMock,
     ) -> None:
         """Trigger config should override cloned runner settings."""
         msg = _make_message(content="🔄 docs-sync")
@@ -231,7 +240,8 @@ class TestTriggerExecution:
 
     @pytest.mark.asyncio
     async def test_prefix_starts_with_matching(
-        self, cog: WebhookTriggerCog,
+        self,
+        cog: WebhookTriggerCog,
     ) -> None:
         """Prefix matching works with startswith."""
         msg = _make_message(content="🔄 docs-sync extra info")
@@ -246,7 +256,8 @@ class TestConcurrency:
 
     @pytest.mark.asyncio
     async def test_concurrent_same_prefix_blocked(
-        self, cog: WebhookTriggerCog,
+        self,
+        cog: WebhookTriggerCog,
     ) -> None:
         """Concurrent runs of same prefix should be blocked."""
         lock = cog._locks["🔄 docs-sync"]
@@ -264,7 +275,8 @@ class TestConcurrency:
 
     @pytest.mark.asyncio
     async def test_different_prefix_not_blocked(
-        self, cog: WebhookTriggerCog,
+        self,
+        cog: WebhookTriggerCog,
     ) -> None:
         """Different prefixes should have independent locks."""
         lock = cog._locks["🔄 docs-sync"]
@@ -273,13 +285,60 @@ class TestConcurrency:
         await lock.acquire()
         try:
             with patch(
-                _PATCH_RUN, new_callable=AsyncMock,
+                _PATCH_RUN,
+                new_callable=AsyncMock,
             ) as mock_run:
                 mock_run.return_value = "session-abc"
                 await cog.on_message(msg)
                 mock_run.assert_called_once()
         finally:
             lock.release()
+
+
+class TestActiveCount:
+    """Test active_count tracking for drain coordination."""
+
+    def test_initial_count_is_zero(self, cog: WebhookTriggerCog) -> None:
+        assert cog.active_count == 0
+
+    @pytest.mark.asyncio
+    async def test_count_increments_during_execution(
+        self,
+        cog: WebhookTriggerCog,
+    ) -> None:
+        """active_count should be 1 during execution and 0 after."""
+        msg = _make_message(content="🔄 docs-sync")
+        observed_counts: list[int] = []
+
+        async def fake_run(**kwargs: object) -> str:
+            observed_counts.append(cog.active_count)
+            return "session-abc"
+
+        with patch(_PATCH_RUN, side_effect=fake_run):
+            await cog.on_message(msg)
+
+        assert observed_counts == [1]
+        assert cog.active_count == 0
+
+    @pytest.mark.asyncio
+    async def test_count_decrements_on_failure(
+        self,
+        cog: WebhookTriggerCog,
+    ) -> None:
+        """active_count should decrement even if run_claude_in_thread raises."""
+        msg = _make_message(content="🔄 docs-sync")
+
+        with (
+            patch(_PATCH_RUN, side_effect=RuntimeError("boom")),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await cog._execute_trigger(
+                msg,
+                "🔄 docs-sync",
+                cog.triggers["🔄 docs-sync"],
+            )
+
+        assert cog.active_count == 0
 
 
 class TestWebhookTriggerDataclass:
