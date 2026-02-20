@@ -45,6 +45,7 @@ GitHub PR (auto-merge)  ←  git push  ←  Claude Code  ←──┘
 - **Real-time status** — Emoji reactions show what Claude is doing (🧠 thinking, 🛠️ reading files, 💻 editing, 🌐 web search)
 - **Streaming text** — Intermediate assistant text appears as Claude works, not just at the end
 - **Tool result display** — Tool use results shown as embeds in real-time
+- **Live tool timing** — In-progress tool embeds tick up elapsed time every 10s for long-running commands (e.g. authentication flows, builds), so you always know Claude is still working
 - **Extended thinking** — Claude's reasoning appears as spoiler-tagged embeds (click to reveal)
 - **Session persistence** — Continue conversations across messages via `--resume`
 - **Skill execution** — Run Claude Code skills via `/skill` with autocomplete, optional arguments, and in-thread resume
