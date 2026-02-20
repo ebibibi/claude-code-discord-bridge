@@ -17,7 +17,9 @@ import discord
 from ..claude.runner import ClaudeRunner
 from ..claude.types import AskQuestion, MessageType, SessionState, ToolUseEvent
 from ..concurrency import SessionRegistry
+from ..database.ask_repo import PendingAskRepository
 from ..database.repository import SessionRepository
+from ..discord_ui.ask_bus import ask_bus as _ask_bus
 from ..discord_ui.ask_view import AskView
 from ..discord_ui.chunker import chunk_message
 from ..discord_ui.embeds import (
@@ -166,6 +168,7 @@ async def run_claude_in_thread(
     session_id: str | None,
     status: StatusManager | None = None,
     registry: SessionRegistry | None = None,
+    ask_repo: PendingAskRepository | None = None,
 ) -> str | None:
     """Execute Claude Code CLI and stream results to a Discord thread.
 
@@ -332,7 +335,9 @@ async def run_claude_in_thread(
     # After the stream ends, handle pending AskUserQuestion by showing Discord
     # UI and resuming the session with the user's answer.
     if pending_ask and state.session_id:
-        answer_prompt = await _collect_ask_answers(thread, pending_ask)
+        answer_prompt = await _collect_ask_answers(
+            thread, pending_ask, state.session_id, ask_repo=ask_repo
+        )
         if answer_prompt:
             logger.info(
                 "Resuming session %s after AskUserQuestion answer",
@@ -346,6 +351,7 @@ async def run_claude_in_thread(
                 session_id=state.session_id,
                 status=status,
                 registry=registry,
+                ask_repo=ask_repo,
             )
 
     return state.session_id
@@ -361,24 +367,86 @@ def _truncate_result(content: str) -> str:
 _TIMEOUT_PATTERN = re.compile(r"Timed out after (\d+) seconds")
 
 
+# How long to wait for the user to answer (seconds).  24 hours lets users
+# step away for the day and come back without "Interaction Failed" errors.
+ASK_ANSWER_TIMEOUT = 86_400  # 24 h
+
+
 async def _collect_ask_answers(
     thread: discord.Thread,
     questions: list[AskQuestion],
+    session_id: str,
+    ask_repo: PendingAskRepository | None = None,
 ) -> str | None:
     """Show Discord UI for each question and return the formatted answer string.
 
-    Processes questions sequentially (one at a time). Returns a human-readable
-    string that will be injected as a new human turn when resuming the session,
-    or None if the user did not respond to any question.
+    Processes questions sequentially (one at a time).  For each question:
+    1. Saves it to the DB (for bot-restart recovery).
+    2. Registers a Queue with ask_bus and shows the AskView.
+    3. Awaits the answer for up to 24 hours via asyncio.wait_for.
+    4. Cleans up the DB entry once answered or timed out.
+
+    Returns a human-readable string to inject as the next human turn, or None
+    if no question received an answer.
     """
+    # Serialise questions once for DB storage.
+    questions_dicts = [
+        {
+            "question": q.question,
+            "header": q.header,
+            "multi_select": q.multi_select,
+            "options": [{"label": o.label, "description": o.description} for o in q.options],
+        }
+        for q in questions
+    ]
+
     parts: list[str] = []
-    for q in questions:
-        view = AskView(q)
-        await thread.send(embed=ask_embed(q.question, q.header), view=view)
-        selected = await view.wait_for_answer()
-        if not selected:
-            logger.info("AskUserQuestion timed out or got no answer for: %r", q.question)
+    for q_idx, q in enumerate(questions):
+        # Persist so on_ready can re-register the view after a bot restart.
+        if ask_repo is not None:
+            await ask_repo.save(
+                thread_id=thread.id,
+                session_id=session_id,
+                questions=questions_dicts,
+                question_idx=q_idx,
+            )
+
+        # Register a waiter in the bus before showing the view so there is no
+        # race between the user clicking and the queue being registered.
+        answer_queue = _ask_bus.register(thread.id)
+
+        view = AskView(q, thread_id=thread.id, q_idx=q_idx, ask_repo=ask_repo)
+        msg = await thread.send(embed=ask_embed(q.question, q.header), view=view)
+
+        try:
+            selected = await asyncio.wait_for(answer_queue.get(), timeout=ASK_ANSWER_TIMEOUT)
+        except TimeoutError:
+            _ask_bus.unregister(thread.id)
+            if ask_repo is not None:
+                await ask_repo.delete(thread.id)
+            # Remove buttons from the timed-out message so they stay inert.
+            with contextlib.suppress(discord.HTTPException):
+                await msg.edit(
+                    content="-# ⏰ Question timed out — please send a new message to continue.",
+                    embed=None,
+                    view=None,
+                )
+            logger.info(
+                "AskUserQuestion timed out after %ds for thread %d: %r",
+                ASK_ANSWER_TIMEOUT,
+                thread.id,
+                q.question,
+            )
             continue
+        finally:
+            _ask_bus.unregister(thread.id)
+
+        if ask_repo is not None:
+            await ask_repo.delete(thread.id)
+
+        if not selected:
+            continue
+
         answer_text = ", ".join(selected)
         parts.append(f"**{q.question}**\nAnswer: {answer_text}")
 
