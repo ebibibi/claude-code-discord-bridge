@@ -15,7 +15,7 @@ import time
 import discord
 
 from ..claude.runner import ClaudeRunner
-from ..claude.types import AskQuestion, MessageType, SessionState
+from ..claude.types import AskQuestion, MessageType, SessionState, ToolUseEvent
 from ..concurrency import SessionRegistry
 from ..database.repository import SessionRepository
 from ..discord_ui.ask_view import AskView
@@ -43,6 +43,10 @@ STREAM_MAX_CHARS = 1900
 
 # Max characters for tool result display
 TOOL_RESULT_MAX_CHARS = 500
+
+# How often to update in-progress tool embeds with elapsed time (seconds).
+# Gives users visibility into long-running commands (builds, auth flows, etc.).
+TOOL_TIMER_INTERVAL = 10
 
 
 class StreamingMessageManager:
@@ -117,6 +121,41 @@ class StreamingMessageManager:
             self._last_edit_time = time.monotonic()
         except discord.HTTPException:
             logger.debug("Failed to edit streaming message", exc_info=True)
+
+
+class LiveToolTimer:
+    """Periodically edits a Discord embed to show elapsed execution time.
+
+    Started when a tool_use event is received; cancelled when the corresponding
+    tool_result arrives. For commands that finish quickly (<TOOL_TIMER_INTERVAL s)
+    the timer fires zero times, so there is no overhead for fast tools.
+
+    This provides basic visibility into long-running operations — the user can
+    see "🔧 Running: az login... (10s)" ticking up rather than a frozen embed.
+    Note: intermediate stdout from Bash is not exposed by the stream-json
+    protocol, so only elapsed time (not actual output) is available here.
+    """
+
+    def __init__(self, msg: discord.Message, tool: ToolUseEvent) -> None:
+        self._msg = msg
+        self._tool = tool
+        self._start = time.monotonic()
+
+    def start(self) -> asyncio.Task[None]:
+        """Schedule the timer loop and return the Task so callers can cancel it."""
+        return asyncio.create_task(self._loop())
+
+    async def _loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(TOOL_TIMER_INTERVAL)
+                elapsed = int(time.monotonic() - self._start)
+                with contextlib.suppress(discord.HTTPException):
+                    await self._msg.edit(
+                        embed=tool_use_embed(self._tool, in_progress=True, elapsed_s=elapsed)
+                    )
+        except asyncio.CancelledError:
+            pass
 
 
 async def run_claude_in_thread(
@@ -210,6 +249,8 @@ async def run_claude_in_thread(
                     embed = tool_use_embed(event.tool_use, in_progress=True)
                     msg = await thread.send(embed=embed)
                     state.active_tools[event.tool_use.tool_id] = msg
+                    timer = LiveToolTimer(msg, event.tool_use)
+                    state.active_timers[event.tool_use.tool_id] = timer.start()
 
                 # AskUserQuestion detected — interrupt the runner and await UI
                 if event.ask_questions:
@@ -217,10 +258,14 @@ async def run_claude_in_thread(
                     await runner.interrupt()
                     continue
 
-            # User message (tool result) — update tool embed with result
+            # User message (tool result) — cancel timer and update tool embed
             if event.message_type == MessageType.USER and event.tool_result_id:
                 if status:
                     await status.set_thinking()
+                # Stop the elapsed-time timer for this tool (if any)
+                timer_task = state.active_timers.pop(event.tool_result_id, None)
+                if timer_task and not timer_task.done():
+                    timer_task.cancel()
                 # Update the tool embed with result content
                 tool_msg = state.active_tools.get(event.tool_result_id)
                 if tool_msg and event.tool_result_content:
@@ -274,6 +319,13 @@ async def run_claude_in_thread(
             await status.set_error()
         return state.session_id
     finally:
+        # Cancel any timers that were not already stopped by tool_result events.
+        # This guards against early exits (errors, interrupts) leaving ghost tasks.
+        for task in state.active_timers.values():
+            if not task.done():
+                task.cancel()
+        state.active_timers.clear()
+
         if registry is not None:
             registry.unregister(thread.id)
 

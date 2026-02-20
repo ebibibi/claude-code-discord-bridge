@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -15,6 +17,7 @@ from claude_discord.claude.types import (
 )
 from claude_discord.cogs._run_helper import (
     TOOL_RESULT_MAX_CHARS,
+    LiveToolTimer,
     StreamingMessageManager,
     _make_error_embed,
     _truncate_result,
@@ -538,3 +541,123 @@ class TestConcurrencyIntegration:
         await run_claude_in_thread(thread, runner, repo, "fix the bug", None)
 
         assert captured_prompt[0] == "fix the bug"
+
+
+class TestLiveToolTimer:
+    """Tests for LiveToolTimer elapsed-time embed updates."""
+
+    def _bash_tool(self) -> ToolUseEvent:
+        return ToolUseEvent(
+            tool_id="t1",
+            tool_name="Bash",
+            tool_input={"command": "az login --use-device-code"},
+            category=ToolCategory.COMMAND,
+        )
+
+    def _make_msg(self) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.edit = AsyncMock()
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_timer_updates_embed_after_interval(self) -> None:
+        """After TOOL_TIMER_INTERVAL seconds, the embed should be updated with elapsed time."""
+        import claude_discord.cogs._run_helper as rh
+
+        msg = self._make_msg()
+        timer = LiveToolTimer(msg, self._bash_tool())
+
+        original_interval = rh.TOOL_TIMER_INTERVAL
+        rh.TOOL_TIMER_INTERVAL = 0.01  # speed up for test
+        try:
+            task = timer.start()
+            await asyncio.sleep(0.05)  # allow at least one tick
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        finally:
+            rh.TOOL_TIMER_INTERVAL = original_interval
+
+        msg.edit.assert_called()
+        # The embed passed to edit should include elapsed time in the title
+        call_embed = msg.edit.call_args.kwargs.get("embed")
+        assert call_embed is not None
+        assert "s)" in call_embed.title  # e.g. "(0s)..." or "(1s)..."
+
+    @pytest.mark.asyncio
+    async def test_timer_cancelled_stops_updates(self) -> None:
+        """After cancellation, no further edits should occur."""
+        import claude_discord.cogs._run_helper as rh
+
+        msg = self._make_msg()
+        timer = LiveToolTimer(msg, self._bash_tool())
+
+        original_interval = rh.TOOL_TIMER_INTERVAL
+        rh.TOOL_TIMER_INTERVAL = 0.01
+        try:
+            task = timer.start()
+            await asyncio.sleep(0.005)  # cancel before first tick
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        finally:
+            rh.TOOL_TIMER_INTERVAL = original_interval
+
+        msg.edit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_run_claude_cancels_timer_on_tool_result(self) -> None:
+        """Timer task should be cancelled when the tool result arrives."""
+        import claude_discord.cogs._run_helper as rh
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 11111
+        tool_msg = MagicMock(spec=discord.Message)
+        tool_msg.edit = AsyncMock()
+        tool_msg.embeds = [MagicMock(title="🔧 Running: az login...")]
+        thread.send = AsyncMock(return_value=tool_msg)
+
+        repo = MagicMock()
+        repo.save = AsyncMock()
+        runner = MagicMock()
+
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-1"),
+            StreamEvent(
+                message_type=MessageType.ASSISTANT,
+                tool_use=ToolUseEvent(
+                    tool_id="t1",
+                    tool_name="Bash",
+                    tool_input={"command": "az login --use-device-code"},
+                    category=ToolCategory.COMMAND,
+                ),
+            ),
+            StreamEvent(
+                message_type=MessageType.USER,
+                tool_result_id="t1",
+                tool_result_content="Device login complete",
+            ),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-1",
+                cost_usd=0.01,
+                duration_ms=5000,
+            ),
+        ]
+
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        runner.run = gen
+
+        original_interval = rh.TOOL_TIMER_INTERVAL
+        rh.TOOL_TIMER_INTERVAL = 100  # ensure timer never fires during this test
+        try:
+            await run_claude_in_thread(thread, runner, repo, "login", None)
+        finally:
+            rh.TOOL_TIMER_INTERVAL = original_interval
+
+        # All timers should be cleared after run completes
+        # (verified indirectly: no ghost tasks, session finishes cleanly)

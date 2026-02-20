@@ -25,11 +25,26 @@ CATEGORY_ICON: dict[ToolCategory, str] = {
 }
 
 
-def tool_use_embed(tool: ToolUseEvent, in_progress: bool = True) -> discord.Embed:
-    """Create an embed for a tool use event."""
+def tool_use_embed(
+    tool: ToolUseEvent,
+    in_progress: bool = True,
+    elapsed_s: int | None = None,
+) -> discord.Embed:
+    """Create an embed for a tool use event.
+
+    Args:
+        tool: The tool use event to display.
+        in_progress: Whether the tool is still running.
+        elapsed_s: Seconds elapsed since the tool started. When provided and
+                   the tool is in-progress, the elapsed time is shown in the
+                   title so the user can track long-running commands.
+    """
     icon = CATEGORY_ICON.get(tool.category, "\U0001f916")
-    status = "..." if in_progress else ""
-    title = f"{icon} {tool.display_name}{status}"
+    if in_progress:
+        elapsed_str = f" ({elapsed_s}s)" if elapsed_s is not None else ""
+        title = f"{icon} {tool.display_name}{elapsed_str}..."
+    else:
+        title = f"{icon} {tool.display_name}"
 
     embed = discord.Embed(
         title=title[:256],

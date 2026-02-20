@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from claude_discord.claude.types import ToolCategory, ToolUseEvent
 from claude_discord.discord_ui.embeds import (
     redacted_thinking_embed,
     session_complete_embed,
     thinking_embed,
+    tool_use_embed,
 )
 
 
@@ -71,6 +73,52 @@ class TestSessionCompleteEmbed:
         embed = session_complete_embed(input_tokens=500, output_tokens=100, cache_read_tokens=0)
         assert embed.description is not None
         assert "%" not in embed.description
+
+
+class TestToolUseEmbed:
+    """Tests for tool_use_embed elapsed time display."""
+
+    def _bash_tool(self) -> ToolUseEvent:
+        return ToolUseEvent(
+            tool_id="t1",
+            tool_name="Bash",
+            tool_input={"command": "az login --use-device-code"},
+            category=ToolCategory.COMMAND,
+        )
+
+    def test_in_progress_without_elapsed(self) -> None:
+        embed = tool_use_embed(self._bash_tool(), in_progress=True)
+        assert embed.title is not None
+        assert embed.title.endswith("...")
+        assert "(" not in embed.title  # no elapsed time shown
+
+    def test_in_progress_with_elapsed(self) -> None:
+        embed = tool_use_embed(self._bash_tool(), in_progress=True, elapsed_s=42)
+        assert embed.title is not None
+        assert "(42s)" in embed.title
+        assert embed.title.endswith("...")
+
+    def test_completed_no_ellipsis(self) -> None:
+        embed = tool_use_embed(self._bash_tool(), in_progress=False)
+        assert embed.title is not None
+        assert not embed.title.endswith("...")
+
+    def test_completed_ignores_elapsed(self) -> None:
+        """elapsed_s has no effect when in_progress=False."""
+        embed = tool_use_embed(self._bash_tool(), in_progress=False, elapsed_s=99)
+        assert embed.title is not None
+        assert "99s" not in embed.title
+
+    def test_title_within_discord_limit(self) -> None:
+        """Even with a very long command name, title should be capped at 256 chars."""
+        long_tool = ToolUseEvent(
+            tool_id="t2",
+            tool_name="Bash",
+            tool_input={"command": "x" * 200},
+            category=ToolCategory.COMMAND,
+        )
+        embed = tool_use_embed(long_tool, in_progress=True, elapsed_s=120)
+        assert len(embed.title) <= 256
 
 
 class TestRedactedThinkingEmbed:

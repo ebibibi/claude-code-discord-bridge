@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -141,11 +142,15 @@ class StreamEvent:
 class SessionState:
     """Tracks the state of a Claude Code session during a single run.
 
-    active_tools maps tool_use_id -> Discord Message, enabling Phase 2
-    live embed updates when tool results arrive.
+    active_tools maps tool_use_id -> Discord Message, enabling live embed
+    updates when tool results arrive.
+
+    active_timers maps tool_use_id -> asyncio.Task that periodically edits
+    the in-progress embed to show elapsed execution time. Cancelled on result.
     """
 
     session_id: str | None = None
     thread_id: int = 0
     accumulated_text: str = ""
     active_tools: dict[str, discord.Message] = field(default_factory=dict)
+    active_timers: dict[str, asyncio.Task[None]] = field(default_factory=dict)
