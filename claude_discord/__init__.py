@@ -32,6 +32,7 @@ from .discord_ui.embeds import (
 from .discord_ui.status import StatusManager
 from .protocols import DrainAware
 from .session_sync import CliSession, SessionMessage, extract_recent_messages, scan_cli_sessions
+from .setup import BridgeComponents, setup_bridge
 
 __all__ = [
     # Core
@@ -66,6 +67,9 @@ __all__ = [
     "ToolUseEvent",
     # Parsing
     "parse_line",
+    # Setup
+    "setup_bridge",
+    "BridgeComponents",
     # UI
     "StatusManager",
     "chunk_message",
