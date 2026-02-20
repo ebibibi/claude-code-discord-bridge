@@ -34,6 +34,17 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 4. **Fence-aware chunking**: Never split Discord messages inside a code block.
 5. **Installable package**: `claude_discord` is a proper Python package. Consumers install via `uv add git+...` or `pip install git+...`, not by copying files.
 6. **Shared run helper**: `cogs/_run_helper.py` centralizes Claude CLI execution logic used by both ClaudeChatCog and SkillCommandCog.
+7. **REST API as the control plane**: Claude Code subprocesses communicate back to ccdb via REST API (`CCDB_API_URL` env var), not via stdout markers or special output formats. This makes the interface explicit, testable, and usable by external systems (GitHub Actions, etc.). See `ext/api_server.py`.
+8. **SQLite-backed dynamic scheduler**: Scheduled tasks are stored in `scheduled_tasks` DB table and executed by a single `discord.ext.tasks` master loop (every 30s). Tasks are registered at runtime via REST API — no code changes needed to add new tasks. `discord.ext.tasks` decorators are only used for the master loop, not per-task (they're static/compile-time constructs).
+9. **Claude handles "what", ccdb handles "when"**: For scheduled tasks, ccdb only manages the schedule. All domain logic (what to check, how to deduplicate, what to post) lives in the Claude prompt. No GitHub/AzureDevOps-specific code in ccdb itself.
+
+### Why REST API over stdout markers for Claude→ccdb communication
+
+Alternative considered: Claude embeds `<!-- ccdb:schedule {...} -->` in response text; ccdb parses stdout.
+
+**Rejected because**: fragile text parsing, untestable, can't be triggered externally, implicit side effect from output.
+
+**REST API chosen because**: clean interface, independently testable, usable by external systems, already an established ccdb pattern (`ext/api_server.py`). Claude uses its Bash tool to `curl $CCDB_API_URL/api/tasks`.
 
 ## Development
 
@@ -139,6 +150,7 @@ claude_discord/          # Installable Python package
     skill_command.py     # /skill slash command with autocomplete
     webhook_trigger.py   # Webhook → Claude Code task execution (CI/CD)
     auto_upgrade.py      # Webhook → package upgrade + restart
+    scheduler.py         # Scheduled task executor (SQLite-backed, master loop)
     _run_helper.py       # Shared Claude CLI execution logic (DRY)
   claude/
     runner.py            # Claude CLI subprocess manager
@@ -148,12 +160,14 @@ claude_discord/          # Installable Python package
     models.py            # SQLite schema
     repository.py        # Session CRUD operations
     notification_repo.py # Scheduled notification CRUD (REST API)
+    task_repo.py         # Scheduled task CRUD (SchedulerCog)
   discord_ui/
     status.py            # Emoji reaction status manager (debounced)
     chunker.py           # Fence-aware message splitting
     embeds.py            # Discord embed builders
   ext/
     api_server.py        # REST API server (optional, requires aiohttp)
+                         # Includes /api/tasks endpoints for SchedulerCog
   utils/
     logger.py            # Logging setup
 tests/                   # pytest test suite

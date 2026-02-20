@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from discord.ext.commands import Bot
 
     from ..database.notification_repo import NotificationRepository
+    from ..database.task_repo import TaskRepository
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class ApiServer:
         host: str = "127.0.0.1",
         port: int = 8080,
         api_secret: str | None = None,
+        task_repo: TaskRepository | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -61,6 +63,7 @@ class ApiServer:
         self.host = host
         self.port = port
         self.api_secret = api_secret
+        self.task_repo = task_repo
 
         self.app = web.Application()
         if self.api_secret:
@@ -74,6 +77,11 @@ class ApiServer:
         self.app.router.add_post("/api/schedule", self.schedule)
         self.app.router.add_get("/api/scheduled", self.list_scheduled)
         self.app.router.add_delete("/api/scheduled/{id}", self.cancel_scheduled)
+        # Scheduled task routes (requires task_repo)
+        self.app.router.add_post("/api/tasks", self.create_task)
+        self.app.router.add_get("/api/tasks", self.list_tasks)
+        self.app.router.add_delete("/api/tasks/{id}", self.delete_task)
+        self.app.router.add_patch("/api/tasks/{id}", self.patch_task)
 
     @web.middleware
     async def _auth_middleware(
@@ -202,6 +210,114 @@ class ApiServer:
             {"error": "Not found or already processed"},
             status=404,
         )
+
+    # ------------------------------------------------------------------
+    # Scheduled task endpoints (/api/tasks)
+    # ------------------------------------------------------------------
+
+    def _require_task_repo(self) -> web.Response | None:
+        """Return a 503 response if task_repo is not configured."""
+        if self.task_repo is None:
+            return web.json_response(
+                {"error": "SchedulerCog not configured (task_repo is None)"},
+                status=503,
+            )
+        return None
+
+    async def create_task(self, request: web.Request) -> web.Response:
+        """POST /api/tasks — register a scheduled Claude Code task.
+
+        Body (JSON):
+            name: Unique task identifier.
+            prompt: Claude Code prompt to run on schedule.
+            interval_seconds: How often to run (seconds).
+            channel_id: Discord channel ID for thread creation.
+            working_dir: (optional) Working directory for Claude.
+            run_immediately: (optional, default true) Fire on next loop tick.
+        """
+        if err := self._require_task_repo():
+            return err
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        for field in ("name", "prompt", "interval_seconds", "channel_id"):
+            if not data.get(field):
+                return web.json_response({"error": f"{field} is required"}, status=400)
+
+        try:
+            task_id = await self.task_repo.create(  # type: ignore[union-attr]
+                name=str(data["name"]),
+                prompt=str(data["prompt"]),
+                interval_seconds=int(data["interval_seconds"]),
+                channel_id=int(data["channel_id"]),
+                working_dir=data.get("working_dir"),
+                run_immediately=bool(data.get("run_immediately", True)),
+            )
+        except Exception as exc:
+            # Most likely a UNIQUE constraint violation on name
+            logger.warning("Failed to create task: %s", exc)
+            return web.json_response({"error": "Task name already exists"}, status=409)
+
+        logger.info("Task registered via API: id=%d, name=%s", task_id, data["name"])
+        return web.json_response({"status": "created", "id": task_id}, status=201)
+
+    async def list_tasks(self, request: web.Request) -> web.Response:
+        """GET /api/tasks — list all registered tasks."""
+        if err := self._require_task_repo():
+            return err
+        tasks = await self.task_repo.get_all()  # type: ignore[union-attr]
+        return web.json_response({"tasks": tasks})
+
+    async def delete_task(self, request: web.Request) -> web.Response:
+        """DELETE /api/tasks/{id} — remove a scheduled task."""
+        if err := self._require_task_repo():
+            return err
+        try:
+            task_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid ID"}, status=400)
+
+        deleted = await self.task_repo.delete(task_id)  # type: ignore[union-attr]
+        if deleted:
+            return web.json_response({"status": "deleted"})
+        return web.json_response({"error": "Task not found"}, status=404)
+
+    async def patch_task(self, request: web.Request) -> web.Response:
+        """PATCH /api/tasks/{id} — update a task (enable/disable, prompt, interval)."""
+        if err := self._require_task_repo():
+            return err
+        try:
+            task_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid ID"}, status=400)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        updated = False
+        if "enabled" in data:
+            result = await self.task_repo.set_enabled(task_id, enabled=bool(data["enabled"]))  # type: ignore[union-attr]
+            updated = updated or result
+
+        patch_kwargs: dict[str, object] = {}
+        if "prompt" in data:
+            patch_kwargs["prompt"] = str(data["prompt"])
+        if "interval_seconds" in data:
+            patch_kwargs["interval_seconds"] = int(data["interval_seconds"])
+        if "working_dir" in data:
+            patch_kwargs["working_dir"] = str(data["working_dir"])
+
+        if patch_kwargs:
+            result = await self.task_repo.update(task_id, **patch_kwargs)  # type: ignore[union-attr]
+            updated = updated or result
+
+        if updated:
+            return web.json_response({"status": "updated"})
+        return web.json_response({"error": "Task not found"}, status=404)
 
     @staticmethod
     def _build_embed(

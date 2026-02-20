@@ -111,6 +111,26 @@ class TestBuildEnv:
         env = runner._build_env()
         assert "PATH" in env
 
+    def test_injects_ccdb_api_url_when_api_port_set(self) -> None:
+        runner = ClaudeRunner(api_port=8099)
+        env = runner._build_env()
+        assert env["CCDB_API_URL"] == "http://127.0.0.1:8099"
+
+    def test_no_ccdb_api_url_when_api_port_not_set(self) -> None:
+        runner = ClaudeRunner()
+        env = runner._build_env()
+        assert "CCDB_API_URL" not in env
+
+    def test_injects_ccdb_api_secret_when_set(self) -> None:
+        runner = ClaudeRunner(api_port=8099, api_secret="my-secret")
+        env = runner._build_env()
+        assert env["CCDB_API_SECRET"] == "my-secret"
+
+    def test_no_ccdb_api_secret_when_not_set(self) -> None:
+        runner = ClaudeRunner(api_port=8099)
+        env = runner._build_env()
+        assert "CCDB_API_SECRET" not in env
+
 
 class TestClone:
     """Tests for clone method."""

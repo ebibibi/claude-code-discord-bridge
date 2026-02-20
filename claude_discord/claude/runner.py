@@ -35,6 +35,8 @@ class ClaudeRunner:
         allowed_tools: list[str] | None = None,
         dangerously_skip_permissions: bool = False,
         include_partial_messages: bool = True,
+        api_port: int | None = None,
+        api_secret: str | None = None,
     ) -> None:
         self.command = command
         self.model = model
@@ -44,6 +46,8 @@ class ClaudeRunner:
         self.allowed_tools = allowed_tools
         self.dangerously_skip_permissions = dangerously_skip_permissions
         self.include_partial_messages = include_partial_messages
+        self.api_port = api_port
+        self.api_secret = api_secret
         self._process: asyncio.subprocess.Process | None = None
 
     async def run(
@@ -103,6 +107,8 @@ class ClaudeRunner:
             allowed_tools=self.allowed_tools,
             dangerously_skip_permissions=self.dangerously_skip_permissions,
             include_partial_messages=self.include_partial_messages,
+            api_port=self.api_port,
+            api_secret=self.api_secret,
         )
 
     async def interrupt(self) -> None:
@@ -182,8 +188,15 @@ class ClaudeRunner:
 
         Strips CLAUDECODE (nesting detection) and known secret variables
         so that the CLI process cannot read them via Bash tool.
+
+        Injects CCDB_API_URL (and optionally CCDB_API_SECRET) so Claude Code
+        can register scheduled tasks via ``curl $CCDB_API_URL/api/tasks``.
         """
         env = {k: v for k, v in os.environ.items() if k not in self._STRIPPED_ENV_KEYS}
+        if self.api_port is not None:
+            env["CCDB_API_URL"] = f"http://127.0.0.1:{self.api_port}"
+        if self.api_secret is not None:
+            env["CCDB_API_SECRET"] = self.api_secret
         return env
 
     async def _read_stream(self) -> AsyncGenerator[StreamEvent, None]:
