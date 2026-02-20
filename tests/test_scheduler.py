@@ -104,6 +104,49 @@ class TestSchedulerCogMasterLoop:
         assert task is not None
         assert task["next_run_at"] >= before + 300 - 1
 
+    async def test_run_task_creates_starter_message_then_thread(
+        self, cog: SchedulerCog, repo: TaskRepository
+    ) -> None:
+        """_run_task should post a starter message then attach a thread to it.
+
+        This ensures the thread appears in the channel list (left sidebar)
+        rather than only in the Threads panel (🧵).
+        """
+        import discord
+
+        task_id = await repo.create(
+            name="my-task", prompt="do stuff", interval_seconds=60, channel_id=99
+        )
+        task = await repo.get(task_id)
+
+        # Build mock channel → starter message → thread chain
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_starter_msg = AsyncMock()
+        mock_starter_msg.create_thread = AsyncMock(return_value=mock_thread)
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock(return_value=mock_starter_msg)
+
+        cog.bot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_in_thread", new_callable=AsyncMock
+        ) as mock_run:
+            await cog._run_task(task)
+
+        # Starter message posted to channel
+        mock_channel.send.assert_called_once()
+        sent_content = mock_channel.send.call_args[0][0]
+        assert "my-task" in sent_content
+
+        # Thread created from the starter message (not from the channel)
+        mock_starter_msg.create_thread.assert_called_once()
+        thread_name = mock_starter_msg.create_thread.call_args[1]["name"]
+        assert "my-task" in thread_name
+
+        # Claude ran inside the thread
+        mock_run.assert_called_once()
+        assert mock_run.call_args[1]["thread"] is mock_thread
+
     async def test_disabled_task_not_run(self, cog: SchedulerCog, repo: TaskRepository) -> None:
         """Disabled tasks should not fire even if overdue."""
         task_id = await repo.create(name="dis", prompt="p", interval_seconds=60, channel_id=1)

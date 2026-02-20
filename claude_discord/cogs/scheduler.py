@@ -110,9 +110,13 @@ class SchedulerCog(commands.Cog):
                 logger.warning("SchedulerCog: channel %d is not a TextChannel", task["channel_id"])
                 return
 
-            thread = await channel.create_thread(
+            # Post a starter message first so the thread appears in the channel
+            # timeline and shows up in the left sidebar under the parent channel.
+            # channel.create_thread() without a message only appears in the
+            # Threads panel (🧵), not in the channel list.
+            starter = await channel.send(f"🔄 **[Scheduled]** `{task['name']}`")
+            thread = await starter.create_thread(
                 name=f"[Scheduled] {task['name']}",
-                type=discord.ChannelType.public_thread,
             )
 
             cloned = self.runner.clone()
