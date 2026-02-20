@@ -20,6 +20,7 @@ from discord.ext import commands
 
 from ..claude.runner import ClaudeRunner
 from ..concurrency import SessionRegistry
+from ..coordination.service import CoordinationService
 from ..database.repository import SessionRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
@@ -55,6 +56,7 @@ class ClaudeChatCog(commands.Cog):
         allowed_user_ids: set[int] | None = None,
         registry: SessionRegistry | None = None,
         dashboard: ThreadStatusDashboard | None = None,
+        coordination: CoordinationService | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -66,6 +68,8 @@ class ClaudeChatCog(commands.Cog):
         self._active_runners: dict[int, ClaudeRunner] = {}
         # Dashboard may be None until bot is ready; resolved lazily in _get_dashboard()
         self._dashboard = dashboard
+        # Coordination service resolved lazily from bot if not supplied directly
+        self._coordination = coordination
 
     @property
     def active_session_count(self) -> int:
@@ -82,6 +86,12 @@ class ClaudeChatCog(commands.Cog):
         if self._dashboard is None:
             self._dashboard = getattr(self.bot, "thread_dashboard", None)
         return self._dashboard
+
+    def _get_coordination(self) -> CoordinationService | None:
+        """Return the coordination service, resolving it from the bot if not yet set."""
+        if self._coordination is None:
+            self._coordination = getattr(self.bot, "coordination", None)
+        return self._coordination
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -234,6 +244,7 @@ class ClaudeChatCog(commands.Cog):
 
         async with self._semaphore:
             dashboard = self._get_dashboard()
+            coordination = self._get_coordination()
             description = prompt[:100].replace("\n", " ")
 
             # Mark thread as PROCESSING when Claude starts
@@ -244,6 +255,10 @@ class ClaudeChatCog(commands.Cog):
                     description,
                     thread=thread,
                 )
+
+            # Announce session start to coordination channel
+            if coordination is not None:
+                await coordination.post_session_start(thread, description)
 
             status = StatusManager(user_message)
             await status.set_thinking()
@@ -267,6 +282,10 @@ class ClaudeChatCog(commands.Cog):
             finally:
                 await stop_view.disable(stop_msg)
                 self._active_runners.pop(thread.id, None)
+
+                # Announce session end to coordination channel
+                if coordination is not None:
+                    await coordination.post_session_end(thread)
 
                 # Transition to WAITING_INPUT so owner knows a reply is needed
                 if dashboard is not None:
