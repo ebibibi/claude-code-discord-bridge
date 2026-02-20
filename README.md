@@ -57,10 +57,16 @@ GitHub PR (auto-merge)  ←  git push  ←  Claude Code  ←──┘
 - **Session status dashboard** — A live pinned embed in the main channel shows which threads are processing vs. waiting for input; owner is @-mentioned when Claude needs a reply
 - **Multi-session coordination** — When `COORDINATION_CHANNEL_ID` is set, each session broadcasts start/end events to a shared channel so concurrent sessions stay aware of each other
 
+### Scheduled Tasks (SchedulerCog)
+- **Periodic Claude Code tasks** — Register tasks via Discord chat or REST API; they run on a configurable interval
+- **SQLite-backed** — Tasks persist across restarts; managed via `/api/tasks` endpoints
+- **Zero-code scheduling** — Claude Code can self-register new tasks via Bash tool during a session; no bot restarts or code changes required
+- **Single master loop** — One 30-second `discord.ext.tasks` loop dispatches all tasks, keeping overhead low
+
 ### CI/CD Automation
 - **Webhook triggers** — Trigger Claude Code tasks from GitHub Actions or any CI/CD system
 - **Auto-upgrade** — Automatically update the bot when upstream packages are released
-- **REST API** — Push notifications to Discord from external tools (optional, requires aiohttp)
+- **REST API** — Push notifications and manage scheduled tasks from external tools (optional, requires aiohttp)
 
 ### Security
 - **No shell injection** — `asyncio.create_subprocess_exec` only, never `shell=True`
@@ -115,17 +121,36 @@ uv add git+https://github.com/ebibibi/claude-code-discord-bridge.git
 ```
 
 ```python
+from claude_discord import ClaudeRunner, setup_bridge
+
+runner = ClaudeRunner(command="claude", model="sonnet")
+
+# One call registers all Cogs — new features are included automatically
+await setup_bridge(
+    bot,
+    runner,
+    session_db_path="data/sessions.db",
+    claude_channel_id=YOUR_CHANNEL_ID,
+    allowed_user_ids={YOUR_USER_ID},
+)
+```
+
+`setup_bridge()` automatically wires `ClaudeChatCog`, `SkillCommandCog`, `SessionManageCog`, and `SchedulerCog`. When new Cogs are added to ccdb, they appear automatically — no consumer code changes needed.
+
+<details>
+<summary>Manual wiring (advanced)</summary>
+
+```python
 from claude_discord import ClaudeChatCog, ClaudeRunner, SessionRepository
 from claude_discord.database.models import init_db
 
-# Initialize
 await init_db("data/sessions.db")
 repo = SessionRepository("data/sessions.db")
 runner = ClaudeRunner(command="claude", model="sonnet")
 
-# Add to your existing bot
 await bot.add_cog(ClaudeChatCog(bot, repo, runner))
 ```
+</details>
 
 Update to the latest version:
 
@@ -249,6 +274,37 @@ jobs:
           gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash
 ```
 
+## Scheduled Tasks
+
+`SchedulerCog` runs periodic Claude Code tasks stored in SQLite. Tasks are registered at runtime via the REST API — no code changes or bot restarts needed.
+
+### Register a task (via REST API)
+
+```bash
+curl -X POST http://localhost:8080/api/tasks \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
+  -d '{
+    "name": "daily-standup",
+    "prompt": "Check open GitHub issues and post a brief summary to Discord.",
+    "interval_seconds": 86400,
+    "channel_id": 123456789
+  }'
+```
+
+### Register a task (Claude self-registers during a session)
+
+Claude Code can register its own recurring tasks using the Bash tool — no human wiring needed:
+
+```
+# Inside a Claude Code session, Claude runs:
+curl -X POST $CCDB_API_URL/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"name": "health-check", "prompt": "Run the test suite and report results.", "interval_seconds": 3600}'
+```
+
+`CCDB_API_URL` is automatically injected into Claude's subprocess environment when `api_port` is set on the `ClaudeRunner`.
+
 ## Auto-Upgrade
 
 Automatically upgrade the bot when an upstream package is released.
@@ -329,6 +385,8 @@ await api.start()
 
 ### Endpoints
 
+**Notifications**
+
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
@@ -336,6 +394,15 @@ await api.start()
 | POST | `/api/schedule` | Schedule notification for later |
 | GET | `/api/scheduled` | List pending notifications |
 | DELETE | `/api/scheduled/{id}` | Cancel a scheduled notification |
+
+**Scheduled Tasks** (requires `SchedulerCog`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/tasks` | Register a new periodic Claude Code task |
+| GET | `/api/tasks` | List all registered tasks |
+| DELETE | `/api/tasks/{id}` | Remove a scheduled task |
+| PATCH | `/api/tasks/{id}` | Update task (enable/disable, prompt, interval) |
 
 ### Examples
 
@@ -361,11 +428,13 @@ curl -X POST http://localhost:8080/api/schedule \
 claude_discord/
   main.py                  # Standalone entry point
   bot.py                   # Discord Bot class
+  setup.py                 # setup_bridge() — one-call factory for all Cogs
   cogs/
     claude_chat.py         # Interactive chat (thread creation, message handling)
     skill_command.py       # /skill slash command with autocomplete
     webhook_trigger.py     # Webhook → Claude Code task execution (CI/CD)
     auto_upgrade.py        # Webhook → package upgrade + restart
+    scheduler.py           # Periodic Claude Code tasks (SQLite-backed, 30s master loop)
     _run_helper.py         # Shared Claude CLI execution logic
   claude/
     runner.py              # Claude CLI subprocess manager
@@ -374,7 +443,9 @@ claude_discord/
   database/
     models.py              # SQLite schema
     repository.py          # Session CRUD operations
+    ask_repo.py            # Pending AskUserQuestion CRUD (restart recovery)
     notification_repo.py   # Scheduled notification CRUD
+    task_repo.py           # Scheduled task CRUD (SchedulerCog)
   coordination/
     service.py             # CoordinationService — posts session lifecycle events to a shared channel
   discord_ui/
@@ -382,9 +453,11 @@ claude_discord/
     chunker.py             # Fence- and table-aware message splitting
     embeds.py              # Discord embed builders
     ask_view.py            # Discord Buttons/Select Menus for AskUserQuestion
+    ask_bus.py             # Bus routing for persistent AskView buttons (survives restarts)
     thread_dashboard.py    # Live pinned embed showing session states per thread
   ext/
     api_server.py          # REST API server (optional, requires aiohttp)
+                           # Includes /api/tasks endpoints for SchedulerCog
   utils/
     logger.py              # Logging setup
 ```
@@ -402,7 +475,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-400+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade, REST API, AskUserQuestion UI, and thread status dashboard.
+473 tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade, REST API, AskUserQuestion UI, thread status dashboard, SchedulerCog, and task repository.
 
 ## How This Project Was Built
 

@@ -59,10 +59,16 @@ GitHub PR (自動マージ)  ←  git push  ←  Claude Code  ←──┘
 - **セッションステータスダッシュボード** — メインチャンネルにピン留めされた live embed で各スレッドの状態（処理中 / 入力待ち）を一覧表示。Claude が返答を待っているときはオーナーを @mention で通知
 - **マルチセッション協調** — `COORDINATION_CHANNEL_ID` を設定すると、各セッションの開始・終了イベントを共有チャンネルにブロードキャストし、並行セッション同士がお互いの状況を把握できる
 
+### スケジュールタスク（SchedulerCog）
+- **定期 Claude Code タスク** — Discord チャットまたは REST API 経由でタスクを登録し、設定した間隔で実行
+- **SQLite バックエンド** — タスクは再起動後も保持され、`/api/tasks` エンドポイントで管理
+- **ゼロコードスケジューリング** — セッション中に Claude Code が Bash ツールで新しいタスクを自己登録できる。Bot の再起動やコード変更は不要
+- **シングルマスターループ** — 30 秒ごとに 1 つの `discord.ext.tasks` ループがすべてのタスクをディスパッチし、オーバーヘッドを最小化
+
 ### CI/CD 自動化
 - **Webhook トリガー** — GitHub Actions や任意の CI/CD システムから Claude Code タスクをトリガー
 - **自動アップグレード** — 上流パッケージがリリースされたときに Bot を自動更新
-- **REST API** — 外部ツールから Discord へのプッシュ通知（オプション、aiohttp が必要）
+- **REST API** — 外部ツールから Discord へのプッシュ通知やスケジュールタスク管理（オプション、aiohttp が必要）
 
 ### セキュリティ
 - **シェルインジェクション防止** — `asyncio.create_subprocess_exec` のみ使用、`shell=True` は一切なし
@@ -101,17 +107,36 @@ uv add git+https://github.com/ebibibi/claude-code-discord-bridge.git
 ```
 
 ```python
+from claude_discord import ClaudeRunner, setup_bridge
+
+runner = ClaudeRunner(command="claude", model="sonnet")
+
+# 1回の呼び出しですべての Cog を登録 — 新機能は自動的に含まれる
+await setup_bridge(
+    bot,
+    runner,
+    session_db_path="data/sessions.db",
+    claude_channel_id=YOUR_CHANNEL_ID,
+    allowed_user_ids={YOUR_USER_ID},
+)
+```
+
+`setup_bridge()` は `ClaudeChatCog`、`SkillCommandCog`、`SessionManageCog`、`SchedulerCog` を自動的に接続します。ccdb に新しい Cog が追加されると自動的に含まれます — コンシューマー側のコード変更は不要です。
+
+<details>
+<summary>手動ワイヤリング（上級者向け）</summary>
+
+```python
 from claude_discord import ClaudeChatCog, ClaudeRunner, SessionRepository
 from claude_discord.database.models import init_db
 
-# 初期化
 await init_db("data/sessions.db")
 repo = SessionRepository("data/sessions.db")
 runner = ClaudeRunner(command="claude", model="sonnet")
 
-# 既存の Bot に追加
 await bot.add_cog(ClaudeChatCog(bot, repo, runner))
 ```
+</details>
 
 最新版へのアップデート:
 
@@ -235,6 +260,37 @@ jobs:
           gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash
 ```
 
+## スケジュールタスク
+
+`SchedulerCog` は SQLite に保存された定期 Claude Code タスクを実行します。タスクは REST API 経由でランタイムに登録できます — コード変更も Bot 再起動も不要。
+
+### REST API 経由でタスクを登録
+
+```bash
+curl -X POST http://localhost:8080/api/tasks \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
+  -d '{
+    "name": "daily-standup",
+    "prompt": "オープンな GitHub issue を確認して簡潔な要約を Discord に投稿。",
+    "interval_seconds": 86400,
+    "channel_id": 123456789
+  }'
+```
+
+### Claude がセッション中に自己登録
+
+Claude Code はセッション中に Bash ツールを使って自分の定期タスクを登録できます — 人間によるワイヤリング不要:
+
+```
+# Claude Code セッション内で Claude が実行:
+curl -X POST $CCDB_API_URL/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"name": "health-check", "prompt": "テストスイートを実行して結果を報告。", "interval_seconds": 3600}'
+```
+
+`ClaudeRunner` に `api_port` が設定されている場合、`CCDB_API_URL` は Claude の subprocess 環境に自動注入されます。
+
 ## 自動アップグレード
 
 上流パッケージがリリースされたときに Bot を自動アップグレード。
@@ -315,6 +371,8 @@ await api.start()
 
 ### エンドポイント
 
+**通知**
+
 | メソッド | パス | 説明 |
 |----------|------|------|
 | GET | `/api/health` | ヘルスチェック |
@@ -322,6 +380,15 @@ await api.start()
 | POST | `/api/schedule` | 後で通知をスケジュール |
 | GET | `/api/scheduled` | 保留中の通知一覧 |
 | DELETE | `/api/scheduled/{id}` | スケジュール済み通知のキャンセル |
+
+**スケジュールタスク**（SchedulerCog が必要）
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| POST | `/api/tasks` | 新しい定期 Claude Code タスクを登録 |
+| GET | `/api/tasks` | 登録済みタスクの一覧 |
+| DELETE | `/api/tasks/{id}` | タスクの削除 |
+| PATCH | `/api/tasks/{id}` | タスクの更新（有効/無効、プロンプト、間隔） |
 
 ### 使用例
 
@@ -347,11 +414,13 @@ curl -X POST http://localhost:8080/api/schedule \
 claude_discord/
   main.py                  # スタンドアロンエントリーポイント
   bot.py                   # Discord Bot クラス
+  setup.py                 # setup_bridge() — すべての Cog を1回で登録するファクトリ
   cogs/
     claude_chat.py         # インタラクティブチャット（スレッド作成、メッセージ処理）
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
     webhook_trigger.py     # Webhook → Claude Code タスク実行（CI/CD）
     auto_upgrade.py        # Webhook → パッケージアップグレード + 再起動
+    scheduler.py           # 定期 Claude Code タスク（SQLite バックエンド、30 秒マスターループ）
     _run_helper.py         # 共有 Claude CLI 実行ロジック
   claude/
     runner.py              # Claude CLI subprocess マネージャー
@@ -360,7 +429,9 @@ claude_discord/
   database/
     models.py              # SQLite スキーマ
     repository.py          # セッション CRUD 操作
+    ask_repo.py            # AskUserQuestion 保留中データ CRUD（再起動復旧）
     notification_repo.py   # スケジュール通知 CRUD
+    task_repo.py           # スケジュールタスク CRUD（SchedulerCog）
   coordination/
     service.py             # CoordinationService — セッションライフサイクルイベントを共有チャンネルに投稿
   discord_ui/
@@ -368,9 +439,11 @@ claude_discord/
     chunker.py             # フェンス・テーブル対応メッセージ分割
     embeds.py              # Discord embed ビルダー
     ask_view.py            # AskUserQuestion 用 Discord ボタン / Select Menu
+    ask_bus.py             # 永続 AskView ボタンのバスルーティング（再起動後も存続）
     thread_dashboard.py    # スレッドごとのセッション状態を表示する live ピン留め embed
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）
+                           # SchedulerCog 用 /api/tasks エンドポイントを含む
   utils/
     logger.py              # ロギング設定
 ```
@@ -388,7 +461,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-400 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、webhook トリガー、自動アップグレード、REST API、AskUserQuestion UI、スレッドステータスダッシュボードをカバーしています。
+473 件のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、webhook トリガー、自動アップグレード、REST API、AskUserQuestion UI、スレッドステータスダッシュボード、SchedulerCog、タスクリポジトリをカバーしています。
 
 ## このプロジェクトの構築方法
 
