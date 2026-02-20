@@ -101,6 +101,26 @@ uv add git+https://github.com/ebibibi/claude-code-discord-bridge.git
 ```
 
 ```python
+from claude_discord import setup_bridge, ClaudeRunner
+
+runner = ClaudeRunner(command="claude", model="sonnet")
+
+# 1回の呼び出しで全 Cog を登録 — ClaudeChatCog、SkillCommandCog、SchedulerCog など。
+# パッケージ更新で新しい Cog が自動的に追加されます。
+components = await setup_bridge(
+    bot,
+    runner,
+    claude_channel_id=YOUR_CHANNEL_ID,
+    allowed_user_ids={YOUR_USER_ID},
+)
+```
+
+<details>
+<summary>手動配線（上級者向け）</summary>
+
+どの Cog を読み込むかを細かく制御したい場合:
+
+```python
 from claude_discord import ClaudeChatCog, ClaudeRunner, SessionRepository
 from claude_discord.database.models import init_db
 
@@ -112,6 +132,7 @@ runner = ClaudeRunner(command="claude", model="sonnet")
 # 既存の Bot に追加
 await bot.add_cog(ClaudeChatCog(bot, repo, runner))
 ```
+</details>
 
 最新版へのアップデート:
 
@@ -287,6 +308,45 @@ config = UpgradeConfig(
 
 `restart_approval=True` にすると、パッケージ更新後に承認を求めるメッセージが投稿されます。✅ でリアクションすると再起動が実行されます。承認されるまで定期的にリマインダーが送信されます。
 
+## スケジュールタスク
+
+`SchedulerCog` を使うと、Claude Code がコード変更や再起動なしでランタイムに定期タスクを登録できます。タスクは SQLite に保存され、30 秒ごとのマスターループで実行されます。
+
+**動作の仕組み:**
+1. チャットセッション中に Claude が Bash ツールで `curl $CCDB_API_URL/api/tasks` を呼び出してタスクを登録
+2. タスク（プロンプト + チャンネル + 実行間隔）が SQLite に保存される
+3. 30 秒ごとに `SchedulerCog` が期限切れタスクを確認し、新しい Discord スレッドで実行
+
+`setup_bridge()` はデフォルトで `SchedulerCog` を有効化します。無効にするには:
+
+```python
+components = await setup_bridge(bot, runner, enable_scheduler=False)
+```
+
+### スケジュールタスクエンドポイント
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| POST | `/api/tasks` | 定期 Claude Code タスクの登録 |
+| GET | `/api/tasks` | タスク一覧の取得 |
+| DELETE | `/api/tasks/{id}` | タスクの削除 |
+| PATCH | `/api/tasks/{id}` | タスクの更新（有効/無効、プロンプト、実行間隔） |
+
+```bash
+# 1日1回実行するタスクを登録（86400 秒ごと）
+curl -X POST http://localhost:8080/api/tasks \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
+  -d '{
+    "name": "daily-standup",
+    "prompt": "オープン PR を確認して朝のスタンドアップサマリーを投稿してください。",
+    "channel_id": 123456789,
+    "interval_seconds": 86400
+  }'
+```
+
+**設計原則:** ccdb はタスクの「いつ実行するか」だけを管理します。ドメインロジック（何を確認するか、重複排除方法、何を投稿するか）はすべて Claude のプロンプトに書きます。ccdb 自体にサービス固有のコードは不要です。
+
 ## REST API
 
 外部ツールから Discord へのプッシュ通知のためのオプション REST API。aiohttp が必要:
@@ -315,6 +375,7 @@ await api.start()
 
 ### エンドポイント
 
+#### 通知
 | メソッド | パス | 説明 |
 |----------|------|------|
 | GET | `/api/health` | ヘルスチェック |
@@ -322,6 +383,14 @@ await api.start()
 | POST | `/api/schedule` | 後で通知をスケジュール |
 | GET | `/api/scheduled` | 保留中の通知一覧 |
 | DELETE | `/api/scheduled/{id}` | スケジュール済み通知のキャンセル |
+
+#### スケジュールタスク（SchedulerCog）
+| メソッド | パス | 説明 |
+|----------|------|------|
+| POST | `/api/tasks` | 定期 Claude Code タスクの登録 |
+| GET | `/api/tasks` | タスク一覧の取得 |
+| DELETE | `/api/tasks/{id}` | タスクの削除 |
+| PATCH | `/api/tasks/{id}` | タスクの更新（有効/無効、プロンプト、実行間隔） |
 
 ### 使用例
 
@@ -347,9 +416,11 @@ curl -X POST http://localhost:8080/api/schedule \
 claude_discord/
   main.py                  # スタンドアロンエントリーポイント
   bot.py                   # Discord Bot クラス
+  setup.py                 # setup_bridge() — 1回の呼び出しで Cog を登録
   cogs/
     claude_chat.py         # インタラクティブチャット（スレッド作成、メッセージ処理）
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
+    scheduler.py           # 定期 Claude Code タスク実行（SQLite バックエンド）
     webhook_trigger.py     # Webhook → Claude Code タスク実行（CI/CD）
     auto_upgrade.py        # Webhook → パッケージアップグレード + 再起動
     _run_helper.py         # 共有 Claude CLI 実行ロジック
@@ -360,6 +431,7 @@ claude_discord/
   database/
     models.py              # SQLite スキーマ
     repository.py          # セッション CRUD 操作
+    task_repo.py           # スケジュールタスク CRUD（SchedulerCog）
     notification_repo.py   # スケジュール通知 CRUD
   coordination/
     service.py             # CoordinationService — セッションライフサイクルイベントを共有チャンネルに投稿
@@ -371,6 +443,7 @@ claude_discord/
     thread_dashboard.py    # スレッドごとのセッション状態を表示する live ピン留め embed
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）
+                           # SchedulerCog 用 /api/tasks エンドポイントを含む
   utils/
     logger.py              # ロギング設定
 ```
@@ -388,7 +461,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-400 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、webhook トリガー、自動アップグレード、REST API、AskUserQuestion UI、スレッドステータスダッシュボードをカバーしています。
+470 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、webhook トリガー、自動アップグレード、REST API、AskUserQuestion UI、スレッドステータスダッシュボード、スケジュールタスクをカバーしています。
 
 ## このプロジェクトの構築方法
 

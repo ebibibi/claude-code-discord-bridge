@@ -115,6 +115,26 @@ uv add git+https://github.com/ebibibi/claude-code-discord-bridge.git
 ```
 
 ```python
+from claude_discord import setup_bridge, ClaudeRunner
+
+runner = ClaudeRunner(command="claude", model="sonnet")
+
+# One call wires up all Cogs — ClaudeChatCog, SkillCommandCog, SchedulerCog, etc.
+# New Cogs added to ccdb are included automatically on package update.
+components = await setup_bridge(
+    bot,
+    runner,
+    claude_channel_id=YOUR_CHANNEL_ID,
+    allowed_user_ids={YOUR_USER_ID},
+)
+```
+
+<details>
+<summary>Manual wiring (advanced)</summary>
+
+If you need fine-grained control over which Cogs are loaded:
+
+```python
 from claude_discord import ClaudeChatCog, ClaudeRunner, SessionRepository
 from claude_discord.database.models import init_db
 
@@ -126,6 +146,7 @@ runner = ClaudeRunner(command="claude", model="sonnet")
 # Add to your existing bot
 await bot.add_cog(ClaudeChatCog(bot, repo, runner))
 ```
+</details>
 
 Update to the latest version:
 
@@ -301,6 +322,45 @@ config = UpgradeConfig(
 
 With `restart_approval=True`, after upgrading the package the bot posts a message asking for approval. React with ✅ to trigger the restart. The bot sends periodic reminders until approved.
 
+## Scheduled Tasks
+
+`SchedulerCog` lets Claude Code register recurring tasks at runtime — no code changes or restarts needed. Tasks are stored in SQLite and fired by a single 30-second master loop.
+
+**How it works:**
+1. During a chat session, Claude uses the Bash tool to `curl $CCDB_API_URL/api/tasks` and register a task
+2. The task (prompt + channel + interval) is stored in SQLite
+3. Every 30 seconds, `SchedulerCog` checks for due tasks and runs each in a new Discord thread
+
+`setup_bridge()` enables `SchedulerCog` by default. To disable it:
+
+```python
+components = await setup_bridge(bot, runner, enable_scheduler=False)
+```
+
+### Scheduled Task Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/tasks` | Register a new scheduled task |
+| GET | `/api/tasks` | List all tasks |
+| DELETE | `/api/tasks/{id}` | Remove a task |
+| PATCH | `/api/tasks/{id}` | Update task (enable/disable, prompt, interval) |
+
+```bash
+# Register a daily task (runs every 86400 seconds)
+curl -X POST http://localhost:8080/api/tasks \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
+  -d '{
+    "name": "daily-standup",
+    "prompt": "Check open PRs and post a morning standup summary.",
+    "channel_id": 123456789,
+    "interval_seconds": 86400
+  }'
+```
+
+**Design principle:** ccdb only manages *when* tasks run. All domain logic (what to check, how to deduplicate, what to post) lives in the Claude prompt. No service-specific code needed in ccdb itself.
+
 ## REST API
 
 Optional REST API for pushing notifications to Discord from external tools. Requires aiohttp:
@@ -329,6 +389,7 @@ await api.start()
 
 ### Endpoints
 
+#### Notifications
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/health` | Health check |
@@ -336,6 +397,14 @@ await api.start()
 | POST | `/api/schedule` | Schedule notification for later |
 | GET | `/api/scheduled` | List pending notifications |
 | DELETE | `/api/scheduled/{id}` | Cancel a scheduled notification |
+
+#### Scheduled Tasks (SchedulerCog)
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/tasks` | Register a periodic Claude Code task |
+| GET | `/api/tasks` | List all tasks |
+| DELETE | `/api/tasks/{id}` | Remove a task |
+| PATCH | `/api/tasks/{id}` | Update task (enable/disable, prompt, interval) |
 
 ### Examples
 
@@ -361,9 +430,11 @@ curl -X POST http://localhost:8080/api/schedule \
 claude_discord/
   main.py                  # Standalone entry point
   bot.py                   # Discord Bot class
+  setup.py                 # setup_bridge() — one-call Cog registration
   cogs/
     claude_chat.py         # Interactive chat (thread creation, message handling)
     skill_command.py       # /skill slash command with autocomplete
+    scheduler.py           # Periodic Claude Code task executor (SQLite-backed)
     webhook_trigger.py     # Webhook → Claude Code task execution (CI/CD)
     auto_upgrade.py        # Webhook → package upgrade + restart
     _run_helper.py         # Shared Claude CLI execution logic
@@ -374,6 +445,7 @@ claude_discord/
   database/
     models.py              # SQLite schema
     repository.py          # Session CRUD operations
+    task_repo.py           # Scheduled task CRUD (SchedulerCog)
     notification_repo.py   # Scheduled notification CRUD
   coordination/
     service.py             # CoordinationService — posts session lifecycle events to a shared channel
@@ -385,6 +457,7 @@ claude_discord/
     thread_dashboard.py    # Live pinned embed showing session states per thread
   ext/
     api_server.py          # REST API server (optional, requires aiohttp)
+                           # Includes /api/tasks endpoints for SchedulerCog
   utils/
     logger.py              # Logging setup
 ```
@@ -402,7 +475,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-400+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade, REST API, AskUserQuestion UI, and thread status dashboard.
+470+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade, REST API, AskUserQuestion UI, thread status dashboard, and scheduled tasks.
 
 ## How This Project Was Built
 
