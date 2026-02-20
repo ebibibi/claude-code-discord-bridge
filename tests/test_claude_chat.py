@@ -14,6 +14,7 @@ from claude_discord.cogs.claude_chat import (
     ClaudeChatCog,
 )
 from claude_discord.concurrency import SessionRegistry
+from claude_discord.coordination.service import CoordinationService
 
 
 def _make_cog() -> ClaudeChatCog:
@@ -346,3 +347,53 @@ class TestRegistryAutoDiscovery:
         bot = MagicMock(spec=[])  # no attributes
         cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
         assert cog._registry is None
+
+
+class TestZeroConfigCoordination:
+    """_get_coordination() must work without any consumer wiring (Zero-Config Principle).
+
+    Consumers (like EbiBot) must get new features by updating the package alone —
+    no code changes, no bot.coordination wiring required.
+    """
+
+    def test_auto_creates_from_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No bot.coordination → auto-creates CoordinationService from env var."""
+        monkeypatch.setenv("COORDINATION_CHANNEL_ID", "1234567890")
+        bot = MagicMock(spec=[])  # no attributes at all
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        svc = cog._get_coordination()
+        assert isinstance(svc, CoordinationService)
+        assert svc.enabled is True
+
+    def test_no_op_when_env_var_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No env var → returns a no-op CoordinationService (never None)."""
+        monkeypatch.delenv("COORDINATION_CHANNEL_ID", raising=False)
+        bot = MagicMock(spec=[])
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        svc = cog._get_coordination()
+        assert isinstance(svc, CoordinationService)
+        assert svc.enabled is False  # no-op, but not None
+
+    def test_bot_attribute_takes_precedence(self) -> None:
+        """Explicitly set bot.coordination wins over env var auto-creation."""
+        explicit = CoordinationService(MagicMock(), channel_id=9999)
+        bot = MagicMock()
+        bot.coordination = explicit
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        assert cog._get_coordination() is explicit
+
+    def test_constructor_arg_takes_precedence(self) -> None:
+        """Explicitly passed coordination= wins over everything."""
+        explicit = CoordinationService(MagicMock(), channel_id=9999)
+        bot = MagicMock()
+        cog = ClaudeChatCog(
+            bot=bot, repo=MagicMock(), runner=MagicMock(), coordination=explicit
+        )
+        assert cog._get_coordination() is explicit
+
+    def test_result_is_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Second call returns same object (no repeated env var reads)."""
+        monkeypatch.setenv("COORDINATION_CHANNEL_ID", "1234567890")
+        bot = MagicMock(spec=[])
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        assert cog._get_coordination() is cog._get_coordination()

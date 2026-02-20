@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import discord
@@ -91,10 +92,22 @@ class ClaudeChatCog(commands.Cog):
             self._dashboard = getattr(self.bot, "thread_dashboard", None)
         return self._dashboard
 
-    def _get_coordination(self) -> CoordinationService | None:
-        """Return the coordination service, resolving it from the bot if not yet set."""
+    def _get_coordination(self) -> CoordinationService:
+        """Return the coordination service (zero-config: auto-creates from env if needed).
+
+        Priority:
+        1. Explicitly supplied via constructor or bot.coordination attribute
+        2. Auto-created from COORDINATION_CHANNEL_ID env var (no consumer wiring needed)
+        3. No-op service when env var is unset
+        """
         if self._coordination is None:
-            self._coordination = getattr(self.bot, "coordination", None)
+            existing = getattr(self.bot, "coordination", None)
+            if existing is not None:
+                self._coordination = existing
+            else:
+                channel_id_str = os.getenv("COORDINATION_CHANNEL_ID", "")
+                channel_id = int(channel_id_str) if channel_id_str.isdigit() else None
+                self._coordination = CoordinationService(self.bot, channel_id)
         return self._coordination
 
     @commands.Cog.listener()
@@ -260,9 +273,8 @@ class ClaudeChatCog(commands.Cog):
                     thread=thread,
                 )
 
-            # Announce session start to coordination channel
-            if coordination is not None:
-                await coordination.post_session_start(thread, description)
+            # Announce session start to coordination channel (no-op if unconfigured)
+            await coordination.post_session_start(thread, description)
 
             status = StatusManager(user_message)
             await status.set_thinking()
@@ -288,9 +300,8 @@ class ClaudeChatCog(commands.Cog):
                 await stop_view.disable(stop_msg)
                 self._active_runners.pop(thread.id, None)
 
-                # Announce session end to coordination channel
-                if coordination is not None:
-                    await coordination.post_session_end(thread)
+                # Announce session end to coordination channel (no-op if unconfigured)
+                await coordination.post_session_end(thread)
 
                 # Transition to WAITING_INPUT so owner knows a reply is needed
                 if dashboard is not None:
