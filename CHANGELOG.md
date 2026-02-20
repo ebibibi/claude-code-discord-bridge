@@ -11,33 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Scheduled Task Executor** (`SchedulerCog`) — register periodic Claude Code tasks via Discord chat or REST API. Tasks are stored in SQLite and executed by a single 30-second master loop. No code changes needed to add new tasks (#90)
-- **`/api/tasks` REST endpoints** — `POST`, `GET`, `DELETE`, `PATCH` for managing scheduled tasks. Claude Code calls these via Bash tool using `CCDB_API_URL` env var
-- **`TaskRepository`** (`database/task_repo.py`) — CRUD for `scheduled_tasks` table with `get_due()`, `update_next_run()`, enable/disable support
-- **`ClaudeRunner.api_port` / `api_secret` params** — when set, `CCDB_API_URL` (and optionally `CCDB_API_SECRET`) are injected into Claude subprocess env, enabling Claude to self-register tasks
+- **`/api/tasks` REST endpoints** — `POST`, `GET`, `DELETE`, `PATCH` for managing scheduled tasks. Claude Code calls these via Bash tool using `CCDB_API_URL` env var (#90)
+- **`TaskRepository`** (`database/task_repo.py`) — CRUD for `scheduled_tasks` table with `get_due()`, `update_next_run()`, enable/disable support (#90)
+- **`ClaudeRunner.api_port` / `api_secret` params** — when set, `CCDB_API_URL` (and optionally `CCDB_API_SECRET`) are injected into Claude subprocess env, enabling Claude to self-register tasks (#90)
 - **`setup_bridge()` auto-discovery** — convenience factory that auto-wires `ClaudeRunner`, `SessionStore`, and `CoordinationChannel` from env vars; consumer smoke test in CI (#92)
 - **Zero-config coordination** — `CoordinationChannel` auto-creates its channel from `CCDB_COORDINATION_CHANNEL_NAME` env var with no consumer wiring needed (#89)
+- **Session Sync** — sync existing Claude Code CLI sessions into Discord threads with `/sync-sessions` command; backfills recent conversation messages into the thread (#30, #31, #36)
+- **Session sync filters** — `since_days` / `since_hours` + `min_results` two-tier filtering, configurable thread style, origin filter for `/sessions` (#37, #38, #39)
 - **LiveToolTimer** — live elapsed-time updates on long-running tool call embeds (#84, #85)
 - **Coordination channel** — cross-session awareness so concurrent Claude Code sessions can see each other (#78)
 - **Persistent AskView buttons** — bus routing and restart recovery for interactive Discord buttons (#81, #86)
 - **AskUserQuestion integration** — `AskUserQuestion` tool calls render as Discord Buttons and Select Menus (#45, #66)
-- **Thread status dashboard** — owner mention when session is waiting for input (#67, #68)
+- **Thread status dashboard** — status embed with owner mention when session is waiting for input (#67, #68)
+- **⏹ Stop button** — inline stop button in tool embeds for graceful `SIGINT` interrupt without clearing the session (#56, #61)
 - **Token usage display** — cache hit rate and token counts shown in session-complete embed (#41, #63)
 - **Redacted thinking placeholder** — embed shown for `redacted_thinking` blocks instead of silent skip (#49, #64)
 - **Auto-discover registry** — bot auto-discovers cog registry; zero-config for consumers (#54)
 - **Concurrency awareness** — multiple simultaneous sessions detected and surfaced in Discord (#53)
-- **Architecture decisions recorded** — CLAUDE.md §Key Design Decisions #7-9 document the REST API control plane pattern and dynamic scheduler design rationale
+- **`upgrade_approval` flag** — gate `AutoUpgradeCog` restart behind explicit approval before applying updates (#60)
+- **`restart_approval` mode** — `AutoUpgradeCog` can require approval before restarting the bot (#28)
+- **DrainAware protocol** — cogs implementing `DrainAware` are auto-discovered and drained before bot restart (#26)
+- **Pyright** — strict type checking added to CI pipeline (#22)
+- **Auto-format on commit** — Python files are auto-formatted by ruff before every commit to prevent CI failures (#16)
 
 ### Changed
 - **Test coverage**: 152 → 473 tests
+- Removed `/skills` command; `/skill` with autocomplete is the sole entry point (#40)
 - Tool result embeds show elapsed time in description rather than title field (#84, #88)
 
 ### Fixed
 - Persistent AskView buttons survive bot restarts via bus routing (#81)
 - SchedulerCog posts starter message before creating thread (#93, #94)
 - GFM tables wrapped in code fences for consistent Discord rendering (#73, #76)
-- Table header prepended to continuation chunks (#73, #74)
+- Table header prepended to continuation chunks for Discord rendering (#73, #74)
 - Markdown tables kept intact when chunking for Discord (#55, #57)
 - Concurrency notice strengthened with diagnostic logging (#52, #62)
+- Active Claude sessions drained before bot restart (#13, #15)
+- `raw` field added to `StreamEvent` dataclass (#20)
+- Extended thinking embed rendered as plain code block (#18, #19)
+- `notify-upgrade` workflow triggered on PR close rather than push (#17)
+- Auto-approve workflow waits for active webhook triggers before merging (#24)
 
 ## [1.1.0] - 2026-02-19
 
