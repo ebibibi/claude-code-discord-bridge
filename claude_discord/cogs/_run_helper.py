@@ -43,8 +43,10 @@ STREAM_EDIT_INTERVAL = 1.5
 # Max characters before starting a new streaming message
 STREAM_MAX_CHARS = 1900
 
-# Max characters for tool result display
-TOOL_RESULT_MAX_CHARS = 500
+# Max characters for tool result display.
+# Sized to show ~30 lines of typical output (100 chars/line × 30 = 3000).
+# The embed description limit is 4096, so this leaves room for code block markers.
+TOOL_RESULT_MAX_CHARS = 3000
 
 # How often to update in-progress tool embeds with elapsed time (seconds).
 # Gives users visibility into long-running commands (builds, auth flows, etc.).

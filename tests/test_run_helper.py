@@ -579,10 +579,12 @@ class TestLiveToolTimer:
             rh.TOOL_TIMER_INTERVAL = original_interval
 
         msg.edit.assert_called()
-        # The embed passed to edit should include elapsed time in the title
+        # Elapsed time must be in description (title stays stable across ticks)
         call_embed = msg.edit.call_args.kwargs.get("embed")
         assert call_embed is not None
-        assert "s)" in call_embed.title  # e.g. "(0s)..." or "(1s)..."
+        assert call_embed.description is not None
+        assert "s" in call_embed.description  # e.g. "⏳ 0s elapsed..."
+        assert "s)" not in call_embed.title  # title must NOT contain elapsed time
 
     @pytest.mark.asyncio
     async def test_timer_cancelled_stops_updates(self) -> None:

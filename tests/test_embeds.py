@@ -7,6 +7,7 @@ from claude_discord.discord_ui.embeds import (
     redacted_thinking_embed,
     session_complete_embed,
     thinking_embed,
+    tool_result_embed,
     tool_use_embed,
 )
 
@@ -90,13 +91,18 @@ class TestToolUseEmbed:
         embed = tool_use_embed(self._bash_tool(), in_progress=True)
         assert embed.title is not None
         assert embed.title.endswith("...")
-        assert "(" not in embed.title  # no elapsed time shown
+        assert embed.description is None  # no elapsed → no description
 
-    def test_in_progress_with_elapsed(self) -> None:
+    def test_in_progress_with_elapsed_shows_description(self) -> None:
+        """Elapsed time appears in description, leaving the title stable."""
         embed = tool_use_embed(self._bash_tool(), in_progress=True, elapsed_s=42)
         assert embed.title is not None
-        assert "(42s)" in embed.title
         assert embed.title.endswith("...")
+        # Title must NOT contain the elapsed time (keeps it stable across ticks)
+        assert "42s" not in embed.title
+        # Description carries the elapsed time
+        assert embed.description is not None
+        assert "42s" in embed.description
 
     def test_completed_no_ellipsis(self) -> None:
         embed = tool_use_embed(self._bash_tool(), in_progress=False)
@@ -108,6 +114,14 @@ class TestToolUseEmbed:
         embed = tool_use_embed(self._bash_tool(), in_progress=False, elapsed_s=99)
         assert embed.title is not None
         assert "99s" not in embed.title
+        assert embed.description is None
+
+    def test_title_stable_across_ticks(self) -> None:
+        """Title must be identical at t=0, t=10, t=20 so Discord doesn't re-render it."""
+        base = tool_use_embed(self._bash_tool(), in_progress=True)
+        tick1 = tool_use_embed(self._bash_tool(), in_progress=True, elapsed_s=10)
+        tick2 = tool_use_embed(self._bash_tool(), in_progress=True, elapsed_s=20)
+        assert base.title == tick1.title == tick2.title
 
     def test_title_within_discord_limit(self) -> None:
         """Even with a very long command name, title should be capped at 256 chars."""
@@ -119,6 +133,42 @@ class TestToolUseEmbed:
         )
         embed = tool_use_embed(long_tool, in_progress=True, elapsed_s=120)
         assert len(embed.title) <= 256
+
+
+class TestToolResultEmbed:
+    """Tests for tool_result_embed — uses description for generous output display."""
+
+    def test_result_in_description_not_field(self) -> None:
+        """Result content must be in description (4096 limit) not a field (1024 limit)."""
+        embed = tool_result_embed("🔧 Running: ls...", "file1\nfile2\nfile3")
+        assert embed.description is not None
+        assert "file1" in embed.description
+        assert len(embed.fields) == 0  # no fields
+
+    def test_result_wrapped_in_code_block(self) -> None:
+        embed = tool_result_embed("🔧 Running: ls...", "output here")
+        assert embed.description is not None
+        assert embed.description.startswith("```")
+        assert embed.description.endswith("```")
+
+    def test_title_strips_trailing_dots(self) -> None:
+        """The '...' suffix from the in-progress title should be stripped."""
+        embed = tool_result_embed("🔧 Running: ls...", "ok")
+        assert embed.title is not None
+        assert not embed.title.endswith(".")
+
+    def test_30_lines_fit_without_truncation(self) -> None:
+        """30 lines of typical output should display in full."""
+        lines = [f"Step {i:02d}/30 — output text here" for i in range(1, 31)]
+        content = "\n".join(lines)
+        embed = tool_result_embed("🔧 Running: cmd...", content)
+        assert embed.description is not None
+        for line in lines:
+            assert line in embed.description
+
+    def test_empty_result_no_description(self) -> None:
+        embed = tool_result_embed("🔧 Running: ls...", "")
+        assert embed.description is None
 
 
 class TestRedactedThinkingEmbed:
