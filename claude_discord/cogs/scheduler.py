@@ -123,12 +123,14 @@ class SchedulerCog(commands.Cog):
             if task.get("working_dir"):
                 cloned.working_dir = task["working_dir"]
 
+            registry = getattr(self.bot, "session_registry", None)
             await run_claude_in_thread(
                 thread=thread,
                 runner=cloned,
                 repo=None,  # scheduled tasks don't persist session state
                 prompt=task["prompt"],
                 session_id=None,
+                registry=registry,
             )
 
         except Exception:
