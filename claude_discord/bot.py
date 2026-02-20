@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 
 from .concurrency import SessionRegistry
+from .coordination.service import CoordinationService
 
 if TYPE_CHECKING:
     from .discord_ui.thread_dashboard import ThreadStatusDashboard
@@ -19,7 +20,12 @@ logger = logging.getLogger(__name__)
 class ClaudeDiscordBot(commands.Bot):
     """Discord bot that bridges messages to Claude Code CLI."""
 
-    def __init__(self, channel_id: int, owner_id: int | None = None) -> None:
+    def __init__(
+        self,
+        channel_id: int,
+        owner_id: int | None = None,
+        coordination_channel_id: int | None = None,
+    ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
         intents.guilds = True
@@ -33,6 +39,8 @@ class ClaudeDiscordBot(commands.Bot):
         self.session_registry = SessionRegistry()
         # Populated after on_ready when the channel is resolved
         self.thread_dashboard: ThreadStatusDashboard | None = None
+        # Coordination channel for multi-session awareness (optional)
+        self.coordination = CoordinationService(self, coordination_channel_id)
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "?")
