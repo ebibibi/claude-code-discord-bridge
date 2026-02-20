@@ -228,27 +228,47 @@ async def run_claude_in_thread(
 
             # Assistant message: text, thinking, or tool use
             if event.message_type == MessageType.ASSISTANT:
-                # Extended thinking — post as a collapsed embed
-                if event.thinking:
+                # Extended thinking — skip partial events to avoid flooding with duplicate
+                # embeds. With --include-partial-messages, thinking blocks arrive many times
+                # as Claude generates them; post only the final complete version.
+                if event.thinking and not event.is_partial:
                     await thread.send(embed=thinking_embed(event.thinking))
 
-                # Redacted thinking — post a placeholder embed
-                if event.has_redacted_thinking:
+                # Redacted thinking — post only on complete messages
+                if event.has_redacted_thinking and not event.is_partial:
                     await thread.send(embed=redacted_thinking_embed())
 
-                # Intermediate text — post immediately via streaming manager
+                # Text — stream into one Discord message, editing in-place as chunks arrive.
+                # Partial events extend the streaming message; complete events finalize it.
+                # stream-json delivers the full accumulated text on every partial event, so
+                # we compute the delta to feed into StreamingMessageManager.append().
                 if event.text:
-                    # Finalize any in-progress streaming message first
+                    if event.is_partial:
+                        delta = event.text[len(state.partial_text) :]
+                        state.partial_text = event.text
+                        if delta:
+                            await streamer.append(delta)
+                    else:
+                        # Complete text block: flush the streamer with any remaining delta
+                        delta = event.text[len(state.partial_text) :]
+                        if streamer.has_content:
+                            if delta:
+                                await streamer.append(delta)
+                            await streamer.finalize()
+                            streamer = StreamingMessageManager(thread)
+                        else:
+                            # No partial events arrived — post the full text directly
+                            for chunk in chunk_message(event.text):
+                                await thread.send(chunk)
+                        state.partial_text = ""
+                        state.accumulated_text = event.text
+
+                if event.tool_use:
+                    # Finalize any in-progress streaming text before the tool embed
                     if streamer.has_content:
                         await streamer.finalize()
                         streamer = StreamingMessageManager(thread)
-
-                    # Post intermediate text chunks immediately
-                    for chunk in chunk_message(event.text):
-                        await thread.send(chunk)
-                    state.accumulated_text = event.text
-
-                if event.tool_use:
+                    state.partial_text = ""
                     if status:
                         await status.set_tool(event.tool_use.category)
                     embed = tool_use_embed(event.tool_use, in_progress=True)

@@ -130,6 +130,7 @@ class StreamEvent:
     has_redacted_thinking: bool = False
     ask_questions: list[AskQuestion] | None = None
     is_complete: bool = False
+    is_partial: bool = False
     cost_usd: float | None = None
     duration_ms: int | None = None
     input_tokens: int | None = None
@@ -152,5 +153,6 @@ class SessionState:
     session_id: str | None = None
     thread_id: int = 0
     accumulated_text: str = ""
+    partial_text: str = ""
     active_tools: dict[str, discord.Message] = field(default_factory=dict)
     active_timers: dict[str, asyncio.Task[None]] = field(default_factory=dict)

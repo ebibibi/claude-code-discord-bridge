@@ -68,9 +68,15 @@ def _parse_system(data: dict[str, Any], event: StreamEvent) -> None:
 
 
 def _parse_assistant(data: dict[str, Any], event: StreamEvent) -> None:
-    """Parse assistant message (text blocks, tool_use blocks, and thinking blocks)."""
+    """Parse assistant message (text blocks, tool_use blocks, and thinking blocks).
+
+    Sets is_partial=True when stop_reason is null/missing, meaning Claude is still
+    generating content. With --include-partial-messages, many partial events arrive
+    before the final complete event (stop_reason="end_turn" or "tool_use").
+    """
     message = data.get("message", {})
     content = message.get("content", [])
+    event.is_partial = message.get("stop_reason") is None
 
     text_parts: list[str] = []
     thinking_parts: list[str] = []
