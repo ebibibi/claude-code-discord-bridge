@@ -401,7 +401,7 @@ class ClaudeChatCog(commands.Cog):
             status = StatusManager(user_message)
             await status.set_thinking()
 
-            runner = self.runner.clone()
+            runner = self.runner.clone(thread_id=thread.id)
             self._active_runners[thread.id] = runner
 
             stop_view = StopView(runner)

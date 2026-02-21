@@ -37,6 +37,7 @@ class ClaudeRunner:
         include_partial_messages: bool = True,
         api_port: int | None = None,
         api_secret: str | None = None,
+        thread_id: int | None = None,
     ) -> None:
         self.command = command
         self.model = model
@@ -48,6 +49,7 @@ class ClaudeRunner:
         self.include_partial_messages = include_partial_messages
         self.api_port = api_port
         self.api_secret = api_secret
+        self.thread_id = thread_id
         self._process: asyncio.subprocess.Process | None = None
 
     async def run(
@@ -96,8 +98,13 @@ class ClaudeRunner:
         finally:
             await self._cleanup()
 
-    def clone(self) -> ClaudeRunner:
-        """Create a fresh runner with the same configuration but no active process."""
+    def clone(self, thread_id: int | None = None) -> ClaudeRunner:
+        """Create a fresh runner with the same configuration but no active process.
+
+        Args:
+            thread_id: Discord thread ID to inject as DISCORD_THREAD_ID env var.
+                       Overrides the instance-level thread_id if provided.
+        """
         return ClaudeRunner(
             command=self.command,
             model=self.model,
@@ -109,6 +116,7 @@ class ClaudeRunner:
             include_partial_messages=self.include_partial_messages,
             api_port=self.api_port,
             api_secret=self.api_secret,
+            thread_id=thread_id if thread_id is not None else self.thread_id,
         )
 
     async def interrupt(self) -> None:
@@ -197,6 +205,8 @@ class ClaudeRunner:
             env["CCDB_API_URL"] = f"http://127.0.0.1:{self.api_port}"
         if self.api_secret is not None:
             env["CCDB_API_SECRET"] = self.api_secret
+        if self.thread_id is not None:
+            env["DISCORD_THREAD_ID"] = str(self.thread_id)
         return env
 
     async def _read_stream(self) -> AsyncGenerator[StreamEvent, None]:

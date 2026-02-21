@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
     from ..database.lounge_repo import LoungeRepository
     from ..database.notification_repo import NotificationRepository
+    from ..database.repository import SessionRepository
     from ..database.resume_repo import PendingResumeRepository
     from ..database.task_repo import TaskRepository
 
@@ -62,6 +63,7 @@ class ApiServer:
         lounge_repo: LoungeRepository | None = None,
         lounge_channel_id: int | None = None,
         resume_repo: PendingResumeRepository | None = None,
+        session_repo: SessionRepository | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -72,6 +74,7 @@ class ApiServer:
         self.task_repo = task_repo
         self.lounge_repo = lounge_repo
         self.resume_repo = resume_repo
+        self.session_repo = session_repo
         # Fall back to COORDINATION_CHANNEL_ID so lounge shares the same channel
         if lounge_channel_id is None:
             ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
@@ -556,6 +559,24 @@ class ApiServer:
         session_id: str | None = data.get("session_id") or None
         reason: str = str(data.get("reason") or "self_restart")
         resume_prompt: str | None = data.get("resume_prompt") or None
+
+        # Auto-resolve session_id from the sessions table if not provided.
+        if session_id is None and self.session_repo is not None:
+            try:
+                record = await self.session_repo.get(thread_id)
+                if record is not None:
+                    session_id = record.session_id
+                    logger.debug(
+                        "mark-resume: auto-resolved session_id=%s for thread %d",
+                        session_id,
+                        thread_id,
+                    )
+            except Exception:
+                logger.warning(
+                    "mark-resume: failed to auto-resolve session_id for thread %d",
+                    thread_id,
+                    exc_info=True,
+                )
 
         row_id = await self.resume_repo.mark(  # type: ignore[union-attr]
             thread_id,
