@@ -222,3 +222,125 @@ class TestAuthentication:
             headers={"Authorization": "Bearer test-secret-123"},
         )
         assert resp.status == 200
+
+
+class TestSpawn:
+    """Tests for POST /api/spawn — programmatic Claude session creation."""
+
+    @pytest.fixture
+    def mock_cog(self) -> MagicMock:
+        """Mock ClaudeChatCog with a spawn_session that returns a fake thread."""
+        thread = MagicMock()
+        thread.id = 999888777
+        thread.name = "Test thread"
+        cog = MagicMock()
+        cog.spawn_session = AsyncMock(return_value=thread)
+        return cog
+
+    @pytest.fixture
+    async def spawn_client(
+        self,
+        repo: NotificationRepository,
+        bot: MagicMock,
+        mock_cog: MagicMock,
+    ) -> TestClient:
+        """ApiServer client with ClaudeChatCog pre-loaded in bot.cogs."""
+        bot.cogs = {"ClaudeChatCog": mock_cog}
+        api = ApiServer(repo=repo, bot=bot, default_channel_id=12345)
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        yield client
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_spawn_returns_201_with_thread_info(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        resp = await spawn_client.post("/api/spawn", json={"prompt": "Do something useful"})
+        assert resp.status == 201
+        data = await resp.json()
+        assert data["status"] == "spawned"
+        assert data["thread_id"] == "999888777"
+        assert data["thread_name"] == "Test thread"
+
+    @pytest.mark.asyncio
+    async def test_spawn_passes_prompt_to_cog(
+        self, spawn_client: TestClient, mock_cog: MagicMock, bot: MagicMock
+    ) -> None:
+        await spawn_client.post("/api/spawn", json={"prompt": "Organise Todoist inbox"})
+        mock_cog.spawn_session.assert_called_once()
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert prompt == "Organise Todoist inbox"
+
+    @pytest.mark.asyncio
+    async def test_spawn_passes_thread_name_when_given(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post(
+            "/api/spawn",
+            json={"prompt": "Long prompt", "thread_name": "Custom title"},
+        )
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("thread_name") == "Custom title"
+
+    @pytest.mark.asyncio
+    async def test_spawn_thread_name_defaults_to_none(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post("/api/spawn", json={"prompt": "Some prompt"})
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("thread_name") is None
+
+    @pytest.mark.asyncio
+    async def test_spawn_missing_prompt_returns_400(self, spawn_client: TestClient) -> None:
+        resp = await spawn_client.post("/api/spawn", json={})
+        assert resp.status == 400
+        data = await resp.json()
+        assert "prompt" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_spawn_empty_prompt_returns_400(self, spawn_client: TestClient) -> None:
+        resp = await spawn_client.post("/api/spawn", json={"prompt": "   "})
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_spawn_without_cog_returns_503(
+        self, repo: NotificationRepository, bot: MagicMock
+    ) -> None:
+        bot.cogs = {}  # No ClaudeChatCog loaded
+        api = ApiServer(repo=repo, bot=bot, default_channel_id=12345)
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/spawn", json={"prompt": "Hello"})
+            assert resp.status == 503
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_spawn_no_channel_returns_400(
+        self, repo: NotificationRepository, mock_cog: MagicMock
+    ) -> None:
+        bot = MagicMock()
+        bot.cogs = {"ClaudeChatCog": mock_cog}
+        # No default_channel_id, no channel_id in body
+        api = ApiServer(repo=repo, bot=bot, default_channel_id=None)
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/spawn", json={"prompt": "Hello"})
+            assert resp.status == 400
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_spawn_invalid_json_returns_400(self, spawn_client: TestClient) -> None:
+        resp = await spawn_client.post(
+            "/api/spawn",
+            data=b"not-json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status == 400

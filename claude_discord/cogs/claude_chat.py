@@ -197,6 +197,41 @@ class ClaudeChatCog(commands.Cog):
         prompt = await self._build_prompt(message)
         await self._run_claude(message, thread, prompt, session_id=None)
 
+    async def spawn_session(
+        self,
+        channel: discord.abc.Messageable,
+        prompt: str,
+        thread_name: str | None = None,
+    ) -> discord.Thread:
+        """Create a new thread and start a Claude Code session without a user message.
+
+        This is the API-initiated equivalent of ``_handle_new_conversation``.
+        It bypasses the ``on_message`` bot-author guard, enabling programmatic
+        spawning of Claude sessions (e.g. from ``POST /api/spawn``).
+
+        A seed message is posted inside the new thread so that ``StatusManager``
+        has a concrete ``discord.Message`` to attach reaction-emoji status to.
+
+        Args:
+            channel: The parent text channel in which to create the thread.
+            prompt: The instruction to send to Claude Code.
+            thread_name: Optional thread title; defaults to the first 100 chars
+                of *prompt*.
+
+        Returns:
+            The newly created :class:`discord.Thread`.
+        """
+        name = (thread_name or prompt)[:100]
+        thread = await channel.create_thread(  # type: ignore[attr-defined]
+            name=name,
+            type=discord.ChannelType.public_thread,
+            auto_archive_duration=60,
+        )
+        # Post the prompt so StatusManager has a Message to add reactions to.
+        seed_message = await thread.send(prompt)
+        await self._run_claude(seed_message, thread, prompt, session_id=None)
+        return thread
+
     async def _handle_thread_reply(self, message: discord.Message) -> None:
         """Continue a Claude Code session in an existing thread."""
         thread = message.channel

@@ -95,6 +95,8 @@ class ApiServer:
         # AI Lounge routes (requires lounge_repo)
         self.app.router.add_get("/api/lounge", self.get_lounge)
         self.app.router.add_post("/api/lounge", self.post_lounge)
+        # Session spawn route
+        self.app.router.add_post("/api/spawn", self.spawn)
 
     @web.middleware
     async def _auth_middleware(
@@ -412,6 +414,80 @@ class ApiServer:
                 "label": stored.label,
                 "message": stored.message,
                 "posted_at": stored.posted_at,
+            },
+            status=201,
+        )
+
+    # ------------------------------------------------------------------
+    # Session spawn endpoint (/api/spawn)
+    # ------------------------------------------------------------------
+
+    async def spawn(self, request: web.Request) -> web.Response:
+        """POST /api/spawn — create a new Discord thread and start Claude Code.
+
+        Unlike posting a message to the channel directly, this endpoint
+        bypasses the ``on_message`` bot-author guard and works even when
+        called from within another Claude Code session.
+
+        Body (JSON):
+            prompt: The instruction to send to Claude (required).
+            channel_id: Parent channel ID (optional; defaults to the
+                ``default_channel_id`` configured at startup).
+            thread_name: Custom thread title (optional; defaults to the
+                first 100 characters of *prompt*).
+
+        Returns (201):
+            ``{"status": "spawned", "thread_id": "...", "thread_name": "..."}``
+        """
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        prompt = (data.get("prompt") or "").strip()
+        if not prompt:
+            return web.json_response({"error": "prompt is required"}, status=400)
+
+        raw_channel_id = data.get("channel_id") or self.default_channel_id
+        if not raw_channel_id:
+            return web.json_response({"error": "No channel specified"}, status=400)
+
+        # Resolve ClaudeChatCog lazily from the bot (zero-config; no constructor change).
+        from ..cogs.claude_chat import ClaudeChatCog  # avoid circular import at module level
+
+        cog: ClaudeChatCog | None = self.bot.cogs.get("ClaudeChatCog")  # type: ignore[assignment]
+        if cog is None:
+            return web.json_response(
+                {"error": "ClaudeChatCog is not loaded"},
+                status=503,
+            )
+
+        try:
+            channel_id = int(raw_channel_id)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "channel_id must be an integer"}, status=400)
+
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception as exc:
+                return web.json_response({"error": str(exc)}, status=500)
+
+        thread_name: str | None = data.get("thread_name") or None
+
+        try:
+            thread = await cog.spawn_session(channel, prompt, thread_name=thread_name)
+        except Exception as exc:
+            logger.error("spawn_session failed: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        logger.info("Spawned new Claude session in thread %s (%s)", thread.id, thread.name)
+        return web.json_response(
+            {
+                "status": "spawned",
+                "thread_id": str(thread.id),
+                "thread_name": thread.name,
             },
             status=201,
         )

@@ -395,3 +395,80 @@ class TestZeroConfigCoordination:
         bot = MagicMock(spec=[])
         cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
         assert cog._get_coordination() is cog._get_coordination()
+
+
+class TestSpawnSession:
+    """Tests for ClaudeChatCog.spawn_session()."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_creates_thread_and_returns_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """spawn_session creates a thread with the right name and returns it."""
+        import discord
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+        thread.name = "Test spawn"
+        thread.send = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        with patch.object(cog, "_run_claude", new=AsyncMock()) as mock_run:
+            result = await cog.spawn_session(channel, "Do the thing")
+
+        assert result is thread
+        channel.create_thread.assert_called_once()
+        call_kwargs = channel.create_thread.call_args.kwargs
+        assert call_kwargs["name"] == "Do the thing"
+        assert call_kwargs["type"] == discord.ChannelType.public_thread
+
+    @pytest.mark.asyncio
+    async def test_spawn_uses_custom_thread_name(self) -> None:
+        """thread_name overrides the default (prompt[:100])."""
+        import discord
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        with patch.object(cog, "_run_claude", new=AsyncMock()):
+            await cog.spawn_session(channel, "Very long prompt text", thread_name="Short name")
+
+        kwargs = channel.create_thread.call_args.kwargs
+        assert kwargs["name"] == "Short name"
+
+    @pytest.mark.asyncio
+    async def test_spawn_posts_seed_message(self) -> None:
+        """spawn_session sends the prompt as the first thread message."""
+        import discord
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        thread = MagicMock(spec=discord.Thread)
+        seed_msg = MagicMock()
+        thread.send = AsyncMock(return_value=seed_msg)
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        with patch.object(cog, "_run_claude", new=AsyncMock()) as mock_run:
+            await cog.spawn_session(channel, "Hello Claude")
+
+        thread.send.assert_called_once_with("Hello Claude")
+        # _run_claude receives the seed message (not a user message)
+        user_msg_arg = mock_run.call_args.args[0]
+        assert user_msg_arg is seed_msg
