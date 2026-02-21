@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands
 
-from ..cogs._run_helper import run_claude_in_thread
+from ..cogs._run_helper import run_claude_with_config
+from ..cogs.run_config import RunConfig
 from ..concurrency import SessionRegistry
 
 if TYPE_CHECKING:
@@ -148,14 +149,16 @@ class WebhookTriggerCog(commands.Cog):
 
         self._active_count += 1
         try:
-            session_id = await run_claude_in_thread(
-                thread=thread,
-                runner=runner,
-                repo=None,
-                prompt=trigger.prompt,
-                session_id=None,
-                status=None,
-                registry=self._registry,
+            session_id = await run_claude_with_config(
+                RunConfig(
+                    thread=thread,
+                    runner=runner,
+                    repo=None,
+                    prompt=trigger.prompt,
+                    session_id=None,
+                    status=None,
+                    registry=self._registry,
+                )
             )
 
             if session_id:

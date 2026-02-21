@@ -21,7 +21,8 @@ from typing import TYPE_CHECKING
 import discord
 from discord.ext import commands, tasks
 
-from ._run_helper import run_claude_in_thread
+from ._run_helper import run_claude_with_config
+from .run_config import RunConfig
 
 if TYPE_CHECKING:
     from ..claude.runner import ClaudeRunner
@@ -124,13 +125,15 @@ class SchedulerCog(commands.Cog):
                 cloned.working_dir = task["working_dir"]
 
             registry = getattr(self.bot, "session_registry", None)
-            await run_claude_in_thread(
-                thread=thread,
-                runner=cloned,
-                repo=None,  # scheduled tasks don't persist session state
-                prompt=task["prompt"],
-                session_id=None,
-                registry=registry,
+            await run_claude_with_config(
+                RunConfig(
+                    thread=thread,
+                    runner=cloned,
+                    repo=None,  # scheduled tasks don't persist session state
+                    prompt=task["prompt"],
+                    session_id=None,
+                    registry=registry,
+                )
             )
 
         except Exception:

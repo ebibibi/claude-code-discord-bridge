@@ -2,6 +2,12 @@
 
 Both ClaudeChatCog and SkillCommandCog need to run Claude and post results.
 This module extracts that shared logic to avoid duplication.
+
+Primary API:
+    run_claude_with_config(config: RunConfig) -> str | None
+
+Legacy shim (kept for backward compatibility):
+    run_claude_in_thread(thread, runner, repo, prompt, session_id, ...) -> str | None
 """
 
 from __future__ import annotations
@@ -12,12 +18,7 @@ import re
 
 import discord
 
-from ..claude.runner import ClaudeRunner
 from ..claude.types import MessageType, SessionState
-from ..concurrency import SessionRegistry
-from ..database.ask_repo import PendingAskRepository
-from ..database.lounge_repo import LoungeRepository
-from ..database.repository import SessionRepository
 from ..discord_ui.ask_handler import ASK_ANSWER_TIMEOUT, collect_ask_answers  # noqa: F401
 from ..discord_ui.chunker import chunk_message
 from ..discord_ui.embeds import (
@@ -30,7 +31,6 @@ from ..discord_ui.embeds import (
     tool_result_embed,
     tool_use_embed,
 )
-from ..discord_ui.status import StatusManager
 from ..discord_ui.streaming_manager import (  # noqa: F401
     STREAM_EDIT_INTERVAL,
     STREAM_MAX_CHARS,
@@ -38,6 +38,7 @@ from ..discord_ui.streaming_manager import (  # noqa: F401
 )
 from ..discord_ui.tool_timer import TOOL_TIMER_INTERVAL, LiveToolTimer  # noqa: F401
 from ..lounge import build_lounge_prompt
+from .run_config import RunConfig  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -47,38 +48,23 @@ logger = logging.getLogger(__name__)
 TOOL_RESULT_MAX_CHARS = 3000
 
 
-async def run_claude_in_thread(
-    thread: discord.Thread,
-    runner: ClaudeRunner,
-    repo: SessionRepository | None,
-    prompt: str,
-    session_id: str | None,
-    status: StatusManager | None = None,
-    registry: SessionRegistry | None = None,
-    ask_repo: PendingAskRepository | None = None,
-    lounge_repo: LoungeRepository | None = None,
-) -> str | None:
+async def run_claude_with_config(config: RunConfig) -> str | None:
     """Execute Claude Code CLI and stream results to a Discord thread.
 
-    Args:
-        thread: Discord thread to post results to.
-        runner: A fresh (cloned) ClaudeRunner instance.
-        repo: Session repository for persisting thread-session mappings.
-              Pass None for automated workflows that don't need session persistence.
-        prompt: The user's message or skill invocation.
-        session_id: Optional session ID to resume. None for new sessions.
-        status: Optional StatusManager for emoji reactions on the user's message.
-        registry: Optional SessionRegistry for concurrency awareness.
-                  When provided, the session is registered during execution and
-                  a concurrency notice is prepended to the prompt.
+    This is the primary entry point. All Cogs should create a RunConfig and
+    pass it here, rather than using the legacy run_claude_in_thread() shim.
 
     Returns:
         The final session_id, or None if the run failed.
     """
+    thread = config.thread
+    runner = config.runner
+    prompt = config.prompt
+
     # Layer 3: Prepend AI Lounge context (recent messages + invitation)
-    if lounge_repo is not None:
+    if config.lounge_repo is not None:
         try:
-            recent = await lounge_repo.get_recent(limit=10)
+            recent = await config.lounge_repo.get_recent(limit=10)
             lounge_context = build_lounge_prompt(recent)
             prompt = lounge_context + "\n\n" + prompt
             logger.debug("Lounge context injected (%d recent message(s))", len(recent))
@@ -86,10 +72,10 @@ async def run_claude_in_thread(
             logger.warning("Failed to fetch lounge context — skipping", exc_info=True)
 
     # Layer 1 + 2: Register session and prepend concurrency notice
-    if registry is not None:
-        registry.register(thread.id, prompt[:100], runner.working_dir)
-        others = registry.list_others(thread.id)
-        notice = registry.build_concurrency_notice(thread.id)
+    if config.registry is not None:
+        config.registry.register(thread.id, prompt[:100], runner.working_dir)
+        others = config.registry.list_others(thread.id)
+        notice = config.registry.build_concurrency_notice(thread.id)
         prompt = notice + "\n\n" + prompt
         logger.info(
             "Concurrency notice injected for thread %d (%d other active session(s), dir=%s)",
@@ -100,7 +86,7 @@ async def run_claude_in_thread(
     else:
         logger.debug("No session registry — concurrency notice skipped for thread %d", thread.id)
 
-    state = SessionState(session_id=session_id, thread_id=thread.id)
+    state = SessionState(session_id=config.session_id, thread_id=thread.id)
     streamer = StreamingMessageManager(thread)
 
     # Set when AskUserQuestion is detected mid-stream. After the runner is
@@ -120,13 +106,13 @@ async def run_claude_in_thread(
     assistant_text_sent: bool = False
 
     try:
-        async for event in runner.run(prompt, session_id=session_id):
+        async for event in runner.run(prompt, session_id=config.session_id):
             # System message: capture session_id
             if event.message_type == MessageType.SYSTEM and event.session_id:
                 state.session_id = event.session_id
-                if repo:
-                    await repo.save(thread.id, state.session_id)
-                if not session_id and not session_start_sent:
+                if config.repo:
+                    await config.repo.save(thread.id, state.session_id)
+                if not config.session_id and not session_start_sent:
                     await thread.send(embed=session_start_embed(state.session_id))
                     session_start_sent = True
 
@@ -179,8 +165,8 @@ async def run_claude_in_thread(
                         await streamer.finalize()
                         streamer = StreamingMessageManager(thread)
                     state.partial_text = ""
-                    if status:
-                        await status.set_tool(event.tool_use.category)
+                    if config.status:
+                        await config.status.set_tool(event.tool_use.category)
                     embed = tool_use_embed(event.tool_use, in_progress=True)
                     msg = await thread.send(embed=embed)
                     state.active_tools[event.tool_use.tool_id] = msg
@@ -195,8 +181,8 @@ async def run_claude_in_thread(
 
             # User message (tool result) — cancel timer and update tool embed
             if event.message_type == MessageType.USER and event.tool_result_id:
-                if status:
-                    await status.set_thinking()
+                if config.status:
+                    await config.status.set_thinking()
                 # Stop the elapsed-time timer for this tool (if any)
                 timer_task = state.active_timers.pop(event.tool_result_id, None)
                 if timer_task and not timer_task.done():
@@ -223,13 +209,10 @@ async def run_claude_in_thread(
 
                 if event.error:
                     await thread.send(embed=_make_error_embed(event.error))
-                    if status:
-                        await status.set_error()
+                    if config.status:
+                        await config.status.set_error()
                 else:
                     # Post final result text only if no assistant text was already sent.
-                    # The RESULT event's `result` field can differ subtly from the last
-                    # ASSISTANT event text (trailing whitespace, join differences), so a
-                    # string comparison guard is unreliable. The flag is the source of truth.
                     response_text = event.text
                     if response_text and not assistant_text_sent:
                         for chunk in chunk_message(response_text):
@@ -244,55 +227,70 @@ async def run_claude_in_thread(
                             event.cache_read_tokens,
                         )
                     )
-                    if status:
-                        await status.set_done()
+                    if config.status:
+                        await config.status.set_done()
 
                 if event.session_id:
-                    if repo:
-                        await repo.save(thread.id, event.session_id)
+                    if config.repo:
+                        await config.repo.save(thread.id, event.session_id)
                     state.session_id = event.session_id
 
     except Exception:
         logger.exception("Error running Claude CLI for thread %d", thread.id)
         await thread.send(embed=error_embed("An unexpected error occurred."))
-        if status:
-            await status.set_error()
+        if config.status:
+            await config.status.set_error()
         return state.session_id
     finally:
         # Cancel any timers that were not already stopped by tool_result events.
-        # This guards against early exits (errors, interrupts) leaving ghost tasks.
         for task in state.active_timers.values():
             if not task.done():
                 task.cancel()
         state.active_timers.clear()
 
-        if registry is not None:
-            registry.unregister(thread.id)
+        if config.registry is not None:
+            config.registry.unregister(thread.id)
 
     # After the stream ends, handle pending AskUserQuestion by showing Discord
     # UI and resuming the session with the user's answer.
     if pending_ask and state.session_id:
         answer_prompt = await collect_ask_answers(
-            thread, pending_ask, state.session_id, ask_repo=ask_repo
+            thread, pending_ask, state.session_id, ask_repo=config.ask_repo
         )
         if answer_prompt:
             logger.info(
                 "Resuming session %s after AskUserQuestion answer",
                 state.session_id,
             )
-            return await run_claude_in_thread(
-                thread=thread,
-                runner=runner.clone(),
-                repo=repo,
-                prompt=answer_prompt,
-                session_id=state.session_id,
-                status=status,
-                registry=registry,
-                ask_repo=ask_repo,
-                lounge_repo=lounge_repo,
-            )
+            return await run_claude_with_config(config.with_prompt(answer_prompt))
 
     return state.session_id
+
+
+async def run_claude_in_thread(
+    thread: discord.Thread,
+    runner,
+    repo,
+    prompt: str,
+    session_id: str | None,
+    status=None,
+    registry=None,
+    ask_repo=None,
+    lounge_repo=None,
+) -> str | None:
+    """Backward-compatible shim. Prefer run_claude_with_config() for new code."""
+    config = RunConfig(
+        thread=thread,
+        runner=runner,
+        prompt=prompt,
+        session_id=session_id,
+        repo=repo,
+        status=status,
+        registry=registry,
+        ask_repo=ask_repo,
+        lounge_repo=lounge_repo,
+    )
+    return await run_claude_with_config(config)
 
 
 def _truncate_result(content: str) -> str:

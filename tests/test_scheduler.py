@@ -51,7 +51,7 @@ class TestSchedulerCogMasterLoop:
     async def test_no_tasks_does_nothing(self, cog: SchedulerCog) -> None:
         """Master loop with empty DB should complete without errors."""
         with patch(
-            "claude_discord.cogs.scheduler.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog._master_loop()
         mock_run.assert_not_called()
@@ -64,7 +64,7 @@ class TestSchedulerCogMasterLoop:
             (time.time() + 9999, task_id),
         )
         with patch(
-            "claude_discord.cogs.scheduler.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog._master_loop()
         mock_run.assert_not_called()
@@ -129,7 +129,7 @@ class TestSchedulerCogMasterLoop:
         cog.bot.get_channel = MagicMock(return_value=mock_channel)
 
         with patch(
-            "claude_discord.cogs.scheduler.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog._run_task(task)
 
@@ -143,9 +143,9 @@ class TestSchedulerCogMasterLoop:
         thread_name = mock_starter_msg.create_thread.call_args[1]["name"]
         assert "my-task" in thread_name
 
-        # Claude ran inside the thread
+        # Claude ran inside the thread — call_args[0][0] is the RunConfig
         mock_run.assert_called_once()
-        assert mock_run.call_args[1]["thread"] is mock_thread
+        assert mock_run.call_args[0][0].thread is mock_thread
 
     async def test_disabled_task_not_run(self, cog: SchedulerCog, repo: TaskRepository) -> None:
         """Disabled tasks should not fire even if overdue."""
@@ -155,7 +155,7 @@ class TestSchedulerCogMasterLoop:
             (time.time() - 1, task_id),
         )
         with patch(
-            "claude_discord.cogs.scheduler.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog._master_loop()
         mock_run.assert_not_called()

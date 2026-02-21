@@ -29,7 +29,8 @@ from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.views import StopView
-from ._run_helper import run_claude_in_thread
+from ._run_helper import run_claude_with_config
+from .run_config import RunConfig
 
 if TYPE_CHECKING:
     from ..bot import ClaudeDiscordBot
@@ -287,16 +288,18 @@ class ClaudeChatCog(commands.Cog):
             stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
 
             try:
-                await run_claude_in_thread(
-                    thread=thread,
-                    runner=runner,
-                    repo=self.repo,
-                    prompt=prompt,
-                    session_id=session_id,
-                    status=status,
-                    registry=self._registry,
-                    ask_repo=self._ask_repo,
-                    lounge_repo=self._lounge_repo,
+                await run_claude_with_config(
+                    RunConfig(
+                        thread=thread,
+                        runner=runner,
+                        repo=self.repo,
+                        prompt=prompt,
+                        session_id=session_id,
+                        status=status,
+                        registry=self._registry,
+                        ask_repo=self._ask_repo,
+                        lounge_repo=self._lounge_repo,
+                    )
                 )
             finally:
                 await stop_view.disable(stop_msg)
