@@ -96,14 +96,15 @@ class LoungeRepository:
         """
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
-            # Subquery: pick the N newest, then order ascending for readability
+            # Pick the N newest via subquery, then sort ascending for display
             rows = await db.execute_fetchall(
-                "SELECT id, label, message, posted_at FROM lounge_messages "
-                "ORDER BY id DESC LIMIT ?",
+                "SELECT id, label, message, posted_at FROM ("
+                "  SELECT id, label, message, posted_at FROM lounge_messages"
+                "  ORDER BY id DESC LIMIT ?"
+                ") ORDER BY id ASC",
                 (limit,),
             )
 
-        # Reverse so oldest-first for chronological display
         return [
             LoungeMessage(
                 id=row["id"],
@@ -111,7 +112,7 @@ class LoungeRepository:
                 message=row["message"],
                 posted_at=row["posted_at"],
             )
-            for row in reversed(rows)
+            for row in rows
         ]
 
     async def count(self) -> int:
