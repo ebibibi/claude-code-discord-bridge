@@ -472,3 +472,99 @@ class TestSpawnSession:
         # _run_claude receives the seed message (not a user message)
         user_msg_arg = mock_run.call_args.args[0]
         assert user_msg_arg is seed_msg
+
+
+class TestOnReady:
+    """Tests for ClaudeChatCog.on_ready — startup session resume logic."""
+
+    @pytest.mark.asyncio
+    async def test_on_ready_no_resume_repo_is_noop(self) -> None:
+        """If resume_repo is not set, on_ready should do nothing."""
+        # spec=[] prevents MagicMock from auto-generating resume_repo attribute
+        bot = MagicMock(spec=[])
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        assert cog._resume_repo is None
+        # Should complete without error and without touching bot
+        await cog.on_ready()
+
+    @pytest.mark.asyncio
+    async def test_on_ready_no_pending_is_noop(self) -> None:
+        """If resume_repo returns no pending entries, on_ready does nothing."""
+        from unittest.mock import AsyncMock, MagicMock
+        from claude_discord.database.resume_repo import PendingResumeRepository
+
+        resume_repo = MagicMock(spec=PendingResumeRepository)
+        resume_repo.get_pending = AsyncMock(return_value=[])
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), resume_repo=resume_repo)
+        await cog.on_ready()
+        bot.get_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_on_ready_deletes_before_spawning(self) -> None:
+        """Row must be deleted BEFORE _run_claude is called (single-fire guarantee)."""
+        import discord
+        from unittest.mock import AsyncMock, MagicMock, call, patch
+        from claude_discord.database.resume_repo import PendingResume, PendingResumeRepository
+
+        entry = PendingResume(
+            id=7,
+            thread_id=555,
+            session_id="sess-abc",
+            reason="self_restart",
+            resume_prompt="Continue please.",
+            created_at="2026-02-21 20:00:00",
+        )
+        resume_repo = MagicMock(spec=PendingResumeRepository)
+        resume_repo.get_pending = AsyncMock(return_value=[entry])
+        resume_repo.delete = AsyncMock()
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 555
+        thread.send = AsyncMock(return_value=MagicMock())
+        parent = MagicMock(spec=discord.TextChannel)
+        thread.parent = parent
+
+        bot = MagicMock()
+        bot.get_channel.return_value = thread
+
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), resume_repo=resume_repo)
+
+        call_order: list[str] = []
+        resume_repo.delete.side_effect = lambda _: call_order.append("delete")
+
+        async def fake_run_claude(*args, **kwargs):
+            call_order.append("run_claude")
+
+        with patch.object(cog, "_run_claude", side_effect=fake_run_claude):
+            await cog.on_ready()
+
+        assert call_order == ["delete", "run_claude"], (
+            "delete() must be called before _run_claude to prevent double-resume"
+        )
+
+    @pytest.mark.asyncio
+    async def test_on_ready_skips_non_thread_channels(self) -> None:
+        """If get_channel returns a non-Thread, skip gracefully."""
+        import discord
+        from unittest.mock import AsyncMock, MagicMock
+        from claude_discord.database.resume_repo import PendingResume, PendingResumeRepository
+
+        entry = PendingResume(
+            id=1, thread_id=100, session_id=None, reason="self_restart",
+            resume_prompt=None, created_at="2026-02-21 20:00:00",
+        )
+        resume_repo = MagicMock(spec=PendingResumeRepository)
+        resume_repo.get_pending = AsyncMock(return_value=[entry])
+        resume_repo.delete = AsyncMock()
+
+        # Return a TextChannel (not a Thread) — should be skipped
+        bot = MagicMock()
+        bot.get_channel.return_value = MagicMock(spec=discord.TextChannel)
+
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), resume_repo=resume_repo)
+        # Should not raise
+        await cog.on_ready()
+        # delete was still called (single-fire)
+        resume_repo.delete.assert_called_once_with(1)

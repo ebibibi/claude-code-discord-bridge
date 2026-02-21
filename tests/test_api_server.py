@@ -355,3 +355,90 @@ class TestSpawn:
             headers={"Content-Type": "application/json"},
         )
         assert resp.status == 400
+
+
+class TestMarkResume:
+    """Tests for POST /api/mark-resume endpoint."""
+
+    @pytest.fixture
+    async def resume_client(self, repo: NotificationRepository, bot: MagicMock) -> TestClient:
+        import tempfile, os
+        from claude_discord.database.models import init_db as _init
+        from claude_discord.database.resume_repo import PendingResumeRepository
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        await _init(path)
+        resume_repo = PendingResumeRepository(path)
+
+        api = ApiServer(repo=repo, bot=bot, default_channel_id=12345, resume_repo=resume_repo)
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        yield client
+        await client.close()
+        os.unlink(path)
+
+    @pytest.mark.asyncio
+    async def test_mark_resume_returns_201(self, resume_client: TestClient) -> None:
+        resp = await resume_client.post(
+            "/api/mark-resume", json={"thread_id": 123456789}
+        )
+        assert resp.status == 201
+        data = await resp.json()
+        assert data["status"] == "marked"
+        assert "id" in data
+
+    @pytest.mark.asyncio
+    async def test_mark_resume_with_all_fields(self, resume_client: TestClient) -> None:
+        resp = await resume_client.post(
+            "/api/mark-resume",
+            json={
+                "thread_id": 987654321,
+                "session_id": "abc-123",
+                "reason": "self_restart",
+                "resume_prompt": "Please continue the previous task.",
+            },
+        )
+        assert resp.status == 201
+
+    @pytest.mark.asyncio
+    async def test_mark_resume_missing_thread_id_returns_400(
+        self, resume_client: TestClient
+    ) -> None:
+        resp = await resume_client.post("/api/mark-resume", json={})
+        assert resp.status == 400
+        data = await resp.json()
+        assert "thread_id" in data["error"]
+
+    @pytest.mark.asyncio
+    async def test_mark_resume_invalid_thread_id_returns_400(
+        self, resume_client: TestClient
+    ) -> None:
+        resp = await resume_client.post("/api/mark-resume", json={"thread_id": "not-a-number"})
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_mark_resume_without_repo_returns_503(
+        self, repo: NotificationRepository, bot: MagicMock
+    ) -> None:
+        api = ApiServer(repo=repo, bot=bot, default_channel_id=12345)  # no resume_repo
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/mark-resume", json={"thread_id": 111})
+            assert resp.status == 503
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_mark_resume_invalid_json_returns_400(
+        self, resume_client: TestClient
+    ) -> None:
+        resp = await resume_client.post(
+            "/api/mark-resume",
+            data=b"bad",
+            headers={"Content-Type": "application/json"},
+        )
+        assert resp.status == 400
