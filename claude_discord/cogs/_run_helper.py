@@ -224,6 +224,12 @@ async def run_claude_in_thread(
     # interrupted and the stream drains, we show Discord UI and resume.
     pending_ask: list[AskQuestion] | None = None
 
+    # Guard against sending session_start_embed more than once.
+    # Claude Code emits multiple SYSTEM events per session (init + hook feedback),
+    # and --include-partial-messages can produce partial+complete events for hooks.
+    # Without this guard, each SYSTEM event with session_id triggers a duplicate embed.
+    session_start_sent: bool = False
+
     try:
         async for event in runner.run(prompt, session_id=session_id):
             # System message: capture session_id
@@ -231,8 +237,9 @@ async def run_claude_in_thread(
                 state.session_id = event.session_id
                 if repo:
                     await repo.save(thread.id, state.session_id)
-                if not session_id:
+                if not session_id and not session_start_sent:
                     await thread.send(embed=session_start_embed(state.session_id))
+                    session_start_sent = True
 
             # While draining a runner that was interrupted for AskUserQuestion,
             # skip all further event processing.

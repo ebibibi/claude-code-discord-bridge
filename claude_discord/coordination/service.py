@@ -15,12 +15,8 @@ Claude side (see ~/.claude/skills/coordination-channel/):
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 import discord
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -47,15 +43,6 @@ class CoordinationService:
         if channel is None:
             logger.warning("Coordination channel %d not found in bot cache", self._channel_id)
         return channel  # type: ignore[return-value]
-
-    async def post_session_start(self, thread: discord.Thread, prompt_preview: str) -> None:
-        """Post a session-started notice to the coordination channel."""
-        channel = self._get_channel()
-        if channel is None:
-            return
-        preview = prompt_preview[:80].replace("\n", " ")
-        content = f"🔵 **{thread.name}** セッション開始 | {preview}"
-        await self._safe_send(channel, content)
 
     async def post_session_end(self, thread: discord.Thread) -> None:
         """Post a session-ended notice to the coordination channel."""

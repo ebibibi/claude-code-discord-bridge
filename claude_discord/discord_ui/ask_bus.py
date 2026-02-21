@@ -59,10 +59,6 @@ class AskAnswerBus:
         self._waiters.pop(thread_id, None)
         logger.debug("AskAnswerBus: unregistered waiter for thread %d", thread_id)
 
-    def has_waiter(self, thread_id: int) -> bool:
-        """Return True if a coroutine is currently waiting for this thread."""
-        return thread_id in self._waiters
-
 
 # Module-level singleton — import this everywhere.
 ask_bus = AskAnswerBus()

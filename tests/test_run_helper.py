@@ -553,6 +553,45 @@ class TestRunClaudeInThread:
         embed_calls = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
         assert any("Error" in (c.kwargs["embed"].title or "") for c in embed_calls)
 
+    @pytest.mark.asyncio
+    async def test_session_start_embed_sent_only_once_for_multiple_system_events(
+        self, thread: MagicMock, runner: MagicMock, repo: MagicMock
+    ) -> None:
+        """session_start_embed must be sent exactly once even when Claude emits
+        multiple SYSTEM events (e.g. init + hook feedback events with session_id).
+
+        Regression test for: Claude Code emits 3+ SYSTEM events per session when
+        hooks are configured (init + UserPromptSubmit hook partial + complete),
+        each with session_id, causing 3 identical session-start embeds to appear.
+        """
+        events = [
+            # Simulates: init SYSTEM message
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-1"),
+            # Simulates: hook feedback (UserPromptSubmit partial) — also has session_id
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-1"),
+            # Simulates: hook feedback (UserPromptSubmit complete) — also has session_id
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-1"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-1",
+                cost_usd=0.001,
+                duration_ms=500,
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+
+        await run_claude_in_thread(thread, runner, repo, "test", None)
+
+        start_embeds = [
+            c
+            for c in thread.send.call_args_list
+            if "embed" in c.kwargs and "session started" in (c.kwargs["embed"].title or "").lower()
+        ]
+        assert len(start_embeds) == 1, (
+            f"Expected exactly 1 session_start_embed, got {len(start_embeds)}"
+        )
+
 
 class TestMakeErrorEmbed:
     """Unit tests for the _make_error_embed router function."""
