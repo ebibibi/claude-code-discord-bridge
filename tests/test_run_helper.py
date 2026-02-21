@@ -493,6 +493,40 @@ class TestRunClaudeInThread:
         assert len(final_msgs) == 1
 
     @pytest.mark.asyncio
+    async def test_duplicate_not_reposted_when_result_text_differs_slightly(
+        self, thread: MagicMock, runner: MagicMock, repo: MagicMock
+    ) -> None:
+        """Even if result.text differs slightly from ASSISTANT text, don't re-send.
+
+        The RESULT event's `result` field can have subtle formatting differences
+        (trailing whitespace, newlines) compared to the ASSISTANT event text.
+        The old string-comparison guard would fail in this case and send the
+        text a second time. The flag-based guard prevents this.
+        """
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-1"),
+            StreamEvent(message_type=MessageType.ASSISTANT, text="Final answer."),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                text="Final answer.\n",  # trailing newline — subtle difference
+                session_id="sess-1",
+                cost_usd=0.01,
+                duration_ms=500,
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+
+        await run_claude_in_thread(thread, runner, repo, "test", None)
+
+        # Text should appear only once despite the trailing newline difference
+        text_messages = [
+            c for c in thread.send.call_args_list if c.args and isinstance(c.args[0], str)
+        ]
+        final_msgs = [c for c in text_messages if "Final answer." in c.args[0]]
+        assert len(final_msgs) == 1
+
+    @pytest.mark.asyncio
     async def test_repo_none_skips_save(self, thread: MagicMock, runner: MagicMock) -> None:
         """When repo is None (automated workflows), session save should be skipped."""
         events = [

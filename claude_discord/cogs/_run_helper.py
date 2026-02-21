@@ -230,6 +230,12 @@ async def run_claude_in_thread(
     # Without this guard, each SYSTEM event with session_id triggers a duplicate embed.
     session_start_sent: bool = False
 
+    # Guard against re-sending text that was already streamed to Discord.
+    # The RESULT event carries a `result` field that may differ subtly from the
+    # last ASSISTANT event text (trailing whitespace, join differences, etc.).
+    # A string comparison guard is fragile; tracking whether we sent text is safer.
+    assistant_text_sent: bool = False
+
     try:
         async for event in runner.run(prompt, session_id=session_id):
             # System message: capture session_id
@@ -282,6 +288,7 @@ async def run_claude_in_thread(
                                 await thread.send(chunk)
                         state.partial_text = ""
                         state.accumulated_text = event.text
+                        assistant_text_sent = True
 
                 if event.tool_use:
                     # Finalize any in-progress streaming text before the tool embed
@@ -325,18 +332,23 @@ async def run_claude_in_thread(
 
             # Result: session complete
             if event.is_complete:
-                # Finalize any streaming message
+                # Finalize any streaming message (shouldn't have content here normally,
+                # but guard against edge cases where the ASSISTANT complete event was missed)
                 if streamer.has_content:
                     await streamer.finalize()
+                    assistant_text_sent = True
 
                 if event.error:
                     await thread.send(embed=_make_error_embed(event.error))
                     if status:
                         await status.set_error()
                 else:
-                    # Post final result text (only if different from last posted text)
+                    # Post final result text only if no assistant text was already sent.
+                    # The RESULT event's `result` field can differ subtly from the last
+                    # ASSISTANT event text (trailing whitespace, join differences), so a
+                    # string comparison guard is unreliable. The flag is the source of truth.
                     response_text = event.text
-                    if response_text and response_text != state.accumulated_text:
+                    if response_text and not assistant_text_sent:
                         for chunk in chunk_message(response_text):
                             await thread.send(chunk)
 
