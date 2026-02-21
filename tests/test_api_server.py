@@ -238,15 +238,26 @@ class TestSpawn:
         return cog
 
     @pytest.fixture
+    def bot_with_text_channel(self) -> MagicMock:
+        """Bot mock whose get_channel() returns a discord.TextChannel spec mock."""
+        import discord
+
+        b = MagicMock()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        b.get_channel.return_value = channel
+        return b
+
+    @pytest.fixture
     async def spawn_client(
         self,
         repo: NotificationRepository,
-        bot: MagicMock,
+        bot_with_text_channel: MagicMock,
         mock_cog: MagicMock,
     ) -> TestClient:
         """ApiServer client with ClaudeChatCog pre-loaded in bot.cogs."""
-        bot.cogs = {"ClaudeChatCog": mock_cog}
-        api = ApiServer(repo=repo, bot=bot, default_channel_id=12345)
+        bot_with_text_channel.cogs = {"ClaudeChatCog": mock_cog}
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, default_channel_id=12345)
         server = TestServer(api.app)
         client = TestClient(server)
         await client.start_server()
@@ -266,7 +277,7 @@ class TestSpawn:
 
     @pytest.mark.asyncio
     async def test_spawn_passes_prompt_to_cog(
-        self, spawn_client: TestClient, mock_cog: MagicMock, bot: MagicMock
+        self, spawn_client: TestClient, mock_cog: MagicMock
     ) -> None:
         await spawn_client.post("/api/spawn", json={"prompt": "Organise Todoist inbox"})
         mock_cog.spawn_session.assert_called_once()

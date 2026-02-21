@@ -199,7 +199,7 @@ class ClaudeChatCog(commands.Cog):
 
     async def spawn_session(
         self,
-        channel: discord.abc.Messageable,
+        channel: discord.TextChannel,
         prompt: str,
         thread_name: str | None = None,
     ) -> discord.Thread:
@@ -222,7 +222,7 @@ class ClaudeChatCog(commands.Cog):
             The newly created :class:`discord.Thread`.
         """
         name = (thread_name or prompt)[:100]
-        thread = await channel.create_thread(  # type: ignore[attr-defined]
+        thread = await channel.create_thread(
             name=name,
             type=discord.ChannelType.public_thread,
             auto_archive_duration=60,

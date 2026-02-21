@@ -467,17 +467,25 @@ class ApiServer:
         except (TypeError, ValueError):
             return web.json_response({"error": "channel_id must be an integer"}, status=400)
 
-        channel = self.bot.get_channel(channel_id)
-        if channel is None:
+        import discord as _discord
+
+        raw = self.bot.get_channel(channel_id)
+        if raw is None:
             try:
-                channel = await self.bot.fetch_channel(channel_id)
+                raw = await self.bot.fetch_channel(channel_id)
             except Exception as exc:
                 return web.json_response({"error": str(exc)}, status=500)
+
+        if not isinstance(raw, _discord.TextChannel):
+            return web.json_response(
+                {"error": "Channel must be a text channel that supports threads"},
+                status=400,
+            )
 
         thread_name: str | None = data.get("thread_name") or None
 
         try:
-            thread = await cog.spawn_session(channel, prompt, thread_name=thread_name)
+            thread = await cog.spawn_session(raw, prompt, thread_name=thread_name)
         except Exception as exc:
             logger.error("spawn_session failed: %s", exc, exc_info=True)
             return web.json_response({"error": str(exc)}, status=500)
