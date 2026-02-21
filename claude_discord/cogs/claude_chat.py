@@ -23,6 +23,7 @@ from ..claude.runner import ClaudeRunner
 from ..concurrency import SessionRegistry
 from ..coordination.service import CoordinationService
 from ..database.ask_repo import PendingAskRepository
+from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
@@ -60,6 +61,7 @@ class ClaudeChatCog(commands.Cog):
         dashboard: ThreadStatusDashboard | None = None,
         coordination: CoordinationService | None = None,
         ask_repo: PendingAskRepository | None = None,
+        lounge_repo: LoungeRepository | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -75,6 +77,8 @@ class ClaudeChatCog(commands.Cog):
         self._coordination = coordination
         # For AskUserQuestion persistence across restarts
         self._ask_repo = ask_repo or getattr(bot, "ask_repo", None)
+        # AI Lounge repo (optional — lounge disabled when None)
+        self._lounge_repo = lounge_repo or getattr(bot, "lounge_repo", None)
 
     @property
     def active_session_count(self) -> int:
@@ -295,6 +299,7 @@ class ClaudeChatCog(commands.Cog):
                     status=status,
                     registry=self._registry,
                     ask_repo=self._ask_repo,
+                    lounge_repo=self._lounge_repo,
                 )
             finally:
                 await stop_view.disable(stop_msg)

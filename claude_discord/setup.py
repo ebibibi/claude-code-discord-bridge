@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from discord.ext.commands import Bot
 
     from .claude.runner import ClaudeRunner
+    from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
     from .database.task_repo import TaskRepository
 
@@ -27,6 +28,7 @@ class BridgeComponents:
 
     session_repo: SessionRepository
     task_repo: TaskRepository | None = None
+    lounge_repo: LoungeRepository | None = None
 
 
 async def setup_bridge(
@@ -39,6 +41,7 @@ async def setup_bridge(
     cli_sessions_path: str | None = None,
     enable_scheduler: bool = True,
     task_db_path: str = "data/tasks.db",
+    lounge_channel_id: int | None = None,
 ) -> BridgeComponents:
     """Initialize and register all ccdb Cogs in one call.
 
@@ -54,6 +57,10 @@ async def setup_bridge(
         cli_sessions_path: Path to ~/.claude/projects for session sync.
         enable_scheduler: Whether to enable SchedulerCog.
         task_db_path: Path for scheduled tasks SQLite DB.
+        lounge_channel_id: Discord channel ID for AI Lounge messages.
+                           When set, lounge messages are forwarded here.
+                           When None, lounge is still active (stored in DB)
+                           but no Discord channel is posted to.
 
     Returns:
         BridgeComponents with references to initialized repositories.
@@ -63,17 +70,19 @@ async def setup_bridge(
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
     from .database.ask_repo import PendingAskRepository
+    from .database.lounge_repo import LoungeRepository
     from .database.models import init_db
     from .database.repository import SessionRepository
     from .database.settings_repo import SettingsRepository
     from .database.task_repo import TaskRepository
 
-    # --- Session DB ---
+    # --- Session DB (also hosts lounge_messages table) ---
     os.makedirs(os.path.dirname(session_db_path) or ".", exist_ok=True)
     await init_db(session_db_path)
     session_repo = SessionRepository(session_db_path)
     settings_repo = SettingsRepository(session_db_path)
     ask_repo = PendingAskRepository(session_db_path)
+    lounge_repo = LoungeRepository(session_db_path)
     logger.info("Session DB initialized: %s", session_db_path)
 
     # --- ClaudeChatCog ---
@@ -83,6 +92,7 @@ async def setup_bridge(
         runner=runner,
         allowed_user_ids=allowed_user_ids,
         ask_repo=ask_repo,
+        lounge_repo=lounge_repo,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")
@@ -122,4 +132,5 @@ async def setup_bridge(
     return BridgeComponents(
         session_repo=session_repo,
         task_repo=task_repo,
+        lounge_repo=lounge_repo,
     )

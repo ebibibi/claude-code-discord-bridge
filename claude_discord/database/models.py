@@ -36,6 +36,15 @@ CREATE TABLE IF NOT EXISTS pending_asks (
     question_idx INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+CREATE TABLE IF NOT EXISTS lounge_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT NOT NULL DEFAULT 'AI',
+    message TEXT NOT NULL,
+    posted_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_lounge_posted_at ON lounge_messages(posted_at);
 """
 
 # Migrations for existing databases that lack new columns.
@@ -43,6 +52,15 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'discord'",
     "ALTER TABLE sessions ADD COLUMN summary TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)",
+    # Lounge table added in v1.x — safe to run on existing DBs
+    (
+        "CREATE TABLE IF NOT EXISTS lounge_messages ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "label TEXT NOT NULL DEFAULT 'AI', "
+        "message TEXT NOT NULL, "
+        "posted_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
+    ),
+    "CREATE INDEX IF NOT EXISTS idx_lounge_posted_at ON lounge_messages(posted_at)",
 ]
 
 

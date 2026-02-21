@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     import discord
     from discord.ext.commands import Bot
 
+    from ..database.lounge_repo import LoungeRepository
     from ..database.notification_repo import NotificationRepository
     from ..database.task_repo import TaskRepository
 
@@ -56,6 +57,8 @@ class ApiServer:
         port: int = 8080,
         api_secret: str | None = None,
         task_repo: TaskRepository | None = None,
+        lounge_repo: LoungeRepository | None = None,
+        lounge_channel_id: int | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -64,6 +67,8 @@ class ApiServer:
         self.port = port
         self.api_secret = api_secret
         self.task_repo = task_repo
+        self.lounge_repo = lounge_repo
+        self.lounge_channel_id = lounge_channel_id
 
         self.app = web.Application()
         if self.api_secret:
@@ -82,6 +87,9 @@ class ApiServer:
         self.app.router.add_get("/api/tasks", self.list_tasks)
         self.app.router.add_delete("/api/tasks/{id}", self.delete_task)
         self.app.router.add_patch("/api/tasks/{id}", self.patch_task)
+        # AI Lounge routes (requires lounge_repo)
+        self.app.router.add_get("/api/lounge", self.get_lounge)
+        self.app.router.add_post("/api/lounge", self.post_lounge)
 
     @web.middleware
     async def _auth_middleware(
@@ -318,6 +326,102 @@ class ApiServer:
         if updated:
             return web.json_response({"status": "updated"})
         return web.json_response({"error": "Task not found"}, status=404)
+
+    # ------------------------------------------------------------------
+    # AI Lounge endpoints (/api/lounge)
+    # ------------------------------------------------------------------
+
+    def _require_lounge_repo(self) -> web.Response | None:
+        """Return a 503 response if lounge_repo is not configured."""
+        if self.lounge_repo is None:
+            return web.json_response(
+                {"error": "AI Lounge not configured (lounge_repo is None)"},
+                status=503,
+            )
+        return None
+
+    async def get_lounge(self, request: web.Request) -> web.Response:
+        """GET /api/lounge — list recent AI Lounge messages.
+
+        Query params:
+            limit: Maximum number of messages to return (default 10, max 50).
+        """
+        if err := self._require_lounge_repo():
+            return err
+
+        try:
+            raw_limit = request.rel_url.query.get("limit", "10")
+            limit = max(1, min(50, int(raw_limit)))
+        except ValueError:
+            return web.json_response({"error": "limit must be an integer"}, status=400)
+
+        messages = await self.lounge_repo.get_recent(limit=limit)  # type: ignore[union-attr]
+        return web.json_response(
+            {
+                "messages": [
+                    {
+                        "id": m.id,
+                        "label": m.label,
+                        "message": m.message,
+                        "posted_at": m.posted_at,
+                    }
+                    for m in messages
+                ]
+            }
+        )
+
+    async def post_lounge(self, request: web.Request) -> web.Response:
+        """POST /api/lounge — post a message to the AI Lounge.
+
+        Body (JSON):
+            message: The lounge message text (required).
+            label: The sender's label/nickname (optional, default "AI").
+
+        The message is stored in SQLite and forwarded to the configured
+        lounge Discord channel (if lounge_channel_id is set).
+        """
+        if err := self._require_lounge_repo():
+            return err
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        message = data.get("message", "").strip()
+        if not message:
+            return web.json_response({"error": "message is required"}, status=400)
+
+        label = str(data.get("label", "AI")).strip() or "AI"
+
+        stored = await self.lounge_repo.post(message=message, label=label)  # type: ignore[union-attr]
+
+        # Forward to Discord lounge channel if configured
+        if self.lounge_channel_id:
+            await self._send_lounge_to_discord(stored.label, stored.message, stored.posted_at)
+
+        return web.json_response(
+            {
+                "status": "posted",
+                "id": stored.id,
+                "label": stored.label,
+                "message": stored.message,
+                "posted_at": stored.posted_at,
+            },
+            status=201,
+        )
+
+    async def _send_lounge_to_discord(self, label: str, message: str, posted_at: str) -> None:
+        """Send a lounge message to the configured Discord lounge channel."""
+        try:
+            channel = self.bot.get_channel(self.lounge_channel_id)  # type: ignore[arg-type]
+            if channel is None:
+                channel = await self.bot.fetch_channel(self.lounge_channel_id)  # type: ignore[arg-type]
+            if hasattr(channel, "send"):
+                timestamp = posted_at[11:16] if len(posted_at) >= 16 else posted_at
+                await channel.send(f"**[{label}]** {message} *({timestamp})*")  # type: ignore[union-attr]
+        except Exception:
+            logger.warning("Failed to forward lounge message to Discord", exc_info=True)
 
     @staticmethod
     def _build_embed(

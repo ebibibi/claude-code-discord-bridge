@@ -18,6 +18,7 @@ from ..claude.runner import ClaudeRunner
 from ..claude.types import AskQuestion, MessageType, SessionState, ToolUseEvent
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
+from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..discord_ui.ask_bus import ask_bus as _ask_bus
 from ..discord_ui.ask_view import AskView
@@ -34,6 +35,7 @@ from ..discord_ui.embeds import (
     tool_use_embed,
 )
 from ..discord_ui.status import StatusManager
+from ..lounge import build_lounge_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +173,7 @@ async def run_claude_in_thread(
     status: StatusManager | None = None,
     registry: SessionRegistry | None = None,
     ask_repo: PendingAskRepository | None = None,
+    lounge_repo: LoungeRepository | None = None,
 ) -> str | None:
     """Execute Claude Code CLI and stream results to a Discord thread.
 
@@ -189,6 +192,16 @@ async def run_claude_in_thread(
     Returns:
         The final session_id, or None if the run failed.
     """
+    # Layer 3: Prepend AI Lounge context (recent messages + invitation)
+    if lounge_repo is not None:
+        try:
+            recent = await lounge_repo.get_recent(limit=10)
+            lounge_context = build_lounge_prompt(recent)
+            prompt = lounge_context + "\n\n" + prompt
+            logger.debug("Lounge context injected (%d recent message(s))", len(recent))
+        except Exception:
+            logger.warning("Failed to fetch lounge context — skipping", exc_info=True)
+
     # Layer 1 + 2: Register session and prepend concurrency notice
     if registry is not None:
         registry.register(thread.id, prompt[:100], runner.working_dir)
@@ -374,6 +387,7 @@ async def run_claude_in_thread(
                 status=status,
                 registry=registry,
                 ask_repo=ask_repo,
+                lounge_repo=lounge_repo,
             )
 
     return state.session_id
