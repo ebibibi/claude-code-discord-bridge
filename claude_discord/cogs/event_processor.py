@@ -273,6 +273,7 @@ class EventProcessor:
             self._state.partial_text = ""
             self._state.accumulated_text = event.text
             self._assistant_text_sent = True
+            await self._bump_stop()
 
     async def _handle_tool_use(self, event: StreamEvent) -> None:
         """Post tool use embed and start the live timer."""
@@ -293,3 +294,10 @@ class EventProcessor:
 
         timer = LiveToolTimer(msg, event.tool_use)
         self._state.active_timers[event.tool_use.tool_id] = timer.start()
+
+        await self._bump_stop()
+
+    async def _bump_stop(self) -> None:
+        """Move the Stop button to the bottom of the thread if configured."""
+        if self._config.stop_view:
+            await self._config.stop_view.bump(self._config.thread)

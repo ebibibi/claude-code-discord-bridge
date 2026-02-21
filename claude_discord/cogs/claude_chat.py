@@ -410,6 +410,7 @@ class ClaudeChatCog(commands.Cog):
 
             stop_view = StopView(runner)
             stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
+            stop_view.set_message(stop_msg)
 
             try:
                 await run_claude_with_config(
@@ -423,10 +424,11 @@ class ClaudeChatCog(commands.Cog):
                         registry=self._registry,
                         ask_repo=self._ask_repo,
                         lounge_repo=self._lounge_repo,
+                        stop_view=stop_view,
                     )
                 )
             finally:
-                await stop_view.disable(stop_msg)
+                await stop_view.disable()
                 self._active_runners.pop(thread.id, None)
 
                 # Announce session end to coordination channel (no-op if unconfigured)

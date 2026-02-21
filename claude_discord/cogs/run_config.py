@@ -9,6 +9,7 @@ added without changing every caller).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import discord
 
@@ -18,6 +19,9 @@ from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..discord_ui.status import StatusManager
+
+if TYPE_CHECKING:
+    from ..discord_ui.views import StopView
 
 
 @dataclass
@@ -39,6 +43,8 @@ class RunConfig:
                   notice is prepended to the prompt.
         ask_repo: Repository for persisting AskUserQuestion state across restarts.
         lounge_repo: Repository for AI Lounge context injection.
+        stop_view: StopView instance to bump after each major message, keeping
+                   the Stop button at the bottom of the thread.
     """
 
     thread: discord.Thread
@@ -50,6 +56,7 @@ class RunConfig:
     registry: SessionRegistry | None = None
     ask_repo: PendingAskRepository | None = None
     lounge_repo: LoungeRepository | None = None
+    stop_view: StopView | None = None
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.
