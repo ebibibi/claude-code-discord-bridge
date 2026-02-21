@@ -352,7 +352,9 @@ claude_discord/
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
     webhook_trigger.py     # Webhook → Claude Code タスク実行（CI/CD）
     auto_upgrade.py        # Webhook → パッケージアップグレード + 再起動
-    _run_helper.py         # 共有 Claude CLI 実行ロジック
+    event_processor.py     # EventProcessor — stream-json イベントのステートマシン
+    run_config.py          # RunConfig データクラス — CLI 実行パラメーターをまとめる
+    _run_helper.py         # 薄いオーケストレーション層（run_claude_with_config + 後方互換 shim）
   claude/
     runner.py              # Claude CLI subprocess マネージャー
     parser.py              # stream-json イベントパーサー
@@ -361,6 +363,9 @@ claude_discord/
     models.py              # SQLite スキーマ
     repository.py          # セッション CRUD 操作
     notification_repo.py   # スケジュール通知 CRUD
+    task_repo.py           # スケジュールタスク CRUD
+    ask_repo.py            # 保留中 AskUserQuestion CRUD
+    settings_repo.py       # ギルドごとの設定
   coordination/
     service.py             # CoordinationService — セッションライフサイクルイベントを共有チャンネルに投稿
   discord_ui/
@@ -368,6 +373,9 @@ claude_discord/
     chunker.py             # フェンス・テーブル対応メッセージ分割
     embeds.py              # Discord embed ビルダー
     ask_view.py            # AskUserQuestion 用 Discord ボタン / Select Menu
+    ask_handler.py         # collect_ask_answers() — AskUserQuestion UI + DB ライフサイクル
+    streaming_manager.py   # StreamingMessageManager — デバウンス付きインプレース編集
+    tool_timer.py          # LiveToolTimer — 長時間ツール実行の経過時間カウンター
     thread_dashboard.py    # スレッドごとのセッション状態を表示する live ピン留め embed
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）

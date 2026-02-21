@@ -90,7 +90,8 @@ uv run ruff format claude_discord/
 ## 新しい Cog の追加
 
 1. `claude_discord/cogs/your_cog.py` を作成
-2. Claude CLI 実行には `_run_helper.run_claude_in_thread()` を使用
+2. Claude CLI 実行には `_run_helper.run_claude_with_config(RunConfig(...))` を使用
+   （旧 `run_claude_in_thread()` shim も引き続き使えるが、新規コードは `run_claude_with_config` を優先）
 3. `claude_discord/cogs/__init__.py` からエクスポート
 4. `claude_discord/__init__.py` のパブリック API に追加
 5. `tests/test_your_cog.py` にテストを書く

@@ -412,7 +412,9 @@ claude_discord/
     scheduler.py           # Periodic Claude Code task executor
     webhook_trigger.py     # Webhook → Claude Code task execution (CI/CD)
     auto_upgrade.py        # Webhook → package upgrade + drain-aware restart
-    _run_helper.py         # Shared Claude CLI execution logic
+    event_processor.py     # EventProcessor — state machine for stream-json events
+    run_config.py          # RunConfig dataclass — bundles all CLI execution params
+    _run_helper.py         # Thin orchestration layer (run_claude_with_config + shim)
   claude/
     runner.py              # Claude CLI subprocess manager
     parser.py              # stream-json event parser
@@ -431,6 +433,9 @@ claude_discord/
     chunker.py             # Fence- and table-aware message splitting
     embeds.py              # Discord embed builders
     ask_view.py            # Buttons/Select Menus for AskUserQuestion
+    ask_handler.py         # collect_ask_answers() — AskUserQuestion UI + DB lifecycle
+    streaming_manager.py   # StreamingMessageManager — debounced in-place message edits
+    tool_timer.py          # LiveToolTimer — elapsed time counter for long-running tools
     thread_dashboard.py    # Live pinned embed showing session states
   session_sync.py          # CLI session discovery and import
   ext/
