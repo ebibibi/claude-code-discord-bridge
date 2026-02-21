@@ -18,23 +18,50 @@ if TYPE_CHECKING:
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
     from .database.task_repo import TaskRepository
+    from .ext.api_server import ApiServer
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class BridgeComponents:
-    """References to initialized bridge components."""
+    """References to initialized bridge components.
+
+    After calling setup_bridge(), pass this to apply_to_api_server() so the
+    ApiServer gains access to all repos without manual wiring::
+
+        components = await setup_bridge(bot, runner, api_server=api_server)
+
+    Or manually if you need more control::
+
+        components = await setup_bridge(bot, runner)
+        components.apply_to_api_server(api_server)
+    """
 
     session_repo: SessionRepository
     task_repo: TaskRepository | None = None
     lounge_repo: LoungeRepository | None = None
+
+    def apply_to_api_server(self, api_server: ApiServer) -> None:
+        """Wire all optional repos to an ApiServer instance.
+
+        Idempotent — safe to call multiple times.  Only non-None repos are
+        applied, so repos that are disabled (e.g. scheduler off) are left as-is.
+
+        When a new repo is added to BridgeComponents in the future, add it here
+        and consumers automatically pick it up without changing their own code.
+        """
+        if self.task_repo is not None:
+            api_server.task_repo = self.task_repo
+        if self.lounge_repo is not None:
+            api_server.lounge_repo = self.lounge_repo
 
 
 async def setup_bridge(
     bot: Bot,
     runner: ClaudeRunner,
     *,
+    api_server: ApiServer | None = None,
     session_db_path: str = "data/sessions.db",
     allowed_user_ids: set[int] | None = None,
     claude_channel_id: int | None = None,
@@ -48,9 +75,17 @@ async def setup_bridge(
     This is the recommended way for consumers to set up ccdb.
     New Cogs added to ccdb will be automatically included.
 
+    Pass ``api_server`` to automatically wire all repos and set the runner's
+    ``api_port`` — consumers then need zero manual wiring::
+
+        components = await setup_bridge(bot, runner, api_server=api_server, ...)
+        # Done — no manual repo wiring needed.
+
     Args:
         bot: Discord bot instance.
         runner: ClaudeRunner for Claude CLI invocation.
+        api_server: Optional ApiServer to auto-wire repos into.  Also sets
+                    runner.api_port so CCDB_API_URL is available to Claude.
         session_db_path: Path for session SQLite DB.
         allowed_user_ids: Set of Discord user IDs allowed to use Claude.
         claude_channel_id: Channel ID for Claude chat (needed for SkillCommandCog).
@@ -134,8 +169,17 @@ async def setup_bridge(
         await bot.add_cog(scheduler_cog)
         logger.info("Registered SchedulerCog")
 
-    return BridgeComponents(
+    components = BridgeComponents(
         session_repo=session_repo,
         task_repo=task_repo,
         lounge_repo=lounge_repo,
     )
+
+    # Auto-wire repos to ApiServer and set runner.api_port if provided
+    if api_server is not None:
+        components.apply_to_api_server(api_server)
+        if runner.api_port is None:
+            runner.api_port = api_server.port
+        logger.info("Auto-wired repos to ApiServer (port=%d)", api_server.port)
+
+    return components

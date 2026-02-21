@@ -117,9 +117,15 @@ class TestBuildEnv:
         assert env["CCDB_API_URL"] == "http://127.0.0.1:8099"
 
     def test_no_ccdb_api_url_when_api_port_not_set(self) -> None:
-        runner = ClaudeRunner()
-        env = runner._build_env()
-        assert "CCDB_API_URL" not in env
+        # Remove CCDB_API_URL from the process env so it isn't inherited
+        original = os.environ.pop("CCDB_API_URL", None)
+        try:
+            runner = ClaudeRunner()
+            env = runner._build_env()
+            assert "CCDB_API_URL" not in env
+        finally:
+            if original is not None:
+                os.environ["CCDB_API_URL"] = original
 
     def test_injects_ccdb_api_secret_when_set(self) -> None:
         runner = ClaudeRunner(api_port=8099, api_secret="my-secret")
