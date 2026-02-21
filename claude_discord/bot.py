@@ -16,6 +16,7 @@ from .discord_ui.ask_view import AskView
 
 if TYPE_CHECKING:
     from .database.ask_repo import PendingAskRepository
+    from .database.lounge_repo import LoungeRepository
     from .discord_ui.thread_dashboard import ThreadStatusDashboard
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ class ClaudeDiscordBot(commands.Bot):
         owner_id: int | None = None,
         coordination_channel_id: int | None = None,
         ask_repo: PendingAskRepository | None = None,
+        lounge_repo: LoungeRepository | None = None,
+        lounge_channel_id: int | None = None,
     ) -> None:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -48,6 +51,9 @@ class ClaudeDiscordBot(commands.Bot):
         self.thread_dashboard: ThreadStatusDashboard | None = None
         # Coordination channel for multi-session awareness (optional)
         self.coordination = CoordinationService(self, coordination_channel_id)
+        # AI Lounge — casual shared space for concurrent Claude sessions (optional)
+        self.lounge_repo: LoungeRepository | None = lounge_repo
+        self.lounge_channel_id: int | None = lounge_channel_id
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "?")

@@ -88,6 +88,194 @@ class TestStreamingMessageManager:
         assert mgr._buffer == "first"
 
 
+class TestPartialMessageStreaming:
+    """Tests for partial message streaming behavior introduced with --include-partial-messages.
+
+    stream-json delivers the FULL accumulated text on each partial event, not just a delta.
+    The handler must compute deltas and stream them into a single Discord message
+    (edit in-place) rather than creating new messages for every partial event.
+    """
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        t.id = 99999
+        msg = MagicMock(spec=discord.Message)
+        msg.edit = AsyncMock()
+        t.send = AsyncMock(return_value=msg)
+        return t
+
+    @pytest.fixture
+    def runner(self) -> MagicMock:
+        return MagicMock()
+
+    def _make_async_gen(self, events: list[StreamEvent]):
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return gen
+
+    @pytest.mark.asyncio
+    async def test_partial_text_does_not_flood_discord(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Multiple partial text events should not each create a new Discord message.
+
+        With --include-partial-messages, stream-json sends the same message many times
+        with growing text. We must NOT call thread.send() on every partial update.
+        """
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"),
+            StreamEvent(message_type=MessageType.ASSISTANT, text="I'll", is_partial=True),
+            StreamEvent(message_type=MessageType.ASSISTANT, text="I'll read", is_partial=True),
+            StreamEvent(
+                message_type=MessageType.ASSISTANT,
+                text="I'll read the file.",
+                is_partial=False,  # complete
+                tool_use=ToolUseEvent(
+                    tool_id="t1",
+                    tool_name="Read",
+                    tool_input={"file_path": "/tmp/test.py"},
+                    category=ToolCategory.READ,
+                ),
+            ),
+            StreamEvent(message_type=MessageType.USER, tool_result_id="t1"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="s1",
+                cost_usd=0.01,
+                duration_ms=1000,
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+
+        await run_claude_in_thread(thread, runner, None, "test", None)
+
+        # Partial events must NOT each create a new message.
+        # The first partial triggers thread.send() once (to create the message),
+        # then subsequent partials/tool edits it in-place via msg.edit().
+        text_sends = [
+            c for c in thread.send.call_args_list if c.args and isinstance(c.args[0], str)
+        ]
+        # "I'll read the file." should appear at most once as a fresh send
+        assert len([c for c in text_sends if "I'll" in c.args[0]]) <= 1
+
+    @pytest.mark.asyncio
+    async def test_partial_text_finalizes_before_tool_embed(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Streaming text must be finalized before a tool embed is posted."""
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"),
+            StreamEvent(message_type=MessageType.ASSISTANT, text="Reading now...", is_partial=True),
+            StreamEvent(
+                message_type=MessageType.ASSISTANT,
+                text="Reading now...",
+                is_partial=False,
+                tool_use=ToolUseEvent(
+                    tool_id="t1",
+                    tool_name="Read",
+                    tool_input={"file_path": "/tmp/x.py"},
+                    category=ToolCategory.READ,
+                ),
+            ),
+            StreamEvent(message_type=MessageType.USER, tool_result_id="t1"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="s1",
+                cost_usd=0.01,
+                duration_ms=500,
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+
+        await run_claude_in_thread(thread, runner, None, "test", None)
+
+        # At least one non-embed send (the text) and at least one embed send (tool)
+        text_sends = [
+            c for c in thread.send.call_args_list if c.args and isinstance(c.args[0], str)
+        ]
+        embed_sends = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert len(text_sends) >= 1
+        assert len(embed_sends) >= 1
+
+    @pytest.mark.asyncio
+    async def test_partial_thinking_not_posted_as_embed(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Partial thinking events must NOT each create a thinking embed.
+
+        Only the final complete thinking block should produce an embed.
+        """
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"),
+            # Partial thinking events (simulating --include-partial-messages)
+            StreamEvent(message_type=MessageType.ASSISTANT, thinking="Let me", is_partial=True),
+            StreamEvent(
+                message_type=MessageType.ASSISTANT,
+                thinking="Let me think about this...",
+                is_partial=True,
+            ),
+            # Complete message with final thinking + text
+            StreamEvent(
+                message_type=MessageType.ASSISTANT,
+                thinking="Let me think about this carefully.",
+                text="Here is my answer.",
+                is_partial=False,
+            ),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                text="Here is my answer.",
+                session_id="s1",
+                cost_usd=0.01,
+                duration_ms=1000,
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+
+        await run_claude_in_thread(thread, runner, None, "test", None)
+
+        embed_sends = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        thinking_embeds = [
+            c
+            for c in embed_sends
+            if hasattr(c.kwargs.get("embed"), "title")
+            and "Thinking" in (c.kwargs["embed"].title or "")
+        ]
+        # Exactly ONE thinking embed — the final complete one, not each partial
+        assert len(thinking_embeds) == 1
+
+    @pytest.mark.asyncio
+    async def test_is_partial_detection_in_parser(self) -> None:
+        """Parser must set is_partial based on stop_reason."""
+        from claude_discord.claude.parser import parse_line
+
+        partial = parse_line(
+            '{"type": "assistant", "message": {"stop_reason": null, "content": '
+            '[{"type": "text", "text": "hello"}]}}'
+        )
+        assert partial is not None
+        assert partial.is_partial is True
+
+        complete = parse_line(
+            '{"type": "assistant", "message": {"stop_reason": "end_turn", "content": '
+            '[{"type": "text", "text": "hello"}]}}'
+        )
+        assert complete is not None
+        assert complete.is_partial is False
+
+        tool_stop = parse_line(
+            '{"type": "assistant", "message": {"stop_reason": "tool_use", "content": '
+            '[{"type": "text", "text": "hello"}]}}'
+        )
+        assert tool_stop is not None
+        assert tool_stop.is_partial is False
+
+
 class TestRunClaudeInThread:
     """Integration tests for run_claude_in_thread with mocked runner."""
 

@@ -15,6 +15,7 @@ from .bot import ClaudeDiscordBot
 from .claude.runner import ClaudeRunner
 from .cogs.claude_chat import ClaudeChatCog
 from .database.ask_repo import PendingAskRepository
+from .database.lounge_repo import LoungeRepository
 from .database.models import init_db
 from .database.repository import SessionRepository
 from .utils.logger import setup_logging
@@ -64,6 +65,7 @@ async def main() -> None:
     # Create components
     repo = SessionRepository(db_path)
     ask_repo = PendingAskRepository(db_path)
+    lounge_repo = LoungeRepository(db_path)
     runner = ClaudeRunner(
         command=config["claude_command"],
         model=config["claude_model"],
@@ -81,6 +83,8 @@ async def main() -> None:
         owner_id=owner_id,
         coordination_channel_id=coordination_channel_id,
         ask_repo=ask_repo,
+        lounge_repo=lounge_repo,
+        lounge_channel_id=coordination_channel_id,  # lounge uses the same channel
     )
 
     # Register cog
@@ -90,6 +94,7 @@ async def main() -> None:
         runner=runner,
         max_concurrent=int(config["max_concurrent"]),
         ask_repo=ask_repo,
+        lounge_repo=lounge_repo,
     )
 
     async with bot:

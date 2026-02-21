@@ -18,6 +18,7 @@ from ..claude.runner import ClaudeRunner
 from ..claude.types import AskQuestion, MessageType, SessionState, ToolUseEvent
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
+from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..discord_ui.ask_bus import ask_bus as _ask_bus
 from ..discord_ui.ask_view import AskView
@@ -34,6 +35,7 @@ from ..discord_ui.embeds import (
     tool_use_embed,
 )
 from ..discord_ui.status import StatusManager
+from ..lounge import build_lounge_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +173,7 @@ async def run_claude_in_thread(
     status: StatusManager | None = None,
     registry: SessionRegistry | None = None,
     ask_repo: PendingAskRepository | None = None,
+    lounge_repo: LoungeRepository | None = None,
 ) -> str | None:
     """Execute Claude Code CLI and stream results to a Discord thread.
 
@@ -189,6 +192,16 @@ async def run_claude_in_thread(
     Returns:
         The final session_id, or None if the run failed.
     """
+    # Layer 3: Prepend AI Lounge context (recent messages + invitation)
+    if lounge_repo is not None:
+        try:
+            recent = await lounge_repo.get_recent(limit=10)
+            lounge_context = build_lounge_prompt(recent)
+            prompt = lounge_context + "\n\n" + prompt
+            logger.debug("Lounge context injected (%d recent message(s))", len(recent))
+        except Exception:
+            logger.warning("Failed to fetch lounge context — skipping", exc_info=True)
+
     # Layer 1 + 2: Register session and prepend concurrency notice
     if registry is not None:
         registry.register(thread.id, prompt[:100], runner.working_dir)
@@ -228,27 +241,47 @@ async def run_claude_in_thread(
 
             # Assistant message: text, thinking, or tool use
             if event.message_type == MessageType.ASSISTANT:
-                # Extended thinking — post as a collapsed embed
-                if event.thinking:
+                # Extended thinking — skip partial events to avoid flooding with duplicate
+                # embeds. With --include-partial-messages, thinking blocks arrive many times
+                # as Claude generates them; post only the final complete version.
+                if event.thinking and not event.is_partial:
                     await thread.send(embed=thinking_embed(event.thinking))
 
-                # Redacted thinking — post a placeholder embed
-                if event.has_redacted_thinking:
+                # Redacted thinking — post only on complete messages
+                if event.has_redacted_thinking and not event.is_partial:
                     await thread.send(embed=redacted_thinking_embed())
 
-                # Intermediate text — post immediately via streaming manager
+                # Text — stream into one Discord message, editing in-place as chunks arrive.
+                # Partial events extend the streaming message; complete events finalize it.
+                # stream-json delivers the full accumulated text on every partial event, so
+                # we compute the delta to feed into StreamingMessageManager.append().
                 if event.text:
-                    # Finalize any in-progress streaming message first
+                    if event.is_partial:
+                        delta = event.text[len(state.partial_text) :]
+                        state.partial_text = event.text
+                        if delta:
+                            await streamer.append(delta)
+                    else:
+                        # Complete text block: flush the streamer with any remaining delta
+                        delta = event.text[len(state.partial_text) :]
+                        if streamer.has_content:
+                            if delta:
+                                await streamer.append(delta)
+                            await streamer.finalize()
+                            streamer = StreamingMessageManager(thread)
+                        else:
+                            # No partial events arrived — post the full text directly
+                            for chunk in chunk_message(event.text):
+                                await thread.send(chunk)
+                        state.partial_text = ""
+                        state.accumulated_text = event.text
+
+                if event.tool_use:
+                    # Finalize any in-progress streaming text before the tool embed
                     if streamer.has_content:
                         await streamer.finalize()
                         streamer = StreamingMessageManager(thread)
-
-                    # Post intermediate text chunks immediately
-                    for chunk in chunk_message(event.text):
-                        await thread.send(chunk)
-                    state.accumulated_text = event.text
-
-                if event.tool_use:
+                    state.partial_text = ""
                     if status:
                         await status.set_tool(event.tool_use.category)
                     embed = tool_use_embed(event.tool_use, in_progress=True)
@@ -354,6 +387,7 @@ async def run_claude_in_thread(
                 status=status,
                 registry=registry,
                 ask_repo=ask_repo,
+                lounge_repo=lounge_repo,
             )
 
     return state.session_id
