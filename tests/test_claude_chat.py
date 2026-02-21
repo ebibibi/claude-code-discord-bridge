@@ -386,9 +386,7 @@ class TestZeroConfigCoordination:
         """Explicitly passed coordination= wins over everything."""
         explicit = CoordinationService(MagicMock(), channel_id=9999)
         bot = MagicMock()
-        cog = ClaudeChatCog(
-            bot=bot, repo=MagicMock(), runner=MagicMock(), coordination=explicit
-        )
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), coordination=explicit)
         assert cog._get_coordination() is explicit
 
     def test_result_is_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:

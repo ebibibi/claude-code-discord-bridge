@@ -149,9 +149,7 @@ class TestTableChunking:
         for i, chunk in enumerate(chunks):
             if "| val |" in chunk or "| Col |" in chunk:
                 fence_count = chunk.count("```")
-                assert fence_count % 2 == 0, (
-                    f"Chunk {i} has unbalanced fences: {chunk[:120]!r}"
-                )
+                assert fence_count % 2 == 0, f"Chunk {i} has unbalanced fences: {chunk[:120]!r}"
 
 
 class TestCloseOpenFence:

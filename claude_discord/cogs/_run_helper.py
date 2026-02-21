@@ -6,25 +6,21 @@ This module extracts that shared logic to avoid duplication.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import re
-import time
 
 import discord
 
 from ..claude.runner import ClaudeRunner
-from ..claude.types import AskQuestion, MessageType, SessionState, ToolUseEvent
+from ..claude.types import MessageType, SessionState
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
-from ..discord_ui.ask_bus import ask_bus as _ask_bus
-from ..discord_ui.ask_view import AskView
+from ..discord_ui.ask_handler import ASK_ANSWER_TIMEOUT, collect_ask_answers  # noqa: F401
 from ..discord_ui.chunker import chunk_message
 from ..discord_ui.embeds import (
-    ask_embed,
     error_embed,
     redacted_thinking_embed,
     session_complete_embed,
@@ -35,133 +31,20 @@ from ..discord_ui.embeds import (
     tool_use_embed,
 )
 from ..discord_ui.status import StatusManager
+from ..discord_ui.streaming_manager import (  # noqa: F401
+    STREAM_EDIT_INTERVAL,
+    STREAM_MAX_CHARS,
+    StreamingMessageManager,
+)
+from ..discord_ui.tool_timer import TOOL_TIMER_INTERVAL, LiveToolTimer  # noqa: F401
 from ..lounge import build_lounge_prompt
 
 logger = logging.getLogger(__name__)
-
-# Streaming message edit interval (seconds). Discord rate limit is 5 edits/5s.
-STREAM_EDIT_INTERVAL = 1.5
-
-# Max characters before starting a new streaming message
-STREAM_MAX_CHARS = 1900
 
 # Max characters for tool result display.
 # Sized to show ~30 lines of typical output (100 chars/line × 30 = 3000).
 # The embed description limit is 4096, so this leaves room for code block markers.
 TOOL_RESULT_MAX_CHARS = 3000
-
-# How often to update in-progress tool embeds with elapsed time (seconds).
-# Gives users visibility into long-running commands (builds, auth flows, etc.).
-TOOL_TIMER_INTERVAL = 10
-
-
-class StreamingMessageManager:
-    """Manages a Discord message that gets edited as streaming text arrives.
-
-    Creates a message on first text, then edits it at a debounced interval.
-    When text exceeds Discord's limit, starts a new message.
-    """
-
-    def __init__(self, thread: discord.Thread) -> None:
-        self._thread = thread
-        self._current_message: discord.Message | None = None
-        self._buffer: str = ""
-        self._last_edit_time: float = 0
-        self._pending_edit: asyncio.Task | None = None
-        self._finalized: bool = False
-
-    @property
-    def has_content(self) -> bool:
-        return bool(self._buffer)
-
-    async def append(self, text: str) -> None:
-        """Append text to the streaming buffer and schedule an edit."""
-        if self._finalized:
-            return
-
-        self._buffer += text
-
-        # If buffer exceeds limit, finalize current message and start new one
-        if len(self._buffer) > STREAM_MAX_CHARS and self._current_message:
-            await self._flush()
-            self._current_message = None
-            self._buffer = self._buffer[STREAM_MAX_CHARS:]
-
-        now = time.monotonic()
-        if now - self._last_edit_time >= STREAM_EDIT_INTERVAL:
-            await self._flush()
-        elif not self._pending_edit or self._pending_edit.done():
-            self._pending_edit = asyncio.create_task(self._delayed_flush())
-
-    async def finalize(self) -> str:
-        """Finalize the streaming message. Returns the full accumulated text."""
-        self._finalized = True
-        if self._pending_edit and not self._pending_edit.done():
-            self._pending_edit.cancel()
-        if self._buffer:
-            await self._flush()
-        return self._buffer
-
-    async def _delayed_flush(self) -> None:
-        """Wait for the edit interval then flush."""
-        remaining = STREAM_EDIT_INTERVAL - (time.monotonic() - self._last_edit_time)
-        if remaining > 0:
-            await asyncio.sleep(remaining)
-        if not self._finalized:
-            await self._flush()
-
-    async def _flush(self) -> None:
-        """Send or edit the current message with buffer contents."""
-        if not self._buffer:
-            return
-
-        display_text = self._buffer
-        if len(display_text) > 2000:
-            display_text = display_text[:1997] + "..."
-
-        try:
-            if self._current_message is None:
-                self._current_message = await self._thread.send(display_text)
-            else:
-                await self._current_message.edit(content=display_text)
-            self._last_edit_time = time.monotonic()
-        except discord.HTTPException:
-            logger.debug("Failed to edit streaming message", exc_info=True)
-
-
-class LiveToolTimer:
-    """Periodically edits a Discord embed to show elapsed execution time.
-
-    Started when a tool_use event is received; cancelled when the corresponding
-    tool_result arrives. For commands that finish quickly (<TOOL_TIMER_INTERVAL s)
-    the timer fires zero times, so there is no overhead for fast tools.
-
-    This provides basic visibility into long-running operations — the user can
-    see "🔧 Running: az login... (10s)" ticking up rather than a frozen embed.
-    Note: intermediate stdout from Bash is not exposed by the stream-json
-    protocol, so only elapsed time (not actual output) is available here.
-    """
-
-    def __init__(self, msg: discord.Message, tool: ToolUseEvent) -> None:
-        self._msg = msg
-        self._tool = tool
-        self._start = time.monotonic()
-
-    def start(self) -> asyncio.Task[None]:
-        """Schedule the timer loop and return the Task so callers can cancel it."""
-        return asyncio.create_task(self._loop())
-
-    async def _loop(self) -> None:
-        try:
-            while True:
-                await asyncio.sleep(TOOL_TIMER_INTERVAL)
-                elapsed = int(time.monotonic() - self._start)
-                with contextlib.suppress(discord.HTTPException):
-                    await self._msg.edit(
-                        embed=tool_use_embed(self._tool, in_progress=True, elapsed_s=elapsed)
-                    )
-        except asyncio.CancelledError:
-            pass
 
 
 async def run_claude_in_thread(
@@ -222,7 +105,7 @@ async def run_claude_in_thread(
 
     # Set when AskUserQuestion is detected mid-stream. After the runner is
     # interrupted and the stream drains, we show Discord UI and resume.
-    pending_ask: list[AskQuestion] | None = None
+    pending_ask = None
 
     # Guard against sending session_start_embed more than once.
     # Claude Code emits multiple SYSTEM events per session (init + hook feedback),
@@ -389,7 +272,7 @@ async def run_claude_in_thread(
     # After the stream ends, handle pending AskUserQuestion by showing Discord
     # UI and resuming the session with the user's answer.
     if pending_ask and state.session_id:
-        answer_prompt = await _collect_ask_answers(
+        answer_prompt = await collect_ask_answers(
             thread, pending_ask, state.session_id, ask_repo=ask_repo
         )
         if answer_prompt:
@@ -420,99 +303,6 @@ def _truncate_result(content: str) -> str:
 
 
 _TIMEOUT_PATTERN = re.compile(r"Timed out after (\d+) seconds")
-
-
-# How long to wait for the user to answer (seconds).  24 hours lets users
-# step away for the day and come back without "Interaction Failed" errors.
-ASK_ANSWER_TIMEOUT = 86_400  # 24 h
-
-
-async def _collect_ask_answers(
-    thread: discord.Thread,
-    questions: list[AskQuestion],
-    session_id: str,
-    ask_repo: PendingAskRepository | None = None,
-) -> str | None:
-    """Show Discord UI for each question and return the formatted answer string.
-
-    Processes questions sequentially (one at a time).  For each question:
-    1. Saves it to the DB (for bot-restart recovery).
-    2. Registers a Queue with ask_bus and shows the AskView.
-    3. Awaits the answer for up to 24 hours via asyncio.wait_for.
-    4. Cleans up the DB entry once answered or timed out.
-
-    Returns a human-readable string to inject as the next human turn, or None
-    if no question received an answer.
-    """
-    # Serialise questions once for DB storage.
-    questions_dicts = [
-        {
-            "question": q.question,
-            "header": q.header,
-            "multi_select": q.multi_select,
-            "options": [{"label": o.label, "description": o.description} for o in q.options],
-        }
-        for q in questions
-    ]
-
-    parts: list[str] = []
-    for q_idx, q in enumerate(questions):
-        # Persist so on_ready can re-register the view after a bot restart.
-        if ask_repo is not None:
-            await ask_repo.save(
-                thread_id=thread.id,
-                session_id=session_id,
-                questions=questions_dicts,
-                question_idx=q_idx,
-            )
-
-        # Register a waiter in the bus before showing the view so there is no
-        # race between the user clicking and the queue being registered.
-        answer_queue = _ask_bus.register(thread.id)
-
-        view = AskView(q, thread_id=thread.id, q_idx=q_idx, ask_repo=ask_repo)
-        msg = await thread.send(embed=ask_embed(q.question, q.header), view=view)
-
-        try:
-            selected = await asyncio.wait_for(answer_queue.get(), timeout=ASK_ANSWER_TIMEOUT)
-        except TimeoutError:
-            _ask_bus.unregister(thread.id)
-            if ask_repo is not None:
-                await ask_repo.delete(thread.id)
-            # Remove buttons from the timed-out message so they stay inert.
-            with contextlib.suppress(discord.HTTPException):
-                await msg.edit(
-                    content="-# ⏰ Question timed out — please send a new message to continue.",
-                    embed=None,
-                    view=None,
-                )
-            logger.info(
-                "AskUserQuestion timed out after %ds for thread %d: %r",
-                ASK_ANSWER_TIMEOUT,
-                thread.id,
-                q.question,
-            )
-            continue
-        finally:
-            _ask_bus.unregister(thread.id)
-
-        if ask_repo is not None:
-            await ask_repo.delete(thread.id)
-
-        if not selected:
-            continue
-
-        answer_text = ", ".join(selected)
-        parts.append(f"**{q.question}**\nAnswer: {answer_text}")
-
-    if not parts:
-        return None
-
-    return (
-        "[Response to AskUserQuestion]\n\n"
-        + "\n\n".join(parts)
-        + "\n\nPlease continue based on these answers."
-    )
 
 
 def _make_error_embed(error: str) -> discord.Embed:

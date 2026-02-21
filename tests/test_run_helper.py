@@ -823,13 +823,13 @@ class TestLiveToolTimer:
     @pytest.mark.asyncio
     async def test_timer_updates_embed_after_interval(self) -> None:
         """After TOOL_TIMER_INTERVAL seconds, the embed should be updated with elapsed time."""
-        import claude_discord.cogs._run_helper as rh
+        import claude_discord.discord_ui.tool_timer as tt
 
         msg = self._make_msg()
         timer = LiveToolTimer(msg, self._bash_tool())
 
-        original_interval = rh.TOOL_TIMER_INTERVAL
-        rh.TOOL_TIMER_INTERVAL = 0.01  # speed up for test
+        original_interval = tt.TOOL_TIMER_INTERVAL
+        tt.TOOL_TIMER_INTERVAL = 0.01  # speed up for test
         try:
             task = timer.start()
             await asyncio.sleep(0.05)  # allow at least one tick
@@ -837,7 +837,7 @@ class TestLiveToolTimer:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         finally:
-            rh.TOOL_TIMER_INTERVAL = original_interval
+            tt.TOOL_TIMER_INTERVAL = original_interval
 
         msg.edit.assert_called()
         # Elapsed time must be in description (title stays stable across ticks)
@@ -850,13 +850,13 @@ class TestLiveToolTimer:
     @pytest.mark.asyncio
     async def test_timer_cancelled_stops_updates(self) -> None:
         """After cancellation, no further edits should occur."""
-        import claude_discord.cogs._run_helper as rh
+        import claude_discord.discord_ui.tool_timer as tt
 
         msg = self._make_msg()
         timer = LiveToolTimer(msg, self._bash_tool())
 
-        original_interval = rh.TOOL_TIMER_INTERVAL
-        rh.TOOL_TIMER_INTERVAL = 0.01
+        original_interval = tt.TOOL_TIMER_INTERVAL
+        tt.TOOL_TIMER_INTERVAL = 0.01
         try:
             task = timer.start()
             await asyncio.sleep(0.005)  # cancel before first tick
@@ -864,7 +864,7 @@ class TestLiveToolTimer:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         finally:
-            rh.TOOL_TIMER_INTERVAL = original_interval
+            tt.TOOL_TIMER_INTERVAL = original_interval
 
         msg.edit.assert_not_called()
 
