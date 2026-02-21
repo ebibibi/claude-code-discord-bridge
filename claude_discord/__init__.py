@@ -13,6 +13,8 @@ from .claude.runner import ClaudeRunner
 from .claude.types import MessageType, StreamEvent, ToolCategory, ToolUseEvent
 from .cogs.auto_upgrade import AutoUpgradeCog, UpgradeConfig
 from .cogs.claude_chat import ClaudeChatCog
+from .cogs.event_processor import EventProcessor
+from .cogs.run_config import RunConfig
 from .cogs.scheduler import SchedulerCog
 from .cogs.session_manage import SessionManageCog
 from .cogs.skill_command import SkillCommandCog
@@ -38,6 +40,8 @@ __all__ = [
     # Core
     "ClaudeRunner",
     "ClaudeChatCog",
+    "RunConfig",
+    "EventProcessor",
     # Concurrency
     "ActiveSession",
     "SessionRegistry",
