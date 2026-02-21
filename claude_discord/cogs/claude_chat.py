@@ -25,6 +25,7 @@ from ..coordination.service import CoordinationService
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
+from ..database.resume_repo import PendingResumeRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
@@ -63,6 +64,7 @@ class ClaudeChatCog(commands.Cog):
         coordination: CoordinationService | None = None,
         ask_repo: PendingAskRepository | None = None,
         lounge_repo: LoungeRepository | None = None,
+        resume_repo: PendingResumeRepository | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -80,6 +82,8 @@ class ClaudeChatCog(commands.Cog):
         self._ask_repo = ask_repo or getattr(bot, "ask_repo", None)
         # AI Lounge repo (optional — lounge disabled when None)
         self._lounge_repo = lounge_repo or getattr(bot, "lounge_repo", None)
+        # Pending resume repo (optional — startup resume disabled when None)
+        self._resume_repo = resume_repo or getattr(bot, "resume_repo", None)
 
     @property
     def active_session_count(self) -> int:
@@ -202,6 +206,7 @@ class ClaudeChatCog(commands.Cog):
         channel: discord.TextChannel,
         prompt: str,
         thread_name: str | None = None,
+        session_id: str | None = None,
     ) -> discord.Thread:
         """Create a new thread and start a Claude Code session without a user message.
 
@@ -217,6 +222,9 @@ class ClaudeChatCog(commands.Cog):
             prompt: The instruction to send to Claude Code.
             thread_name: Optional thread title; defaults to the first 100 chars
                 of *prompt*.
+            session_id: Optional Claude session ID to resume via ``--resume``.
+                        When supplied the new Claude process continues the
+                        previous conversation rather than starting fresh.
 
         Returns:
             The newly created :class:`discord.Thread`.
@@ -229,8 +237,89 @@ class ClaudeChatCog(commands.Cog):
         )
         # Post the prompt so StatusManager has a Message to add reactions to.
         seed_message = await thread.send(prompt)
-        await self._run_claude(seed_message, thread, prompt, session_id=None)
+        await self._run_claude(seed_message, thread, prompt, session_id=session_id)
         return thread
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        """Resume any Claude sessions that marked themselves for restart-resume.
+
+        Called each time the bot connects to Discord (including reconnects).
+        Only pending resumes within the TTL window (default 5 minutes) are
+        processed; older entries are silently discarded by the repository.
+
+        Safety guarantees:
+        - Each row is **deleted before** spawning Claude so that even a
+          crash during spawn cannot cause a double-resume.
+        - The TTL prevents stale markers from triggering after a long
+          downtime or accidental second restart.
+        - A resume failure (e.g. channel not found) is logged and skipped
+          gracefully — it never prevents the bot from becoming ready.
+        """
+        if self._resume_repo is None:
+            return
+
+        pending = await self._resume_repo.get_pending()
+        if not pending:
+            return
+
+        logger.info("Found %d pending session resume(s) on startup", len(pending))
+
+        for entry in pending:
+            # Delete FIRST — prevents double-resume even if spawn fails
+            await self._resume_repo.delete(entry.id)
+
+            thread_id = entry.thread_id
+            try:
+                raw = self.bot.get_channel(thread_id)
+                if raw is None:
+                    raw = await self.bot.fetch_channel(thread_id)
+            except Exception:
+                logger.warning(
+                    "Pending resume: thread %d not found, skipping", thread_id, exc_info=True
+                )
+                continue
+
+            if not isinstance(raw, discord.Thread):
+                logger.warning(
+                    "Pending resume: channel %d is not a Thread, skipping", thread_id
+                )
+                continue
+
+            thread = raw
+            parent = thread.parent
+            if not isinstance(parent, discord.TextChannel):
+                logger.warning(
+                    "Pending resume: thread %d has no TextChannel parent, skipping", thread_id
+                )
+                continue
+
+            resume_prompt = entry.resume_prompt or (
+                "ボットが再起動から復帰しました。"
+                "前の作業の続きを確認し、必要な残作業を完了してください。"
+            )
+
+            logger.info(
+                "Resuming session in thread %d (session_id=%s, reason=%s)",
+                thread_id,
+                entry.session_id,
+                entry.reason,
+            )
+            try:
+                # Post directly into the existing thread — no new thread needed
+                seed_message = await thread.send(
+                    f"🔄 **Bot が再起動から復帰しました。**\n{resume_prompt}"
+                )
+                await self._run_claude(
+                    seed_message,
+                    thread,
+                    resume_prompt,
+                    session_id=entry.session_id,
+                )
+            except Exception:
+                logger.error(
+                    "Failed to resume session in thread %d", thread_id, exc_info=True
+                )
 
     async def _handle_thread_reply(self, message: discord.Message) -> None:
         """Continue a Claude Code session in an existing thread."""

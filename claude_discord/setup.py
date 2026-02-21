@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .claude.runner import ClaudeRunner
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
+    from .database.resume_repo import PendingResumeRepository
     from .database.task_repo import TaskRepository
     from .ext.api_server import ApiServer
 
@@ -41,6 +42,7 @@ class BridgeComponents:
     session_repo: SessionRepository
     task_repo: TaskRepository | None = None
     lounge_repo: LoungeRepository | None = None
+    resume_repo: PendingResumeRepository | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -55,6 +57,8 @@ class BridgeComponents:
             api_server.task_repo = self.task_repo
         if self.lounge_repo is not None:
             api_server.lounge_repo = self.lounge_repo
+        if self.resume_repo is not None:
+            api_server.resume_repo = self.resume_repo
 
 
 async def setup_bridge(
@@ -108,6 +112,7 @@ async def setup_bridge(
     from .database.lounge_repo import LoungeRepository
     from .database.models import init_db
     from .database.repository import SessionRepository
+    from .database.resume_repo import PendingResumeRepository
     from .database.settings_repo import SettingsRepository
     from .database.task_repo import TaskRepository
 
@@ -116,13 +121,14 @@ async def setup_bridge(
         ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
         lounge_channel_id = int(ch_str) if ch_str.isdigit() else None
 
-    # --- Session DB (also hosts lounge_messages table) ---
+    # --- Session DB (also hosts lounge_messages and pending_resumes tables) ---
     os.makedirs(os.path.dirname(session_db_path) or ".", exist_ok=True)
     await init_db(session_db_path)
     session_repo = SessionRepository(session_db_path)
     settings_repo = SettingsRepository(session_db_path)
     ask_repo = PendingAskRepository(session_db_path)
     lounge_repo = LoungeRepository(session_db_path)
+    resume_repo = PendingResumeRepository(session_db_path)
     logger.info("Session DB initialized: %s", session_db_path)
 
     # --- ClaudeChatCog ---
@@ -133,6 +139,7 @@ async def setup_bridge(
         allowed_user_ids=allowed_user_ids,
         ask_repo=ask_repo,
         lounge_repo=lounge_repo,
+        resume_repo=resume_repo,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")
@@ -173,6 +180,7 @@ async def setup_bridge(
         session_repo=session_repo,
         task_repo=task_repo,
         lounge_repo=lounge_repo,
+        resume_repo=resume_repo,
     )
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided

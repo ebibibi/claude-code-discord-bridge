@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 
     from ..database.lounge_repo import LoungeRepository
     from ..database.notification_repo import NotificationRepository
+    from ..database.resume_repo import PendingResumeRepository
     from ..database.task_repo import TaskRepository
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ class ApiServer:
         task_repo: TaskRepository | None = None,
         lounge_repo: LoungeRepository | None = None,
         lounge_channel_id: int | None = None,
+        resume_repo: PendingResumeRepository | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -69,6 +71,7 @@ class ApiServer:
         self.api_secret = api_secret
         self.task_repo = task_repo
         self.lounge_repo = lounge_repo
+        self.resume_repo = resume_repo
         # Fall back to COORDINATION_CHANNEL_ID so lounge shares the same channel
         if lounge_channel_id is None:
             ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
@@ -97,6 +100,8 @@ class ApiServer:
         self.app.router.add_post("/api/lounge", self.post_lounge)
         # Session spawn route
         self.app.router.add_post("/api/spawn", self.spawn)
+        # Startup resume routes
+        self.app.router.add_post("/api/mark-resume", self.mark_resume)
 
     @web.middleware
     async def _auth_middleware(
@@ -499,6 +504,72 @@ class ApiServer:
             },
             status=201,
         )
+
+    # ------------------------------------------------------------------
+    # Startup resume endpoint (/api/mark-resume)
+    # ------------------------------------------------------------------
+
+    def _require_resume_repo(self) -> web.Response | None:
+        """Return a 503 response if resume_repo is not configured."""
+        if self.resume_repo is None:
+            return web.json_response(
+                {"error": "PendingResumeRepository not configured (resume_repo is None)"},
+                status=503,
+            )
+        return None
+
+    async def mark_resume(self, request: web.Request) -> web.Response:
+        """POST /api/mark-resume — mark a thread for resumption after bot restart.
+
+        Call this **before** running ``systemctl restart discord-bot`` (or any
+        equivalent restart command) from within a Claude Code session.  On the
+        next bot startup the ``on_ready`` handler will detect the marker,
+        re-spawn Claude in this thread, and then delete the marker.
+
+        Body (JSON):
+            thread_id: Discord thread ID (required).
+            session_id: Claude session ID for ``--resume`` continuity (optional).
+            reason: Human-readable reason string (optional, default ``self_restart``).
+            resume_prompt: The message to post + send to Claude on resume
+                           (optional; a sensible default is used if omitted).
+
+        Returns (201):
+            ``{"status": "marked", "id": <row_id>}``
+        """
+        if err := self._require_resume_repo():
+            return err
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        raw_thread_id = data.get("thread_id")
+        if not raw_thread_id:
+            return web.json_response({"error": "thread_id is required"}, status=400)
+
+        try:
+            thread_id = int(raw_thread_id)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "thread_id must be an integer"}, status=400)
+
+        session_id: str | None = data.get("session_id") or None
+        reason: str = str(data.get("reason") or "self_restart")
+        resume_prompt: str | None = data.get("resume_prompt") or None
+
+        row_id = await self.resume_repo.mark(  # type: ignore[union-attr]
+            thread_id,
+            session_id=session_id,
+            reason=reason,
+            resume_prompt=resume_prompt,
+        )
+        logger.info(
+            "Thread %d marked for resume (reason=%s, session_id=%s)",
+            thread_id,
+            reason,
+            session_id,
+        )
+        return web.json_response({"status": "marked", "id": row_id}, status=201)
 
     async def _send_lounge_to_discord(self, label: str, message: str, posted_at: str) -> None:
         """Send a lounge message to the configured Discord lounge channel."""
