@@ -82,15 +82,6 @@ class PendingAskRepository:
             created_at=row[4],
         )
 
-    async def update_question_idx(self, thread_id: int, question_idx: int) -> None:
-        """Advance the current question index (called when moving to next question)."""
-        async with aiosqlite.connect(self._db_path) as db:
-            await db.execute(
-                "UPDATE pending_asks SET question_idx = ? WHERE thread_id = ?",
-                (question_idx, thread_id),
-            )
-            await db.commit()
-
     async def delete(self, thread_id: int) -> None:
         """Remove the pending ask for *thread_id* (called after answer received)."""
         async with aiosqlite.connect(self._db_path) as db:
