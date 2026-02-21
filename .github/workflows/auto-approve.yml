@@ -31,9 +31,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           WEBHOOK_URL: ${{ secrets.DOCS_SYNC_WEBHOOK_URL }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           # GITHUB_TOKEN merges don't trigger other workflows (push/PR events).
-          # So we poll for merge completion and send the webhook directly.
+          # So we poll for merge completion and send the webhooks directly.
           for i in $(seq 1 30); do
             STATE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state)
             if [ "$STATE" = "MERGED" ]; then
@@ -42,6 +44,29 @@ jobs:
                 -H "Content-Type: application/json" \
                 -d '{"content":"🔄 ebibot-upgrade"}' \
                 "$WEBHOOK_URL"
+
+              # Send docs-sync webhook unless this is a docs-sync PR (prevent infinite loop).
+              # HEAD_REF and PR_TITLE are passed via env: (safe — no direct interpolation in run:).
+              if [[ "$HEAD_REF" != docs-sync/* ]] && [[ "$PR_TITLE" != '[docs-sync]'* ]]; then
+                OPEN_PR=$(gh pr list \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --state open \
+                  --search "head:docs-sync/" \
+                  --json number \
+                  --limit 1)
+                if [ "$(echo "$OPEN_PR" | jq length)" -eq 0 ]; then
+                  echo "Sending docs-sync webhook..."
+                  curl -s -o /dev/null -w "%{http_code}" \
+                    -H "Content-Type: application/json" \
+                    -d '{"content":"🔄 docs-sync"}' \
+                    "$WEBHOOK_URL"
+                else
+                  echo "Skipping docs-sync: docs-sync PR already open"
+                fi
+              else
+                echo "Skipping docs-sync: this is a docs-sync PR ($HEAD_REF)"
+              fi
+
               exit 0
             fi
             echo "Waiting for merge... ($i/30)"
