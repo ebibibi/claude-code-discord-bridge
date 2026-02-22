@@ -3,10 +3,12 @@ name: Documentation Sync
 on:
   push:
     branches: [main]
+  workflow_dispatch: {}
 
 jobs:
   trigger-docs-sync:
     # Skip if the commit is from docs-sync itself (infinite loop prevention)
+    # For workflow_dispatch, head_commit is null so the contains() checks are skipped safely
     if: >-
       !contains(github.event.head_commit.message, '[docs-sync]') &&
       !contains(github.event.head_commit.message, 'docs-sync/')

@@ -1,0 +1,51 @@
+name: Consumer Smoke Test
+
+# Verify that ccdb API changes don't break known consumers.
+# Catches constructor signature mismatches BEFORE merging to main.
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  ebibot-import:
+    name: EbiBot import check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Clone consumer (EbiBot)
+        run: git clone --depth 1 https://github.com/ebibibi/discord-bot.git /tmp/ebibot
+
+      - name: Point EbiBot to this PR's ccdb
+        working-directory: /tmp/ebibot
+        run: |
+          # Replace the git+https ccdb dependency with local path to this PR's checkout
+          uv add --editable "$GITHUB_WORKSPACE"
+
+      - name: Sync EbiBot dependencies
+        working-directory: /tmp/ebibot
+        run: uv sync
+
+      - name: Verify EbiBot can import main
+        working-directory: /tmp/ebibot
+        run: |
+          # This catches constructor signature mismatches, missing modules, etc.
+          uv run python -c "from src.main import main; print('EbiBot import OK')"
+
+      - name: Run EbiBot tests (non-blocking)
+        working-directory: /tmp/ebibot
+        continue-on-error: true
+        run: |
+          uv run pytest tests/ -v --ignore=tests/integration -x 2>&1 || true

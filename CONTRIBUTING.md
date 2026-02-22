@@ -38,7 +38,15 @@ main (always releasable)
 git clone https://github.com/ebibibi/claude-code-discord-bridge.git
 cd claude-code-discord-bridge
 uv sync --dev
+make setup   # register git hooks (one-time per clone)
 ```
+
+> **`make setup` is required** after every fresh clone. It configures git to use the
+> pre-commit hook in `.githooks/`, which auto-formats and lints staged Python files.
+> Without it, the hook never runs and bad code can slip through locally (CI will still
+> catch it, but you'll get a surprise red build).
+>
+> Run `make check-setup` at any time to verify your environment is ready.
 
 ## Running Tests
 
@@ -85,7 +93,8 @@ uv run ruff format claude_discord/
 ## Adding a New Cog
 
 1. Create `claude_discord/cogs/your_cog.py`
-2. Use `_run_helper.run_claude_in_thread()` for Claude CLI execution
+2. Use `_run_helper.run_claude_with_config(RunConfig(...))` for Claude CLI execution
+   (The legacy `run_claude_in_thread()` shim is still available but prefer `run_claude_with_config`)
 3. Export from `claude_discord/cogs/__init__.py`
 4. Add to `claude_discord/__init__.py` public API
 5. Write tests in `tests/test_your_cog.py`

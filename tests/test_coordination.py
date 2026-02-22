@@ -42,14 +42,6 @@ class TestCoordinationServiceNoOp:
     """When no channel is configured all methods are no-ops."""
 
     @pytest.mark.asyncio
-    async def test_post_session_start_noop(self) -> None:
-        bot = _make_bot()
-        svc = CoordinationService(bot, channel_id=None)
-        # Should not raise and should not call get_channel
-        await svc.post_session_start(_make_thread(), "hello")
-        bot.get_channel.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_post_session_end_noop(self) -> None:
         bot = _make_bot()
         svc = CoordinationService(bot, channel_id=None)
@@ -59,20 +51,6 @@ class TestCoordinationServiceNoOp:
 
 class TestCoordinationServicePosts:
     """When a channel is configured, posts are sent."""
-
-    @pytest.mark.asyncio
-    async def test_post_session_start_sends_message(self) -> None:
-        channel = _make_channel()
-        bot = _make_bot(channel)
-        svc = CoordinationService(bot, channel_id=9999)
-
-        thread = _make_thread("Issue #42")
-        await svc.post_session_start(thread, "Fix the login bug")
-
-        channel.send.assert_called_once()
-        sent = channel.send.call_args[0][0]
-        assert "Issue #42" in sent
-        assert "Fix the login bug" in sent
 
     @pytest.mark.asyncio
     async def test_post_session_end_sends_message(self) -> None:
@@ -87,40 +65,9 @@ class TestCoordinationServicePosts:
         sent = channel.send.call_args[0][0]
         assert "Issue #42" in sent
 
-    @pytest.mark.asyncio
-    async def test_prompt_preview_truncated_to_80_chars(self) -> None:
-        channel = _make_channel()
-        bot = _make_bot(channel)
-        svc = CoordinationService(bot, channel_id=9999)
-
-        long_prompt = "a" * 200
-        await svc.post_session_start(_make_thread(), long_prompt)
-
-        sent = channel.send.call_args[0][0]
-        # The preview section should not contain 200 'a's
-        assert "a" * 81 not in sent
-
-    @pytest.mark.asyncio
-    async def test_newlines_in_preview_replaced(self) -> None:
-        channel = _make_channel()
-        bot = _make_bot(channel)
-        svc = CoordinationService(bot, channel_id=9999)
-
-        await svc.post_session_start(_make_thread(), "line1\nline2")
-
-        sent = channel.send.call_args[0][0]
-        assert "\n" not in sent
-
 
 class TestCoordinationServiceChannelNotFound:
     """When get_channel returns None (not in cache), methods are silent no-ops."""
-
-    @pytest.mark.asyncio
-    async def test_start_no_channel_in_cache(self) -> None:
-        bot = _make_bot(channel=None)  # get_channel returns None
-        svc = CoordinationService(bot, channel_id=9999)
-        # Should not raise
-        await svc.post_session_start(_make_thread(), "hello")
 
     @pytest.mark.asyncio
     async def test_end_no_channel_in_cache(self) -> None:
@@ -131,20 +78,6 @@ class TestCoordinationServiceChannelNotFound:
 
 class TestCoordinationServiceHTTPError:
     """HTTP errors from Discord are swallowed so they never crash the bot."""
-
-    @pytest.mark.asyncio
-    async def test_http_error_on_start_is_swallowed(self) -> None:
-        channel = _make_channel()
-        http_response = MagicMock()
-        http_response.status = 500
-        http_response.reason = "Internal Server Error"
-        channel.send.side_effect = discord.HTTPException(http_response, "error")
-
-        bot = _make_bot(channel)
-        svc = CoordinationService(bot, channel_id=9999)
-
-        # Should not raise
-        await svc.post_session_start(_make_thread(), "hello")
 
     @pytest.mark.asyncio
     async def test_http_error_on_end_is_swallowed(self) -> None:

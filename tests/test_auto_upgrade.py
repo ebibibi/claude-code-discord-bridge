@@ -575,6 +575,48 @@ class TestRestartApproval:
         assert len(reminder_calls) == 1
 
     @pytest.mark.asyncio
+    async def test_approval_mode_sends_reminder_on_asyncio_timeout(
+        self,
+        bot: MagicMock,
+    ) -> None:
+        """asyncio.TimeoutError (Python 3.10) is handled the same as builtins.TimeoutError.
+
+        Regression test for: on Python 3.10, asyncio.wait_for() raises
+        asyncio.TimeoutError which is NOT a subclass of builtins.TimeoutError,
+        so a bare ``except TimeoutError`` silently drops the exception.
+        """
+        cog = self._make_cog_with_approval(bot)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+        approval_msg = MagicMock()
+        approval_msg.id = 99999
+        approval_msg.add_reaction = AsyncMock()
+        thread.send.return_value = approval_msg
+
+        bot.user = MagicMock()
+        bot.user.id = 1
+
+        call_count = 0
+
+        async def wait_for_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise TimeoutError  # Python 3.10 asyncio variant
+            event = MagicMock()
+            event.message_id = 99999
+            event.emoji = "✅"
+            event.user_id = 42
+            return event
+
+        bot.wait_for = AsyncMock(side_effect=wait_for_side_effect)
+
+        await cog._wait_for_approval(MagicMock(), thread)
+
+        reminder_calls = [str(c) for c in thread.send.call_args_list if "Still waiting" in str(c)]
+        assert len(reminder_calls) == 1
+
+    @pytest.mark.asyncio
     async def test_no_approval_mode_skips_wait(
         self,
         bot: MagicMock,
@@ -670,3 +712,194 @@ class TestActiveSessionCount:
 
         del cog._active_runners[1]
         assert cog.active_session_count == 1
+
+
+class TestMarkSessionsForResume:
+    """Tests for _collect_active_thread_ids and _mark_sessions_for_resume."""
+
+    def _make_cog_with_restart(self, bot: MagicMock) -> AutoUpgradeCog:
+        config = UpgradeConfig(
+            package_name="pkg",
+            restart_command=["sudo", "systemctl", "restart", "bot.service"],
+            working_dir="/tmp",
+        )
+        return AutoUpgradeCog(bot=bot, config=config)
+
+    def test_collect_active_thread_ids_empty(self) -> None:
+        """Returns empty frozenset when no cog has _active_runners."""
+        bot = MagicMock(spec=commands.Bot)
+        bot.cogs.values.return_value = []
+        cog = self._make_cog_with_restart(bot)
+        assert cog._collect_active_thread_ids() == frozenset()
+
+    def test_collect_active_thread_ids_from_cog(self) -> None:
+        """Collects thread IDs from cogs that have _active_runners."""
+        bot = MagicMock(spec=commands.Bot)
+        cog = self._make_cog_with_restart(bot)
+
+        class FakeChatCog:
+            _active_runners = {111: MagicMock(), 222: MagicMock()}
+
+        fake_chat = FakeChatCog()
+        bot.cogs.values.return_value = [fake_chat, cog]
+
+        result = cog._collect_active_thread_ids()
+        assert result == frozenset({111, 222})
+
+    def test_collect_active_thread_ids_excludes_self(self) -> None:
+        """Does not include threads from the cog itself (it has no _active_runners)."""
+        bot = MagicMock(spec=commands.Bot)
+        cog = self._make_cog_with_restart(bot)
+        # Manually give the cog an _active_runners to verify self-exclusion
+        cog._active_runners = {999: MagicMock()}  # type: ignore[attr-defined]
+        bot.cogs.values.return_value = [cog]
+
+        # self is excluded
+        result = cog._collect_active_thread_ids()
+        assert 999 not in result
+
+    @pytest.mark.asyncio
+    async def test_mark_sessions_no_op_when_empty(self) -> None:
+        """No API calls when thread_ids is empty."""
+        bot = MagicMock(spec=commands.Bot)
+        bot.resume_repo = AsyncMock()
+        cog = self._make_cog_with_restart(bot)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        await cog._mark_sessions_for_resume(frozenset(), thread)
+
+        bot.resume_repo.mark.assert_not_called()
+        thread.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mark_sessions_no_op_when_no_resume_repo(self) -> None:
+        """No-op when bot.resume_repo is not set."""
+        bot = MagicMock(spec=commands.Bot)
+        del bot.resume_repo  # ensure attribute is absent
+        cog = self._make_cog_with_restart(bot)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        await cog._mark_sessions_for_resume(frozenset({111}), thread)
+
+        thread.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mark_sessions_calls_mark_for_each_thread(self) -> None:
+        """Calls resume_repo.mark() for each active thread."""
+        bot = MagicMock(spec=commands.Bot)
+        resume_repo = MagicMock()
+        resume_repo.mark = AsyncMock(return_value=1)
+        bot.resume_repo = resume_repo
+
+        # No session_repo → session_id will be None
+        del bot.session_repo
+
+        cog = self._make_cog_with_restart(bot)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        await cog._mark_sessions_for_resume(frozenset({111, 222}), thread)
+
+        assert resume_repo.mark.call_count == 2
+        called_thread_ids = {call.args[0] for call in resume_repo.mark.call_args_list}
+        assert called_thread_ids == {111, 222}
+
+        # Should post a Discord message reporting the count
+        thread.send.assert_called_once()
+        assert "2" in thread.send.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_mark_sessions_resolves_session_id_from_repo(self) -> None:
+        """Looks up session_id from session_repo when available."""
+        bot = MagicMock(spec=commands.Bot)
+
+        resume_repo = MagicMock()
+        resume_repo.mark = AsyncMock(return_value=1)
+        bot.resume_repo = resume_repo
+
+        session_record = MagicMock()
+        session_record.session_id = "abc-123"
+        session_repo = MagicMock()
+        session_repo.get = AsyncMock(return_value=session_record)
+        bot.session_repo = session_repo
+
+        cog = self._make_cog_with_restart(bot)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        await cog._mark_sessions_for_resume(frozenset({111}), thread)
+
+        session_repo.get.assert_awaited_once_with(111)
+        resume_repo.mark.assert_awaited_once()
+        call_kwargs = resume_repo.mark.call_args.kwargs
+        assert call_kwargs["session_id"] == "abc-123"
+        assert call_kwargs["reason"] == "bot_upgrade"
+
+    @pytest.mark.asyncio
+    async def test_mark_sessions_handles_mark_failure_gracefully(self) -> None:
+        """Continues marking other threads even if one fails."""
+        bot = MagicMock(spec=commands.Bot)
+        resume_repo = MagicMock()
+        resume_repo.mark = AsyncMock(side_effect=[RuntimeError("db error"), 2])
+        bot.resume_repo = resume_repo
+        del bot.session_repo
+
+        cog = self._make_cog_with_restart(bot)
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        # Should not raise; one thread fails, one succeeds
+        await cog._mark_sessions_for_resume(frozenset({111, 222}), thread)
+
+        assert resume_repo.mark.call_count == 2
+        # Only 1 succeeded, so Discord message says "1"
+        thread.send.assert_called_once()
+        assert "1" in thread.send.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_upgrade_marks_active_sessions_before_restart(self) -> None:
+        """Integration: active sessions are marked for resume during upgrade."""
+        bot = MagicMock(spec=commands.Bot)
+        bot.user = MagicMock()
+        bot.user.id = 0
+
+        resume_repo = MagicMock()
+        resume_repo.mark = AsyncMock(return_value=1)
+        bot.resume_repo = resume_repo
+        del bot.session_repo
+
+        class FakeChatCog:
+            _active_runners = {555: MagicMock()}
+
+        bot.cogs.values.return_value = [FakeChatCog()]
+
+        config = UpgradeConfig(
+            package_name="pkg",
+            trigger_prefix="🔄 upgrade",
+            working_dir="/tmp",
+            restart_command=["sudo", "systemctl", "restart", "bot.service"],
+        )
+        cog = AutoUpgradeCog(bot=bot, config=config)
+
+        trigger_msg = _make_message(content="🔄 upgrade")
+
+        with (
+            patch(_PATCH_EXEC, new_callable=AsyncMock) as mock_exec,
+            patch(_PATCH_WAIT, new_callable=AsyncMock) as mock_wait,
+            patch(_PATCH_SLEEP, new_callable=AsyncMock),
+        ):
+            proc = _make_process(returncode=0, stdout=b"ok")
+            mock_exec.return_value = proc
+            mock_wait.return_value = (b"ok", b"")
+
+            # Drain check: return True immediately (no active sessions during drain)
+            cog._drain_check = lambda: True
+
+            await cog._run_upgrade(trigger_msg)
+
+        # resume_repo.mark should have been called for thread 555
+        resume_repo.mark.assert_awaited_once()
+        assert resume_repo.mark.call_args.args[0] == 555
+        assert resume_repo.mark.call_args.kwargs["reason"] == "bot_upgrade"

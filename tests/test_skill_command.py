@@ -328,13 +328,13 @@ class TestNewThreadMode:
         cog.bot.get_channel = MagicMock(return_value=mock_channel)
 
         with patch(
-            "claude_discord.cogs.skill_command.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.skill_command.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog.run_skill.callback(cog, interaction, name="todoist", args=None)
             mock_run.assert_called_once()
-            call_kwargs = mock_run.call_args.kwargs
-            assert call_kwargs["prompt"] == "/todoist"
-            assert call_kwargs["session_id"] is None
+            call_kwargs = mock_run.call_args[0][0]  # RunConfig object
+            assert call_kwargs.prompt == "/todoist"
+            assert call_kwargs.session_id is None
 
         # Thread was created
         mock_channel.create_thread.assert_called_once()
@@ -353,11 +353,11 @@ class TestNewThreadMode:
         cog.bot.get_channel = MagicMock(return_value=mock_channel)
 
         with patch(
-            "claude_discord.cogs.skill_command.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.skill_command.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog.run_skill.callback(cog, interaction, name="todoist", args='filter "today"')
-            call_kwargs = mock_run.call_args.kwargs
-            assert call_kwargs["prompt"] == '/todoist filter "today"'
+            call_kwargs = mock_run.call_args[0][0]  # RunConfig object
+            assert call_kwargs.prompt == '/todoist filter "today"'
 
     @pytest.mark.asyncio
     async def test_thread_name_includes_args(self) -> None:
@@ -370,7 +370,7 @@ class TestNewThreadMode:
         cog.bot.get_channel = MagicMock(return_value=mock_channel)
 
         with patch(
-            "claude_discord.cogs.skill_command.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.skill_command.run_claude_with_config", new_callable=AsyncMock
         ):
             await cog.run_skill.callback(cog, interaction, name="todoist", args="search work")
         call_kwargs = mock_channel.create_thread.call_args.kwargs
@@ -406,13 +406,13 @@ class TestInThreadMode:
         cog.repo.get = AsyncMock(return_value=record)
 
         with patch(
-            "claude_discord.cogs.skill_command.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.skill_command.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog.run_skill.callback(cog, interaction, name="recall", args=None)
-            call_kwargs = mock_run.call_args.kwargs
-            assert call_kwargs["session_id"] == "abc-123"
-            assert call_kwargs["prompt"] == "/recall"
-            assert call_kwargs["thread"] is thread
+            call_kwargs = mock_run.call_args[0][0]  # RunConfig object
+            assert call_kwargs.session_id == "abc-123"
+            assert call_kwargs.prompt == "/recall"
+            assert call_kwargs.thread is thread
 
     @pytest.mark.asyncio
     async def test_no_session_in_thread(self) -> None:
@@ -423,11 +423,11 @@ class TestInThreadMode:
         cog.repo.get = AsyncMock(return_value=None)
 
         with patch(
-            "claude_discord.cogs.skill_command.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.skill_command.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog.run_skill.callback(cog, interaction, name="recall", args=None)
-            call_kwargs = mock_run.call_args.kwargs
-            assert call_kwargs["session_id"] is None
+            call_kwargs = mock_run.call_args[0][0]  # RunConfig object
+            assert call_kwargs.session_id is None
 
     @pytest.mark.asyncio
     async def test_non_claude_thread_creates_new(self) -> None:
@@ -443,13 +443,13 @@ class TestInThreadMode:
         cog.bot.get_channel = MagicMock(return_value=mock_channel)
 
         with patch(
-            "claude_discord.cogs.skill_command.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.skill_command.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog.run_skill.callback(cog, interaction, name="test", args=None)
             # Should have created a new thread, not used the existing one
             mock_channel.create_thread.assert_called_once()
-            call_kwargs = mock_run.call_args.kwargs
-            assert call_kwargs["session_id"] is None
+            call_kwargs = mock_run.call_args[0][0]  # RunConfig object
+            assert call_kwargs.session_id is None
 
     @pytest.mark.asyncio
     async def test_in_thread_with_args(self) -> None:
@@ -460,11 +460,11 @@ class TestInThreadMode:
         cog.repo.get = AsyncMock(return_value=None)
 
         with patch(
-            "claude_discord.cogs.skill_command.run_claude_in_thread", new_callable=AsyncMock
+            "claude_discord.cogs.skill_command.run_claude_with_config", new_callable=AsyncMock
         ) as mock_run:
             await cog.run_skill.callback(cog, interaction, name="todoist", args="filter today")
-            call_kwargs = mock_run.call_args.kwargs
-            assert call_kwargs["prompt"] == "/todoist filter today"
+            call_kwargs = mock_run.call_args[0][0]  # RunConfig object
+            assert call_kwargs.prompt == "/todoist filter today"
 
 
 # ---------------------------------------------------------------------------

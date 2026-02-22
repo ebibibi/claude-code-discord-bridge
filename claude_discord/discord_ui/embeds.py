@@ -25,16 +25,29 @@ CATEGORY_ICON: dict[ToolCategory, str] = {
 }
 
 
-def tool_use_embed(tool: ToolUseEvent, in_progress: bool = True) -> discord.Embed:
-    """Create an embed for a tool use event."""
+def tool_use_embed(
+    tool: ToolUseEvent,
+    in_progress: bool = True,
+    elapsed_s: int | None = None,
+) -> discord.Embed:
+    """Create an embed for a tool use event.
+
+    Args:
+        tool: The tool use event to display.
+        in_progress: Whether the tool is still running.
+        elapsed_s: Seconds elapsed since the tool started. When provided and
+                   the tool is in-progress, elapsed time is shown in the
+                   description so the title (command name) stays stable.
+    """
     icon = CATEGORY_ICON.get(tool.category, "\U0001f916")
-    status = "..." if in_progress else ""
-    title = f"{icon} {tool.display_name}{status}"
+    title = f"{icon} {tool.display_name}{'...' if in_progress else ''}"
 
     embed = discord.Embed(
         title=title[:256],
         color=COLOR_TOOL if in_progress else COLOR_INFO,
     )
+    if in_progress and elapsed_s is not None:
+        embed.description = f"⏳ {elapsed_s}s elapsed..."
     return embed
 
 
@@ -88,6 +101,8 @@ def tool_result_embed(tool_title: str, result_content: str) -> discord.Embed:
     """Create an embed for a completed tool with its result.
 
     Replaces the in-progress tool embed once the result is available.
+    Uses description (4096-char limit) rather than a field (1024-char limit)
+    so that up to ~30 lines of output can be shown without truncation.
     """
     # Strip the trailing "..." from in-progress title
     title = tool_title.rstrip(".")
@@ -96,9 +111,10 @@ def tool_result_embed(tool_title: str, result_content: str) -> discord.Embed:
         color=COLOR_INFO,
     )
     if result_content:
-        # Use a spoiler-style collapsible look via a field
-        display = result_content[:1024]
-        embed.add_field(name="Result", value=f"```\n{display}\n```", inline=False)
+        # Reserve 8 chars for code block markers (```\n … \n```)
+        max_content = 4096 - 8
+        display = result_content[:max_content]
+        embed.description = f"```\n{display}\n```"
     return embed
 
 

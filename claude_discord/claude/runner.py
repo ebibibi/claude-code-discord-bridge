@@ -35,6 +35,9 @@ class ClaudeRunner:
         allowed_tools: list[str] | None = None,
         dangerously_skip_permissions: bool = False,
         include_partial_messages: bool = True,
+        api_port: int | None = None,
+        api_secret: str | None = None,
+        thread_id: int | None = None,
     ) -> None:
         self.command = command
         self.model = model
@@ -44,6 +47,9 @@ class ClaudeRunner:
         self.allowed_tools = allowed_tools
         self.dangerously_skip_permissions = dangerously_skip_permissions
         self.include_partial_messages = include_partial_messages
+        self.api_port = api_port
+        self.api_secret = api_secret
+        self.thread_id = thread_id
         self._process: asyncio.subprocess.Process | None = None
 
     async def run(
@@ -81,7 +87,7 @@ class ClaudeRunner:
         try:
             async for event in self._read_stream():
                 yield event
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
             logger.warning("Claude CLI timed out after %ds", self.timeout_seconds)
             yield StreamEvent(
                 raw={},
@@ -92,17 +98,28 @@ class ClaudeRunner:
         finally:
             await self._cleanup()
 
-    def clone(self) -> ClaudeRunner:
-        """Create a fresh runner with the same configuration but no active process."""
+    def clone(self, thread_id: int | None = None, model: str | None = None) -> ClaudeRunner:
+        """Create a fresh runner with the same configuration but no active process.
+
+        Args:
+            thread_id: Discord thread ID to inject as DISCORD_THREAD_ID env var.
+                       Overrides the instance-level thread_id if provided.
+            model: Optional model override for this clone. When provided, the clone
+                   uses this model instead of self.model. Useful for per-session
+                   model switching without mutating the shared base runner.
+        """
         return ClaudeRunner(
             command=self.command,
-            model=self.model,
+            model=model if model is not None else self.model,
             permission_mode=self.permission_mode,
             working_dir=self.working_dir,
             timeout_seconds=self.timeout_seconds,
             allowed_tools=self.allowed_tools,
             dangerously_skip_permissions=self.dangerously_skip_permissions,
             include_partial_messages=self.include_partial_messages,
+            api_port=self.api_port,
+            api_secret=self.api_secret,
+            thread_id=thread_id if thread_id is not None else self.thread_id,
         )
 
     async def interrupt(self) -> None:
@@ -116,7 +133,7 @@ class ClaudeRunner:
             self._process.send_signal(signal.SIGINT)
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=10)
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
                 await self.kill()
 
     async def kill(self) -> None:
@@ -125,7 +142,7 @@ class ClaudeRunner:
             self._process.terminate()
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5)
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
                 self._process.kill()
                 await self._process.wait()
 
@@ -182,8 +199,17 @@ class ClaudeRunner:
 
         Strips CLAUDECODE (nesting detection) and known secret variables
         so that the CLI process cannot read them via Bash tool.
+
+        Injects CCDB_API_URL (and optionally CCDB_API_SECRET) so Claude Code
+        can register scheduled tasks via ``curl $CCDB_API_URL/api/tasks``.
         """
         env = {k: v for k, v in os.environ.items() if k not in self._STRIPPED_ENV_KEYS}
+        if self.api_port is not None:
+            env["CCDB_API_URL"] = f"http://127.0.0.1:{self.api_port}"
+        if self.api_secret is not None:
+            env["CCDB_API_SECRET"] = self.api_secret
+        if self.thread_id is not None:
+            env["DISCORD_THREAD_ID"] = str(self.thread_id)
         return env
 
     async def _read_stream(self) -> AsyncGenerator[StreamEvent, None]:

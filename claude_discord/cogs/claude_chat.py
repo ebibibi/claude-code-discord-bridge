@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import discord
@@ -22,12 +23,17 @@ from discord.ext import commands
 from ..claude.runner import ClaudeRunner
 from ..concurrency import SessionRegistry
 from ..coordination.service import CoordinationService
+from ..database.ask_repo import PendingAskRepository
+from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
+from ..database.resume_repo import PendingResumeRepository
+from ..database.settings_repo import SettingsRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.views import StopView
-from ._run_helper import run_claude_in_thread
+from ._run_helper import run_claude_with_config
+from .run_config import RunConfig
 
 if TYPE_CHECKING:
     from ..bot import ClaudeDiscordBot
@@ -58,6 +64,10 @@ class ClaudeChatCog(commands.Cog):
         registry: SessionRegistry | None = None,
         dashboard: ThreadStatusDashboard | None = None,
         coordination: CoordinationService | None = None,
+        ask_repo: PendingAskRepository | None = None,
+        lounge_repo: LoungeRepository | None = None,
+        resume_repo: PendingResumeRepository | None = None,
+        settings_repo: SettingsRepository | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -75,6 +85,14 @@ class ClaudeChatCog(commands.Cog):
         self._dashboard = dashboard
         # Coordination service resolved lazily from bot if not supplied directly
         self._coordination = coordination
+        # For AskUserQuestion persistence across restarts
+        self._ask_repo = ask_repo or getattr(bot, "ask_repo", None)
+        # AI Lounge repo (optional — lounge disabled when None)
+        self._lounge_repo = lounge_repo or getattr(bot, "lounge_repo", None)
+        # Pending resume repo (optional — startup resume disabled when None)
+        self._resume_repo = resume_repo or getattr(bot, "resume_repo", None)
+        # Settings repo for dynamic model lookup (optional — falls back to runner.model)
+        self._settings_repo = settings_repo or getattr(bot, "settings_repo", None)
 
     @property
     def active_session_count(self) -> int:
@@ -92,10 +110,35 @@ class ClaudeChatCog(commands.Cog):
             self._dashboard = getattr(self.bot, "thread_dashboard", None)
         return self._dashboard
 
-    def _get_coordination(self) -> CoordinationService | None:
-        """Return the coordination service, resolving it from the bot if not yet set."""
+    async def _get_current_model(self) -> str | None:
+        """Return the model override from settings_repo, or None to use runner default.
+
+        When /model set has been used to change the global model, this returns
+        the stored value. Returns None if no override is set or settings_repo
+        is unavailable.
+        """
+        if self._settings_repo is None:
+            return None
+        from .session_manage import SETTING_CLAUDE_MODEL
+
+        return await self._settings_repo.get(SETTING_CLAUDE_MODEL)
+
+    def _get_coordination(self) -> CoordinationService:
+        """Return the coordination service (zero-config: auto-creates from env if needed).
+
+        Priority:
+        1. Explicitly supplied via constructor or bot.coordination attribute
+        2. Auto-created from COORDINATION_CHANNEL_ID env var (no consumer wiring needed)
+        3. No-op service when env var is unset
+        """
         if self._coordination is None:
-            self._coordination = getattr(self.bot, "coordination", None)
+            existing = getattr(self.bot, "coordination", None)
+            if existing is not None:
+                self._coordination = existing
+            else:
+                channel_id_str = os.getenv("COORDINATION_CHANNEL_ID", "")
+                channel_id = int(channel_id_str) if channel_id_str.isdigit() else None
+                self._coordination = CoordinationService(self.bot, channel_id)
         return self._coordination
 
     @commands.Cog.listener()
@@ -179,6 +222,173 @@ class ClaudeChatCog(commands.Cog):
         thread = await message.create_thread(name=thread_name)
         prompt = await self._build_prompt(message)
         await self._run_claude(message, thread, prompt, session_id=None)
+
+    async def spawn_session(
+        self,
+        channel: discord.TextChannel,
+        prompt: str,
+        thread_name: str | None = None,
+        session_id: str | None = None,
+    ) -> discord.Thread:
+        """Create a new thread and start a Claude Code session without a user message.
+
+        This is the API-initiated equivalent of ``_handle_new_conversation``.
+        It bypasses the ``on_message`` bot-author guard, enabling programmatic
+        spawning of Claude sessions (e.g. from ``POST /api/spawn``).
+
+        A seed message is posted inside the new thread so that ``StatusManager``
+        has a concrete ``discord.Message`` to attach reaction-emoji status to.
+
+        Args:
+            channel: The parent text channel in which to create the thread.
+            prompt: The instruction to send to Claude Code.
+            thread_name: Optional thread title; defaults to the first 100 chars
+                of *prompt*.
+            session_id: Optional Claude session ID to resume via ``--resume``.
+                        When supplied the new Claude process continues the
+                        previous conversation rather than starting fresh.
+
+        Returns:
+            The newly created :class:`discord.Thread`.
+        """
+        name = (thread_name or prompt)[:100]
+        thread = await channel.create_thread(
+            name=name,
+            type=discord.ChannelType.public_thread,
+            auto_archive_duration=60,
+        )
+        # Post the prompt so StatusManager has a Message to add reactions to.
+        seed_message = await thread.send(prompt)
+        # Run Claude in the background so /api/spawn returns immediately.
+        # The caller gets the thread reference without waiting for Claude to finish.
+        asyncio.create_task(self._run_claude(seed_message, thread, prompt, session_id=session_id))
+        return thread
+
+    async def cog_unload(self) -> None:
+        """Mark all mid-run Claude sessions for auto-resume on the next bot startup.
+
+        Called by discord.py whenever the cog is removed — including during a
+        clean shutdown triggered by ``systemctl restart/stop``, ``bot.close()``,
+        or any other SIGTERM-based shutdown.  This ensures that sessions which
+        were actively running when the bot was killed will be automatically
+        resumed (with a "bot restarted" prompt) as soon as the bot comes back.
+
+        Idle sessions (where Claude has already replied and is waiting for the
+        next human message) are NOT in ``_active_runners`` and therefore are not
+        marked — they resume naturally via message-triggered resume when the user
+        sends their next message.
+
+        No-op when ``_resume_repo`` is not configured.
+        """
+        if not self._active_runners or self._resume_repo is None:
+            return
+
+        logger.info(
+            "Shutdown detected: marking %d active session(s) for restart-resume",
+            len(self._active_runners),
+        )
+        for thread_id in list(self._active_runners):
+            try:
+                session_id: str | None = None
+                record = await self.repo.get(thread_id)
+                if record is not None:
+                    session_id = record.session_id
+
+                await self._resume_repo.mark(
+                    thread_id,
+                    session_id=session_id,
+                    reason="bot_shutdown",
+                    resume_prompt=(
+                        "ボットが再起動しました。"
+                        "前の作業の続きを確認し、必要な残作業があれば完了してください。"
+                    ),
+                )
+                logger.info(
+                    "Marked thread %d for restart-resume (session=%s)", thread_id, session_id
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to mark thread %d for restart-resume", thread_id, exc_info=True
+                )
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        """Resume any Claude sessions that marked themselves for restart-resume.
+
+        Called each time the bot connects to Discord (including reconnects).
+        Only pending resumes within the TTL window (default 5 minutes) are
+        processed; older entries are silently discarded by the repository.
+
+        Safety guarantees:
+        - Each row is **deleted before** spawning Claude so that even a
+          crash during spawn cannot cause a double-resume.
+        - The TTL prevents stale markers from triggering after a long
+          downtime or accidental second restart.
+        - A resume failure (e.g. channel not found) is logged and skipped
+          gracefully — it never prevents the bot from becoming ready.
+        """
+        if self._resume_repo is None:
+            return
+
+        pending = await self._resume_repo.get_pending()
+        if not pending:
+            return
+
+        logger.info("Found %d pending session resume(s) on startup", len(pending))
+
+        for entry in pending:
+            # Delete FIRST — prevents double-resume even if spawn fails
+            await self._resume_repo.delete(entry.id)
+
+            thread_id = entry.thread_id
+            try:
+                raw = self.bot.get_channel(thread_id)
+                if raw is None:
+                    raw = await self.bot.fetch_channel(thread_id)
+            except Exception:
+                logger.warning(
+                    "Pending resume: thread %d not found, skipping", thread_id, exc_info=True
+                )
+                continue
+
+            if not isinstance(raw, discord.Thread):
+                logger.warning("Pending resume: channel %d is not a Thread, skipping", thread_id)
+                continue
+
+            thread = raw
+            parent = thread.parent
+            if not isinstance(parent, discord.TextChannel):
+                logger.warning(
+                    "Pending resume: thread %d has no TextChannel parent, skipping", thread_id
+                )
+                continue
+
+            resume_prompt = entry.resume_prompt or (
+                "ボットが再起動から復帰しました。"
+                "前の作業の続きを確認し、必要な残作業を完了してください。"
+            )
+
+            logger.info(
+                "Resuming session in thread %d (session_id=%s, reason=%s)",
+                thread_id,
+                entry.session_id,
+                entry.reason,
+            )
+            try:
+                # Post directly into the existing thread — no new thread needed
+                seed_message = await thread.send(
+                    f"🔄 **Bot が再起動から復帰しました。**\n{resume_prompt}"
+                )
+                asyncio.create_task(
+                    self._run_claude(
+                        seed_message,
+                        thread,
+                        resume_prompt,
+                        session_id=entry.session_id,
+                    )
+                )
+            except Exception:
+                logger.error("Failed to resume session in thread %d", thread_id, exc_info=True)
 
     async def _handle_thread_reply(self, message: discord.Message) -> None:
         """Continue a Claude Code session in an existing thread.
@@ -286,37 +496,46 @@ class ClaudeChatCog(commands.Cog):
                     thread=thread,
                 )
 
-            # Announce session start to coordination channel
-            if coordination is not None:
-                await coordination.post_session_start(thread, description)
+            async def _notify_stall() -> None:
+                await thread.send(
+                    "-# \u26a0\ufe0f No activity for 30s — could be extended thinking "
+                    "or context compression. Will resume automatically."
+                )
 
-            status = StatusManager(user_message)
+            status = StatusManager(user_message, on_hard_stall=_notify_stall)
             await status.set_thinking()
 
-            runner = self.runner.clone()
+            model_override = await self._get_current_model()
+            runner = self.runner.clone(thread_id=thread.id, model=model_override)
             self._active_runners[thread.id] = runner
 
             stop_view = StopView(runner)
             stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
+            stop_view.set_message(stop_msg)
 
             try:
-                await run_claude_in_thread(
-                    thread=thread,
-                    runner=runner,
-                    repo=self.repo,
-                    prompt=prompt,
-                    session_id=session_id,
-                    status=status,
-                    registry=self._registry,
+                await run_claude_with_config(
+                    RunConfig(
+                        thread=thread,
+                        runner=runner,
+                        repo=self.repo,
+                        prompt=prompt,
+                        session_id=session_id,
+                        status=status,
+                        registry=self._registry,
+                        ask_repo=self._ask_repo,
+                        lounge_repo=self._lounge_repo,
+                        stop_view=stop_view,
+                        worktree_manager=getattr(self.bot, "worktree_manager", None),
+                    )
                 )
             finally:
-                await stop_view.disable(stop_msg)
+                await stop_view.disable()
                 self._active_runners.pop(thread.id, None)
                 self._active_tasks.pop(thread.id, None)
 
-                # Announce session end to coordination channel
-                if coordination is not None:
-                    await coordination.post_session_end(thread)
+                # Announce session end to coordination channel (no-op if unconfigured)
+                await coordination.post_session_end(thread)
 
                 # Transition to WAITING_INPUT so owner knows a reply is needed
                 if dashboard is not None:

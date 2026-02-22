@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
@@ -15,6 +15,7 @@ from claude_discord.cogs.claude_chat import (
     ClaudeChatCog,
 )
 from claude_discord.concurrency import SessionRegistry
+from claude_discord.coordination.service import CoordinationService
 
 
 def _make_cog() -> ClaudeChatCog:
@@ -482,3 +483,334 @@ class TestInterruptOnNewMessage:
         assert hasattr(cog, "_active_tasks")
         assert isinstance(cog._active_tasks, dict)
         assert len(cog._active_tasks) == 0
+
+
+class TestZeroConfigCoordination:
+    """_get_coordination() must work without any consumer wiring (Zero-Config Principle).
+
+    Consumers (like EbiBot) must get new features by updating the package alone —
+    no code changes, no bot.coordination wiring required.
+    """
+
+    def test_auto_creates_from_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No bot.coordination → auto-creates CoordinationService from env var."""
+        monkeypatch.setenv("COORDINATION_CHANNEL_ID", "1234567890")
+        bot = MagicMock(spec=[])  # no attributes at all
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        svc = cog._get_coordination()
+        assert isinstance(svc, CoordinationService)
+        assert svc.enabled is True
+
+    def test_no_op_when_env_var_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No env var → returns a no-op CoordinationService (never None)."""
+        monkeypatch.delenv("COORDINATION_CHANNEL_ID", raising=False)
+        bot = MagicMock(spec=[])
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        svc = cog._get_coordination()
+        assert isinstance(svc, CoordinationService)
+        assert svc.enabled is False  # no-op, but not None
+
+    def test_bot_attribute_takes_precedence(self) -> None:
+        """Explicitly set bot.coordination wins over env var auto-creation."""
+        explicit = CoordinationService(MagicMock(), channel_id=9999)
+        bot = MagicMock()
+        bot.coordination = explicit
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        assert cog._get_coordination() is explicit
+
+    def test_constructor_arg_takes_precedence(self) -> None:
+        """Explicitly passed coordination= wins over everything."""
+        explicit = CoordinationService(MagicMock(), channel_id=9999)
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), coordination=explicit)
+        assert cog._get_coordination() is explicit
+
+    def test_result_is_cached(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Second call returns same object (no repeated env var reads)."""
+        monkeypatch.setenv("COORDINATION_CHANNEL_ID", "1234567890")
+        bot = MagicMock(spec=[])
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        assert cog._get_coordination() is cog._get_coordination()
+
+
+class TestSpawnSession:
+    """Tests for ClaudeChatCog.spawn_session()."""
+
+    @pytest.mark.asyncio
+    async def test_spawn_creates_thread_and_returns_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """spawn_session creates a thread with the right name and returns it."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+        thread.name = "Test spawn"
+        thread.send = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        with patch.object(cog, "_run_claude", new=AsyncMock()):
+            result = await cog.spawn_session(channel, "Do the thing")
+
+        assert result is thread
+        channel.create_thread.assert_called_once()
+        call_kwargs = channel.create_thread.call_args.kwargs
+        assert call_kwargs["name"] == "Do the thing"
+        assert call_kwargs["type"] == discord.ChannelType.public_thread
+
+    @pytest.mark.asyncio
+    async def test_spawn_uses_custom_thread_name(self) -> None:
+        """thread_name overrides the default (prompt[:100])."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        with patch.object(cog, "_run_claude", new=AsyncMock()):
+            await cog.spawn_session(channel, "Very long prompt text", thread_name="Short name")
+
+        kwargs = channel.create_thread.call_args.kwargs
+        assert kwargs["name"] == "Short name"
+
+    @pytest.mark.asyncio
+    async def test_spawn_posts_seed_message(self) -> None:
+        """spawn_session sends the prompt as the first thread message."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        seed_msg = MagicMock()
+        thread.send = AsyncMock(return_value=seed_msg)
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        mock_run = AsyncMock()
+        with patch.object(cog, "_run_claude", new=mock_run):
+            await cog.spawn_session(channel, "Hello Claude")
+
+        thread.send.assert_called_once_with("Hello Claude")
+        # _run_claude receives the seed message (not a user message)
+        user_msg_arg = mock_run.call_args.args[0]
+        assert user_msg_arg is seed_msg
+
+
+class TestOnReady:
+    """Tests for ClaudeChatCog.on_ready — startup session resume logic."""
+
+    @pytest.mark.asyncio
+    async def test_on_ready_no_resume_repo_is_noop(self) -> None:
+        """If resume_repo is not set, on_ready should do nothing."""
+        # spec=[] prevents MagicMock from auto-generating resume_repo attribute
+        bot = MagicMock(spec=[])
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+        assert cog._resume_repo is None
+        # Should complete without error and without touching bot
+        await cog.on_ready()
+
+    @pytest.mark.asyncio
+    async def test_on_ready_no_pending_is_noop(self) -> None:
+        """If resume_repo returns no pending entries, on_ready does nothing."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from claude_discord.database.resume_repo import PendingResumeRepository
+
+        resume_repo = MagicMock(spec=PendingResumeRepository)
+        resume_repo.get_pending = AsyncMock(return_value=[])
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), resume_repo=resume_repo)
+        await cog.on_ready()
+        bot.get_channel.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_on_ready_deletes_before_spawning(self) -> None:
+        """Row must be deleted BEFORE _run_claude is called (single-fire guarantee)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        from claude_discord.database.resume_repo import PendingResume, PendingResumeRepository
+
+        entry = PendingResume(
+            id=7,
+            thread_id=555,
+            session_id="sess-abc",
+            reason="self_restart",
+            resume_prompt="Continue please.",
+            created_at="2026-02-21 20:00:00",
+        )
+        resume_repo = MagicMock(spec=PendingResumeRepository)
+        resume_repo.get_pending = AsyncMock(return_value=[entry])
+        resume_repo.delete = AsyncMock()
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 555
+        thread.send = AsyncMock(return_value=MagicMock())
+        parent = MagicMock(spec=discord.TextChannel)
+        thread.parent = parent
+
+        bot = MagicMock()
+        bot.get_channel.return_value = thread
+
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), resume_repo=resume_repo)
+
+        call_order: list[str] = []
+        resume_repo.delete.side_effect = lambda _: call_order.append("delete")
+
+        async def fake_run_claude(*args, **kwargs):
+            call_order.append("run_claude")
+
+        with patch.object(cog, "_run_claude", side_effect=fake_run_claude):
+            await cog.on_ready()
+            # create_task schedules the coroutine; yield to the event loop so it runs.
+            await asyncio.sleep(0)
+
+        assert call_order == ["delete", "run_claude"], (
+            "delete() must be called before _run_claude to prevent double-resume"
+        )
+
+    @pytest.mark.asyncio
+    async def test_on_ready_skips_non_thread_channels(self) -> None:
+        """If get_channel returns a non-Thread, skip gracefully."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        import discord
+
+        from claude_discord.database.resume_repo import PendingResume, PendingResumeRepository
+
+        entry = PendingResume(
+            id=1,
+            thread_id=100,
+            session_id=None,
+            reason="self_restart",
+            resume_prompt=None,
+            created_at="2026-02-21 20:00:00",
+        )
+        resume_repo = MagicMock(spec=PendingResumeRepository)
+        resume_repo.get_pending = AsyncMock(return_value=[entry])
+        resume_repo.delete = AsyncMock()
+
+        # Return a TextChannel (not a Thread) — should be skipped
+        bot = MagicMock()
+        bot.get_channel.return_value = MagicMock(spec=discord.TextChannel)
+
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), resume_repo=resume_repo)
+        # Should not raise
+        await cog.on_ready()
+        # delete was still called (single-fire)
+        resume_repo.delete.assert_called_once_with(1)
+
+
+class TestCogUnloadMarkForResume:
+    """Tests for cog_unload() auto-marking active sessions for restart-resume."""
+
+    def _make_cog_with_resume_repo(self) -> tuple[ClaudeChatCog, MagicMock, MagicMock]:
+        """Return (cog, repo, resume_repo) with resume_repo configured."""
+        bot = MagicMock()
+        bot.channel_id = 999
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        resume_repo = MagicMock()
+        resume_repo.mark = AsyncMock(return_value=1)
+        cog = ClaudeChatCog(bot=bot, repo=repo, runner=MagicMock(), resume_repo=resume_repo)
+        return cog, repo, resume_repo
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_no_active_runners(self) -> None:
+        """cog_unload is a no-op when no sessions are running."""
+        cog, _, resume_repo = self._make_cog_with_resume_repo()
+        assert len(cog._active_runners) == 0
+
+        await cog.cog_unload()
+
+        resume_repo.mark.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_no_resume_repo(self) -> None:
+        """cog_unload is a no-op when resume_repo is not configured."""
+        cog = _make_cog()  # no resume_repo
+        cog._active_runners[111] = MagicMock()
+
+        await cog.cog_unload()  # Should not raise
+
+    @pytest.mark.asyncio
+    async def test_marks_each_active_runner(self) -> None:
+        """Calls resume_repo.mark() for every thread in _active_runners."""
+        cog, repo, resume_repo = self._make_cog_with_resume_repo()
+        cog._active_runners[111] = MagicMock()
+        cog._active_runners[222] = MagicMock()
+
+        await cog.cog_unload()
+
+        assert resume_repo.mark.call_count == 2
+        called_thread_ids = {call.args[0] for call in resume_repo.mark.call_args_list}
+        assert called_thread_ids == {111, 222}
+
+    @pytest.mark.asyncio
+    async def test_uses_bot_shutdown_reason(self) -> None:
+        """Marks sessions with reason='bot_shutdown'."""
+        cog, _, resume_repo = self._make_cog_with_resume_repo()
+        cog._active_runners[333] = MagicMock()
+
+        await cog.cog_unload()
+
+        call_kwargs = resume_repo.mark.call_args.kwargs
+        assert call_kwargs["reason"] == "bot_shutdown"
+
+    @pytest.mark.asyncio
+    async def test_resolves_session_id_from_repo(self) -> None:
+        """Looks up session_id from self.repo for --resume continuity."""
+        cog, repo, resume_repo = self._make_cog_with_resume_repo()
+        session_record = MagicMock()
+        session_record.session_id = "test-session-xyz"
+        repo.get = AsyncMock(return_value=session_record)
+
+        cog._active_runners[444] = MagicMock()
+        await cog.cog_unload()
+
+        repo.get.assert_awaited_once_with(444)
+        assert resume_repo.mark.call_args.kwargs["session_id"] == "test-session-xyz"
+
+    @pytest.mark.asyncio
+    async def test_continues_on_mark_failure(self) -> None:
+        """Failure to mark one thread does not prevent marking others."""
+        cog, _, resume_repo = self._make_cog_with_resume_repo()
+        resume_repo.mark = AsyncMock(side_effect=[RuntimeError("db error"), 2])
+        cog._active_runners[111] = MagicMock()
+        cog._active_runners[222] = MagicMock()
+
+        # Should not raise
+        await cog.cog_unload()
+
+        assert resume_repo.mark.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_uses_none_session_id_when_repo_has_no_record(self) -> None:
+        """Falls back to session_id=None when no session record exists."""
+        cog, repo, resume_repo = self._make_cog_with_resume_repo()
+        repo.get = AsyncMock(return_value=None)
+        cog._active_runners[555] = MagicMock()
+
+        await cog.cog_unload()
+
+        assert resume_repo.mark.call_args.kwargs["session_id"] is None

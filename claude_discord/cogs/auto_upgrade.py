@@ -173,19 +173,88 @@ class AutoUpgradeCog(commands.Cog):
             if self.config.restart_command:
                 if self.config.restart_approval:
                     await self._wait_for_approval(trigger_message, thread)
+                # Snapshot active sessions BEFORE drain so we can resume them after restart.
+                active_thread_ids = self._collect_active_thread_ids()
                 await self._drain(thread)
+                await self._mark_sessions_for_resume(active_thread_ids, thread)
                 await self._restart(trigger_message, thread)
             else:
                 await trigger_message.add_reaction("✅")
                 await thread.send("✅ Upgrade complete (no restart configured).")
 
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
             await thread.send("❌ Step timed out.")
             await trigger_message.add_reaction("❌")
         except Exception:
             logger.exception("Auto-upgrade error")
             await thread.send("❌ Upgrade failed with an unexpected error.")
             await trigger_message.add_reaction("❌")
+
+    def _collect_active_thread_ids(self) -> frozenset[int]:
+        """Return the IDs of threads with currently-running Claude sessions.
+
+        Iterates all Cogs looking for ``_active_runners`` dicts (duck-typed to
+        avoid a hard import dependency on ``ClaudeChatCog``).  Call this
+        *before* :meth:`_drain` so you capture sessions that are mid-run.
+        """
+        thread_ids: set[int] = set()
+        for cog in self.bot.cogs.values():
+            if cog is self:
+                continue
+            active_runners = getattr(cog, "_active_runners", None)
+            if isinstance(active_runners, dict):
+                thread_ids.update(active_runners.keys())
+        return frozenset(thread_ids)
+
+    async def _mark_sessions_for_resume(
+        self,
+        thread_ids: frozenset[int],
+        status_thread: discord.Thread,
+    ) -> None:
+        """Mark *thread_ids* in the pending-resumes table.
+
+        Called just before the restart command so that Claude sessions which
+        were active at upgrade time are automatically resumed on the next bot
+        startup.  No-op when ``bot.resume_repo`` is not configured.
+
+        ``session_id`` is auto-resolved from ``bot.session_repo`` when
+        available, enabling ``--resume`` continuity.
+        """
+        if not thread_ids:
+            return
+
+        resume_repo = getattr(self.bot, "resume_repo", None)
+        if resume_repo is None:
+            return
+
+        session_repo = getattr(self.bot, "session_repo", None)
+        marked = 0
+
+        for tid in thread_ids:
+            try:
+                session_id: str | None = None
+                if session_repo is not None:
+                    record = await session_repo.get(tid)
+                    if record is not None:
+                        session_id = record.session_id
+
+                await resume_repo.mark(
+                    tid,
+                    session_id=session_id,
+                    reason="bot_upgrade",
+                    resume_prompt=(
+                        "ボットがパッケージアップグレードのため再起動しました。"
+                        "前の作業の続きを確認し、必要な残作業があれば完了してください。"
+                    ),
+                )
+                marked += 1
+            except Exception:
+                logger.warning("Failed to mark thread %d for resume", tid, exc_info=True)
+
+        if marked:
+            await status_thread.send(
+                f"📌 {marked} active session(s) marked for auto-resume after restart."
+            )
 
     def _auto_drain_check(self) -> bool:
         """Check all DrainAware Cogs registered on the bot.
@@ -260,7 +329,7 @@ class AutoUpgradeCog(commands.Cog):
                 logger.info("Restart approved by user %s", event.user_id)
                 await thread.send("👍 Restart approved!")
                 return
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
                 await thread.send(
                     "⏳ Still waiting for restart approval... React ✅ above when ready."
                 )

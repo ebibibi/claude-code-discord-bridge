@@ -27,7 +27,8 @@ from discord.ext import commands
 from ..claude.runner import ClaudeRunner
 from ..concurrency import SessionRegistry
 from ..database.repository import SessionRepository
-from ._run_helper import run_claude_in_thread
+from ._run_helper import run_claude_with_config
+from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
 
@@ -198,13 +199,16 @@ class SkillCommandCog(commands.Cog):
             await interaction.followup.send(f"Running {display} in this thread…")
 
             runner = self.runner.clone()
-            await run_claude_in_thread(
-                thread=channel,
-                runner=runner,
-                repo=self.repo,
-                prompt=prompt,
-                session_id=session_id,
-                registry=self._registry,
+            await run_claude_with_config(
+                RunConfig(
+                    thread=channel,
+                    runner=runner,
+                    repo=self.repo,
+                    prompt=prompt,
+                    session_id=session_id,
+                    registry=self._registry,
+                    worktree_manager=getattr(self.bot, "worktree_manager", None),
+                )
             )
             return
 
@@ -225,11 +229,14 @@ class SkillCommandCog(commands.Cog):
         await interaction.followup.send(f"Running {display} → {thread.mention}")
 
         runner = self.runner.clone()
-        await run_claude_in_thread(
-            thread=thread,
-            runner=runner,
-            repo=self.repo,
-            prompt=prompt,
-            session_id=None,
-            registry=self._registry,
+        await run_claude_with_config(
+            RunConfig(
+                thread=thread,
+                runner=runner,
+                repo=self.repo,
+                prompt=prompt,
+                session_id=None,
+                registry=self._registry,
+                worktree_manager=getattr(self.bot, "worktree_manager", None),
+            )
         )

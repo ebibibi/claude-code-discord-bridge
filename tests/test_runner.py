@@ -111,6 +111,32 @@ class TestBuildEnv:
         env = runner._build_env()
         assert "PATH" in env
 
+    def test_injects_ccdb_api_url_when_api_port_set(self) -> None:
+        runner = ClaudeRunner(api_port=8099)
+        env = runner._build_env()
+        assert env["CCDB_API_URL"] == "http://127.0.0.1:8099"
+
+    def test_no_ccdb_api_url_when_api_port_not_set(self) -> None:
+        # Remove CCDB_API_URL from the process env so it isn't inherited
+        original = os.environ.pop("CCDB_API_URL", None)
+        try:
+            runner = ClaudeRunner()
+            env = runner._build_env()
+            assert "CCDB_API_URL" not in env
+        finally:
+            if original is not None:
+                os.environ["CCDB_API_URL"] = original
+
+    def test_injects_ccdb_api_secret_when_set(self) -> None:
+        runner = ClaudeRunner(api_port=8099, api_secret="my-secret")
+        env = runner._build_env()
+        assert env["CCDB_API_SECRET"] == "my-secret"
+
+    def test_no_ccdb_api_secret_when_not_set(self) -> None:
+        runner = ClaudeRunner(api_port=8099)
+        env = runner._build_env()
+        assert "CCDB_API_SECRET" not in env
+
 
 class TestClone:
     """Tests for clone method."""
@@ -188,6 +214,92 @@ class TestInterrupt:
         mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
         mock_kill.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_interrupt_falls_back_to_kill_on_asyncio_timeout(self) -> None:
+        """interrupt() calls kill() on asyncio.TimeoutError (Python 3.10 compat).
+
+        On Python 3.10, asyncio.TimeoutError is NOT a subclass of the built-in
+        TimeoutError.  This test verifies the correct exception is caught so
+        interrupt() doesn't propagate an unhandled exception to the caller.
+        """
+        import asyncio
+
+        runner = ClaudeRunner()
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        mock_process.wait = AsyncMock(return_value=0)
+        runner._process = mock_process
+
+        with (
+            patch("asyncio.wait_for", side_effect=asyncio.TimeoutError),
+            patch.object(runner, "kill", new_callable=AsyncMock) as mock_kill,
+        ):
+            await runner.interrupt()  # must not raise
+
+        mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
+        mock_kill.assert_called_once()
+
+
+class TestKill:
+    """Tests for kill() method."""
+
+    @pytest.mark.asyncio
+    async def test_kill_force_kills_on_asyncio_timeout(self) -> None:
+        """kill() force-kills the process on asyncio.TimeoutError (Python 3.10 compat).
+
+        On Python 3.10, asyncio.TimeoutError is NOT a subclass of the built-in
+        TimeoutError.  Verify kill() still calls process.kill() rather than
+        propagating an unhandled exception.
+        """
+        import asyncio
+
+        runner = ClaudeRunner()
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        mock_process.wait = AsyncMock(return_value=0)
+        runner._process = mock_process
+
+        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+            await runner.kill()  # must not raise
+
+        mock_process.kill.assert_called_once()
+
+
+class TestRunTimeout:
+    """Tests for timeout handling in run()."""
+
+    @pytest.mark.asyncio
+    async def test_run_yields_error_on_asyncio_timeout(self) -> None:
+        """run() yields a timeout error event on asyncio.TimeoutError (Python 3.10 compat).
+
+        On Python 3.10, asyncio.TimeoutError is NOT a subclass of the built-in
+        TimeoutError.  Verify run() catches it and yields a proper error event
+        instead of propagating the exception to callers.
+        """
+
+        runner = ClaudeRunner(timeout_seconds=5)
+
+        mock_process = AsyncMock()
+        mock_process.returncode = None
+        mock_process.stdout = AsyncMock()
+        mock_process.stderr = AsyncMock()
+
+        async def _stream_raises():
+            raise TimeoutError
+            yield  # make it an async generator
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch.object(runner, "_read_stream", _stream_raises),
+            patch.object(runner, "_cleanup", new_callable=AsyncMock),
+        ):
+            events = [event async for event in runner.run("hello")]
+
+        assert len(events) == 1
+        assert events[0].is_complete
+        assert events[0].error is not None
+        assert "imed out" in events[0].error
+
 
 class TestSignalKillSuppression:
     """Tests that signal-killed processes (negative returncode) don't emit error events."""
@@ -226,3 +338,16 @@ class TestSignalKillSuppression:
         error_events = [e for e in events if e.error]
         assert len(error_events) == 1
         assert "1" in error_events[0].error
+
+    def test_clone_with_model_override(self) -> None:
+        """clone() with model= overrides the runner's model for that clone."""
+        runner = ClaudeRunner(model="sonnet")
+        cloned = runner.clone(model="opus")
+        assert cloned.model == "opus"
+        assert runner.model == "sonnet"  # original unchanged
+
+    def test_clone_without_model_override_preserves_model(self) -> None:
+        """clone() without model= keeps the original model."""
+        runner = ClaudeRunner(model="haiku")
+        cloned = runner.clone()
+        assert cloned.model == "haiku"

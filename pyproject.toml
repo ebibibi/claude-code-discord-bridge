@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-code-discord-bridge"
-version = "1.0.0"
+version = "1.3.0"
 description = "Connect Claude Code to Discord and GitHub — interactive chat, CI/CD automation, and workflow integration"
 readme = "README.md"
 license = {text = "MIT"}
@@ -17,6 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["aiohttp>=3.9"]
+
+[project.scripts]
+ccdb = "claude_discord.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["claude_discord"]

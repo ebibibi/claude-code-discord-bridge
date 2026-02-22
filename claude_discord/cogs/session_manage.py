@@ -19,8 +19,9 @@ from discord.ext import commands
 
 from ..database.repository import SessionRepository
 from ..database.settings_repo import SettingsRepository
-from ..discord_ui.embeds import COLOR_INFO, COLOR_SUCCESS
+from ..discord_ui.embeds import COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
 from ..session_sync import CliSession, extract_recent_messages, scan_cli_sessions
+from ..worktree import WorktreeManager
 
 if TYPE_CHECKING:
     from ..bot import ClaudeDiscordBot
@@ -53,6 +54,15 @@ _DEFAULT_SINCE_HOURS = 24
 SETTING_SYNC_MIN_RESULTS = "sync_min_results"
 _DEFAULT_MIN_RESULTS = 10
 
+# Model management
+SETTING_CLAUDE_MODEL = "claude_model"
+_VALID_MODELS = {"haiku", "sonnet", "opus"}
+_MODEL_CHOICES = [
+    app_commands.Choice(name="Haiku 4.5 (fast, cost-effective)", value="haiku"),
+    app_commands.Choice(name="Sonnet 4.6 (balanced, default)", value="sonnet"),
+    app_commands.Choice(name="Opus 4.6 (powerful, deep reasoning)", value="opus"),
+]
+
 
 class SessionManageCog(commands.Cog):
     """Cog for session listing, resume info, and CLI sync commands."""
@@ -63,11 +73,15 @@ class SessionManageCog(commands.Cog):
         repo: SessionRepository,
         cli_sessions_path: str | None = None,
         settings_repo: SettingsRepository | None = None,
+        runner: object | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
         self.cli_sessions_path = cli_sessions_path
         self.settings_repo = settings_repo
+        # Optional ClaudeRunner reference for reading the default model.
+        # Resolved lazily from ClaudeChatCog if not provided directly.
+        self._runner = runner
 
     async def _get_thread_style(self) -> str:
         """Get the configured thread style, defaulting to 'channel'."""
@@ -95,6 +109,95 @@ class SessionManageCog(commands.Cog):
         if raw is not None and raw.isdigit():
             return int(raw)
         return _DEFAULT_MIN_RESULTS
+
+    def _get_runner(self) -> object | None:
+        """Return the runner, resolving it from ClaudeChatCog if not set directly."""
+        if self._runner is not None:
+            return self._runner
+        chat_cog = self.bot.get_cog("ClaudeChatCog")
+        if chat_cog is not None:
+            return getattr(chat_cog, "runner", None)
+        return None
+
+    async def _get_effective_model(self) -> str:
+        """Return the effective model: settings_repo override or runner default."""
+        if self.settings_repo is not None:
+            stored = await self.settings_repo.get(SETTING_CLAUDE_MODEL)
+            if stored:
+                return stored
+        runner = self._get_runner()
+        if runner is not None and hasattr(runner, "model"):
+            return runner.model  # type: ignore[return-value]
+        return "sonnet"
+
+    # ── Model commands ────────────────────────────────────────────────────────
+
+    @app_commands.command(name="model-show", description="Show the current Claude model")
+    async def model_show(self, interaction: discord.Interaction) -> None:
+        """Display the current global model and, if in a thread, the per-session model."""
+        effective_model = await self._get_effective_model()
+
+        embed = discord.Embed(
+            title="🤖 Current Claude Model",
+            color=COLOR_INFO,
+        )
+
+        # Global / default model field
+        stored = await self.settings_repo.get(SETTING_CLAUDE_MODEL) if self.settings_repo else None
+        runner = self._get_runner()
+        runner_model = getattr(runner, "model", "sonnet") if runner else "sonnet"
+        if stored:
+            embed.description = (
+                f"**Global override:** `{stored}`\n*(runner default: `{runner_model}`)*"
+            )
+        else:
+            embed.description = (
+                f"**Default model:** `{runner_model}`\n"
+                "*(no override set — use `/model-set` to change)*"
+            )
+
+        # Per-thread session model (if inside a thread)
+        if isinstance(interaction.channel, discord.Thread):
+            record = await self.repo.get(interaction.channel.id)
+            if record and record.model:
+                embed.add_field(
+                    name="This thread's last session",
+                    value=f"`{record.model}`",
+                    inline=False,
+                )
+
+        embed.set_footer(text=f"Effective model for new sessions: {effective_model}")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="model-set", description="Change the global Claude model for new sessions"
+    )  # noqa: E501
+    @app_commands.describe(model="Model to use for all new Claude sessions")
+    @app_commands.choices(model=_MODEL_CHOICES)
+    async def model_set(self, interaction: discord.Interaction, model: str) -> None:
+        """Set the global default model stored in settings_repo."""
+        if model not in _VALID_MODELS:
+            await interaction.response.send_message(
+                f"❌ Unknown model `{model}`. Valid choices: {', '.join(sorted(_VALID_MODELS))}",
+                ephemeral=True,
+            )
+            return
+
+        if self.settings_repo is None:
+            await interaction.response.send_message(
+                "❌ Settings repository is unavailable — model cannot be persisted.",
+                ephemeral=True,
+            )
+            return
+
+        await self.settings_repo.set(SETTING_CLAUDE_MODEL, model)
+
+        embed = discord.Embed(
+            title="✅ Model Updated",
+            description=f"Global model set to **`{model}`**.\nAll new sessions will use this model.",  # noqa: E501
+            color=COLOR_SUCCESS,
+        )
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(
         name="sync-settings",
@@ -437,3 +540,163 @@ class SessionManageCog(commands.Cog):
                 chunk = candidate
         if chunk:
             await thread.send(chunk)
+
+    # ------------------------------------------------------------------
+    # Worktree commands
+    # ------------------------------------------------------------------
+
+    def _get_worktree_manager(self) -> WorktreeManager | None:
+        """Return the WorktreeManager from the bot, if configured."""
+        return getattr(self.bot, "worktree_manager", None)
+
+    @app_commands.command(
+        name="worktree-list",
+        description="List all active Claude Code session worktrees",
+    )
+    async def worktree_list(self, interaction: discord.Interaction) -> None:
+        """Show all session worktrees (branch ``session/\\d+``) and their status."""
+        wm = self._get_worktree_manager()
+        if wm is None:
+            await interaction.response.send_message(
+                "❌ Worktree manager is not configured.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        import asyncio
+
+        worktrees = await asyncio.to_thread(wm.find_session_worktrees)
+
+        if not worktrees:
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="🌲 Session Worktrees",
+                    description="No session worktrees found.",
+                    color=COLOR_INFO,
+                )
+            )
+            return
+
+        from ..worktree import _is_clean  # noqa: PLC0415
+
+        embed = discord.Embed(
+            title=f"🌲 Session Worktrees ({len(worktrees)})",
+            color=COLOR_INFO,
+        )
+        for wt in worktrees:
+            clean = await asyncio.to_thread(_is_clean, wt.path)
+            status = "✅ clean" if clean else "⚠️ dirty"
+            name = f"`wt-{wt.thread_id}`"
+            value = f"Branch: `{wt.branch}`\nRepo: `{wt.main_repo or 'unknown'}`\nStatus: {status}"
+            embed.add_field(name=name, value=value, inline=False)
+
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(
+        name="worktree-cleanup",
+        description="Remove clean orphaned session worktrees",
+    )
+    @app_commands.describe(
+        dry_run="Preview what would be removed without actually removing anything",
+    )
+    async def worktree_cleanup(
+        self,
+        interaction: discord.Interaction,
+        dry_run: bool = False,
+    ) -> None:
+        """Remove session worktrees that have no active session and are clean."""
+        wm = self._get_worktree_manager()
+        if wm is None:
+            await interaction.response.send_message(
+                "❌ Worktree manager is not configured.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+
+        import asyncio
+
+        # Determine active thread IDs from the session registry
+        active_ids: set[int] = set()
+        if hasattr(self.bot, "session_registry"):
+            active_ids = {s.thread_id for s in self.bot.session_registry.list_active()}
+
+        if dry_run:
+            # Just list what would be removed
+            worktrees = await asyncio.to_thread(wm.find_session_worktrees)
+            from ..worktree import _is_clean  # noqa: PLC0415
+
+            candidates = []
+            skipped = []
+            for wt in worktrees:
+                if wt.thread_id in active_ids:
+                    skipped.append((wt, "session is active"))
+                    continue
+                clean = await asyncio.to_thread(_is_clean, wt.path)
+                if clean:
+                    candidates.append(wt)
+                else:
+                    skipped.append((wt, "dirty"))
+
+            embed = discord.Embed(
+                title="🌲 Worktree Cleanup — Dry Run",
+                color=COLOR_INFO,
+            )
+            if candidates:
+                embed.add_field(
+                    name=f"Would remove ({len(candidates)})",
+                    value="\n".join(f"`{wt.path}`" for wt in candidates) or "—",
+                    inline=False,
+                )
+            if skipped:
+                embed.add_field(
+                    name=f"Would skip ({len(skipped)})",
+                    value="\n".join(f"`{wt.path}` — {reason}" for wt, reason in skipped) or "—",
+                    inline=False,
+                )
+            if not candidates and not skipped:
+                embed.description = "No session worktrees found."
+            embed.set_footer(text="Re-run without dry_run=True to actually remove.")
+            await interaction.followup.send(embed=embed)
+            return
+
+        results = await asyncio.to_thread(wm.cleanup_orphaned, active_ids)
+
+        removed = [r for r in results if r.removed]
+        dirty = [r for r in results if not r.removed and "uncommitted changes" in r.reason]
+        other_skipped = [
+            r
+            for r in results
+            if not r.removed
+            and "uncommitted changes" not in r.reason
+            and r.reason != "session is still active"
+        ]
+
+        color = COLOR_SUCCESS if removed else COLOR_INFO
+        if dirty:
+            color = COLOR_TOOL
+
+        embed = discord.Embed(
+            title="🌲 Worktree Cleanup Complete",
+            color=color,
+        )
+        embed.add_field(
+            name=f"✅ Removed ({len(removed)})",
+            value="\n".join(f"`{r.path}`" for r in removed) or "—",
+            inline=False,
+        )
+        if dirty:
+            embed.add_field(
+                name=f"⚠️ Dirty — not removed ({len(dirty)})",
+                value="\n".join(f"`{r.path}`" for r in dirty) or "—",
+                inline=False,
+            )
+        if other_skipped:
+            embed.add_field(
+                name=f"ℹ️ Skipped ({len(other_skipped)})",
+                value="\n".join(f"`{r.path}` — {r.reason}" for r in other_skipped) or "—",
+                inline=False,
+            )
+
+        await interaction.followup.send(embed=embed)

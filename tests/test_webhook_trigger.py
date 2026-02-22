@@ -10,7 +10,7 @@ from discord.ext import commands
 
 from claude_discord.cogs.webhook_trigger import WebhookTrigger, WebhookTriggerCog
 
-_PATCH_RUN = "claude_discord.cogs.webhook_trigger.run_claude_in_thread"
+_PATCH_RUN = "claude_discord.cogs.webhook_trigger.run_claude_with_config"
 
 
 @pytest.fixture
@@ -179,10 +179,10 @@ class TestTriggerExecution:
             await cog.on_message(msg)
 
             mock_run.assert_called_once()
-            call_kwargs = mock_run.call_args
-            assert call_kwargs.kwargs["prompt"] == "Sync docs"
-            assert call_kwargs.kwargs["repo"] is None
-            assert call_kwargs.kwargs["session_id"] is None
+            config = mock_run.call_args[0][0]  # RunConfig object
+            assert config.prompt == "Sync docs"
+            assert config.repo is None
+            assert config.session_id is None
 
     @pytest.mark.asyncio
     async def test_creates_thread(
@@ -310,7 +310,7 @@ class TestActiveCount:
         msg = _make_message(content="🔄 docs-sync")
         observed_counts: list[int] = []
 
-        async def fake_run(**kwargs: object) -> str:
+        async def fake_run(config: object) -> str:  # receives RunConfig
             observed_counts.append(cog.active_count)
             return "session-abc"
 

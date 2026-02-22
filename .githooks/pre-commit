@@ -3,12 +3,17 @@
 # Formats with ruff, re-stages the result, then blocks on unfixable lint errors.
 #
 # Setup (one-time per clone):
-#   git config core.hooksPath .githooks
-# Or run:
-#   make setup
+#   make setup   # runs: git config core.hooksPath .githooks
 set -e
 
 cd "$(git rev-parse --show-toplevel)"
+
+# Require uv — fail loudly rather than silently skip checks.
+if ! command -v uv &>/dev/null; then
+    echo "❌ pre-commit: 'uv' is not installed."
+    echo "   Install: https://docs.astral.sh/uv/getting-started/installation/"
+    exit 1
+fi
 
 staged=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$' || true)
 [ -z "$staged" ] && exit 0
