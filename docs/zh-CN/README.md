@@ -143,11 +143,19 @@ Claude 子进程将 `DISCORD_THREAD_ID` 作为环境变量接收，因此运行�
 - **热重载** — `~/.claude/skills/` 中新增的技能自动加载（60 秒刷新，无需重启）
 - **并发会话** — 多个并行会话，可配置上限
 - **不清除内容停止** — `/stop` 停止会话同时保留以便恢复
-- **附件支持** — 文本文件自动追加到提示（最多 5 个 × 50 KB）
+- **附件支持** — 文本文件自动追加到提示（最多 5 个 × 50 KB）；图片通过 `--image` 标志下载传递（最多 4 × 5 MB）
 - **超时通知** — 超时时显示含耗时和恢复指引的 embed
 - **交互式问题** — `AskUserQuestion` 渲染为 Discord 按钮或下拉菜单；选择后会话继续；按钮在 bot 重启后仍可用
+- **Plan Mode** — Claude 调用 `ExitPlanMode` 时，Discord embed 显示完整计划并附带批准/取消按钮；仅在批准后 Claude 才继续执行；5 分钟超时自动取消
+- **工具权限请求** — Claude 需要执行工具权限时，Discord 显示带工具名称和输入的允许/拒绝按钮；2 分钟后自动拒绝
+- **MCP Elicitation** — MCP 服务器可通过 Discord 请求用户输入（表单模式：JSON schema 最多 5 个 Modal 字段；URL 模式：URL 按钮 + 完成确认）；5 分钟超时
+- **TodoWrite 实时进度** — Claude 调用 `TodoWrite` 时，发布单个 Discord embed 并在每次更新时就地编辑；显示 ✅ 已完成、🔄 进行中（带 `activeForm` 标签）、⬜ 待处理
 - **线程面板** — 实时置顶 embed，显示各线程活跃/等待状态；需要输入时 @提及所有者
 - **Token 使用量** — 会话完成 embed 显示缓存命中率和 token 计数
+- **上下文使用量** — 会话完成 embed 中显示上下文窗口百分比（输入 + 缓存 token，不含输出）及自动压缩前剩余容量；超过 83.5% 时显示 ⚠️ 警告
+- **压缩检测** — 发生上下文压缩时在线程中通知（触发类型 + 压缩前 token 数）
+- **会话中断** — 向活跃线程发送新消息会向正在运行的会话发送 SIGINT 并以新指令重新开始；无需手动 `/stop`
+- **长期停滞通知** — 30 秒无活动（扩展思考或上下文压缩）后发送线程消息；Claude 恢复时自动重置
 
 ### 并发与协调
 - **Worktree 指令自动注入** — 每个会话在操作任何文件前都会收到使用 `git worktree` 的提示
@@ -506,6 +514,9 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — 防抖就地消息编辑
     tool_timer.py          # LiveToolTimer — 长运行工具的耗时计数器
     thread_dashboard.py    # 显示会话状态的实时置顶 embed
+    plan_view.py           # Plan Mode 批准/取消按钮（ExitPlanMode）
+    permission_view.py     # 工具权限请求允许/拒绝按钮
+    elicitation_view.py    # MCP Elicitation 的 Discord UI（Modal 表单或 URL 按钮）
   session_sync.py          # CLI 会话发现和导入
   worktree.py              # WorktreeManager — 安全 git worktree 生命周期（会话结束和启动时清理）
   ext/
@@ -531,7 +542,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-610+ 个测试覆盖解析器、分块器、仓库、运行器、流式传输、webhook 触发、自动升级、REST API、AskUserQuestion UI、线程面板、计划任务、会话同步、AI Lounge 和启动恢复。
+700+ 个测试覆盖解析器、分块器、仓库、运行器、流式传输、webhook 触发、自动升级（含 `/upgrade` 斜杠命令、线程调用和批准按钮）、REST API、AskUserQuestion UI、线程面板、计划任务、会话同步、AI Lounge、启动恢复、模型切换、压缩检测、TodoWrite 进度 embed，以及权限/elicitation/plan-mode 事件解析。
 
 ---
 

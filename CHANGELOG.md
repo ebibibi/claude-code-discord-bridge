@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-02-22
+
+### Added
+- **TodoWrite live progress** — when Claude calls `TodoWrite`, a single Discord embed is posted to the thread and edited in-place on every subsequent update; shows ✅ completed, 🔄 active (with `activeForm` label), ⬜ pending; avoids thread flooding (#46)
+- **Image attachments** — Discord image attachments are downloaded to temp files and passed to Claude via `--image`; up to 4 images per message, up to 5 MB each; temp files cleaned up after session (#43)
+- **Bidirectional runner** — `ClaudeRunner` subprocess now opened with `stdin=PIPE`; new `inject_tool_result(request_id, data)` method writes JSON to stdin, enabling interactive tool-result injection (#50)
+- **Plan Mode** — when Claude calls `ExitPlanMode`, the plan text is sent to Discord as an embed with Approve/Cancel buttons (`PlanApprovalView`); Claude's execution resumes only after approval; 5-minute timeout auto-cancels (#44)
+- **Tool permission requests** — when Claude needs permission to execute a tool, Discord shows an embed with Allow/Deny buttons (`PermissionView`) showing tool name and JSON input; 2-minute timeout auto-denies (#47)
+- **MCP Elicitation** — MCP server `elicitation` requests surfaced in Discord: form-mode generates a Modal with up to 5 fields from the JSON schema; url-mode shows a URL button with Done/Cancel; 5-minute timeout (#48)
+
+### Changed
+- `RunConfig` gains `image_paths: list[str] | None` field for per-invocation image passing
+- `ClaudeRunner.__init__` accepts optional `image_paths` parameter; `_build_args()` appends `--image <path>` for each
+
 ## [1.3.0] - 2026-02-22
 
 ### Added
@@ -125,7 +139,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline: Python 3.10/3.11/3.12, ruff, pytest
 - Branch protection and PR workflow
 
-[Unreleased]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v0.1.0...v1.0.0

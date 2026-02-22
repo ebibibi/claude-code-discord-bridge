@@ -123,16 +123,25 @@ Si el bot se reinicia a mitad de sesión, las sesiones de Claude interrumpidas s
 - **Hot reload** — Los nuevos skills añadidos a `~/.claude/skills/` se detectan automáticamente (refresco cada 60s, sin reinicio)
 - **Sesiones concurrentes** — Múltiples sesiones en paralelo con límite configurable
 - **Parar sin borrar** — `/stop` detiene una sesión preservándola para reanudar
-- **Soporte de adjuntos** — Archivos de texto añadidos automáticamente al prompt (hasta 5 × 50 KB)
+- **Soporte de adjuntos** — Archivos de texto añadidos automáticamente al prompt (hasta 5 × 50 KB); imágenes descargadas y pasadas via `--image` (hasta 4 × 5 MB)
 - **Notificaciones de timeout** — Embed con tiempo transcurrido y guía de reanudación al agotar tiempo
 - **Preguntas interactivas** — `AskUserQuestion` se renderiza como Botones de Discord o Menú de Selección; la sesión se reanuda con tu respuesta; los botones sobreviven reinicios del bot
+- **Plan Mode** — Cuando Claude llama a `ExitPlanMode`, se muestra un embed de Discord con el plan completo y botones Aprobar/Cancelar; Claude solo continúa tras la aprobación; cancelación automática tras 5 minutos
+- **Solicitudes de permiso de herramientas** — Cuando Claude necesita permiso para ejecutar una herramienta, Discord muestra botones Permitir/Denegar con el nombre y la entrada de la herramienta; denegación automática tras 2 minutos
+- **MCP Elicitation** — Los servidores MCP pueden solicitar entrada del usuario via Discord (modo formulario: hasta 5 campos Modal del esquema JSON; modo URL: botón URL + confirmación); 5 minutos de tiempo de espera
+- **Progreso en vivo de TodoWrite** — Cuando Claude llama a `TodoWrite`, se publica un único embed de Discord que se edita in situ en cada actualización; muestra ✅ completado, 🔄 activo (con etiqueta `activeForm`), ⬜ pendiente
 - **Panel de hilos** — Embed fijo en vivo mostrando qué hilos están activos vs. en espera; el propietario es @mencionado cuando se necesita entrada
 - **Uso de tokens** — Tasa de aciertos de caché y recuento de tokens mostrados en el embed de sesión completada
+- **Uso de contexto** — Porcentaje de la ventana de contexto (tokens de entrada + caché, excluyendo salida) y capacidad restante hasta el auto-compactado mostrados en el embed de sesión completada; ⚠️ advertencia cuando supera el 83,5%
+- **Detección de compactado** — Notifica en el hilo cuando ocurre la compactación de contexto (tipo de desencadenante + recuento de tokens antes del compactado)
+- **Interrupción de sesión** — Enviar un nuevo mensaje a un hilo activo envía SIGINT a la sesión en ejecución y comienza de nuevo con la nueva instrucción; no se necesita `/stop` manual
+- **Notificación de estancamiento** — Mensaje en el hilo tras 30 s sin actividad (pensamiento extendido o compresión de contexto); se reinicia automáticamente cuando Claude reanuda
 
 ### Concurrencia y Coordinación
 - **Instrucciones de worktree auto-inyectadas** — Cada sesión recibe instrucciones para usar `git worktree` antes de tocar cualquier archivo
 - **Limpieza automática de worktrees** — Los worktrees de sesión (`wt-{thread_id}`) se eliminan automáticamente al terminar la sesión y al iniciar el bot; los worktrees con cambios nunca se eliminan automáticamente (invariante de seguridad)
 - **Registro de sesiones activas** — Registro en memoria; cada sesión ve lo que hacen las demás
+- **AI Lounge** — Canal «sala de descanso» compartida; contexto inyectado via `--append-system-prompt` (efímero, nunca se acumula en el historial) para que las sesiones largas no alcancen «Prompt is too long»; las sesiones publican intenciones, leen el estado de las demás y comprueban antes de operaciones disruptivas; los humanos lo ven como un feed de actividad en tiempo real
 - **Canal de coordinación** — Canal compartido opcional para transmisiones de ciclo de vida entre sesiones
 - **Scripts de coordinación** — Claude puede llamar a `coord_post.py` / `coord_read.py` desde una sesión para publicar y leer eventos
 
@@ -483,6 +492,9 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — ediciones de mensaje en sitio con debounce
     tool_timer.py          # LiveToolTimer — contador de tiempo transcurrido para herramientas largas
     thread_dashboard.py    # Embed fijo en vivo mostrando estados de sesión
+    plan_view.py           # Botones Aprobar/Cancelar para Plan Mode (ExitPlanMode)
+    permission_view.py     # Botones Permitir/Denegar para solicitudes de permiso de herramientas
+    elicitation_view.py    # UI de Discord para MCP Elicitation (formulario Modal o botón URL)
   session_sync.py          # Descubrimiento e importación de sesiones CLI
   worktree.py              # WorktreeManager — ciclo de vida seguro de git worktree
   ext/
@@ -508,7 +520,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-470+ pruebas cubriendo parser, chunker, repositorio, runner, streaming, disparadores webhook, auto-actualización, REST API, UI de AskUserQuestion, panel de hilos, tareas programadas y sincronización de sesiones.
+700+ pruebas cubriendo parser, chunker, repositorio, runner, streaming, disparadores webhook, auto-actualización (incluyendo el comando `/upgrade`, invocación desde hilo y botón de aprobación), REST API, UI de AskUserQuestion, panel de hilos, tareas programadas, sincronización de sesiones, AI Lounge, reanudación al inicio, cambio de modelo, detección de compactado, embeds de progreso de TodoWrite, y análisis de eventos de permiso/elicitation/plan-mode.
 
 ---
 
