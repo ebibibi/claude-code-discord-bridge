@@ -97,9 +97,10 @@ Claude subprocesses receive `DISCORD_THREAD_ID` as an environment variable, so a
 
 ### Startup Resume
 
-If the bot restarts mid-session, interrupted Claude sessions are automatically resumed when the bot comes back online. Sessions are marked for resume in two ways:
+If the bot restarts mid-session, interrupted Claude sessions are automatically resumed when the bot comes back online. Sessions are marked for resume in three ways:
 
-- **Automatic** — `AutoUpgradeCog` snapshots all active sessions just before a restart and marks them automatically. No manual action needed.
+- **Automatic (upgrade restart)** — `AutoUpgradeCog` snapshots all active sessions just before a package upgrade restart and marks them automatically.
+- **Automatic (any shutdown)** — `ClaudeChatCog.cog_unload()` marks all mid-run sessions whenever the bot shuts down via any mechanism (`systemctl stop`, `bot.close()`, SIGTERM, etc.).
 - **Manual** — Any session can call `POST /api/mark-resume` directly.
 
 ---
@@ -140,14 +141,14 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Webhook triggers** — Trigger Claude Code tasks from GitHub Actions or any CI/CD system
 - **Auto-upgrade** — Automatically update the bot when upstream packages are released
 - **DrainAware restart** — Waits for active sessions to finish before restarting
-- **Auto-resume marking** — Active sessions are automatically marked for resume before restart; they pick up where they left off after the bot comes back online
+- **Auto-resume marking** — Active sessions are automatically marked for resume on any shutdown (upgrade restart via `AutoUpgradeCog`, or any other shutdown via `ClaudeChatCog.cog_unload()`); they pick up where they left off after the bot comes back online
 - **Restart approval** — Optional gate to confirm upgrades before applying
 
 ### Session Management
 - **Session sync** — Import CLI sessions as Discord threads (`/sync-sessions`)
 - **Session list** — `/sessions` with filtering by origin (Discord / CLI / all) and time window
 - **Resume info** — `/resume-info` shows the CLI command to continue the current session in a terminal
-- **Startup resume** — Interrupted sessions restart automatically after bot reboot; `AutoUpgradeCog` marks them automatically, or use `POST /api/mark-resume` manually
+- **Startup resume** — Interrupted sessions restart automatically after any bot reboot; `AutoUpgradeCog` (upgrade restarts) and `ClaudeChatCog.cog_unload()` (all other shutdowns) mark them automatically, or use `POST /api/mark-resume` manually
 - **Programmatic spawn** — `POST /api/spawn` creates a new Discord thread + Claude session from any script or Claude subprocess; returns non-blocking 201 immediately after thread creation
 - **Thread ID injection** — `DISCORD_THREAD_ID` env var is passed to every Claude subprocess, enabling sessions to spawn child sessions via `$CCDB_API_URL/api/spawn`
 - **Worktree management** — `/worktree-list` shows all active session worktrees with clean/dirty status; `/worktree-cleanup` removes orphaned clean worktrees (supports `dry_run` preview)
@@ -393,6 +394,8 @@ class MyCog(commands.Cog):
 ```
 
 Session marking is fully opt-in — it only activates when `setup_bridge()` has initialized the session database (the default). When enabled, sessions resume with `--resume` continuity so Claude Code can pick up the exact conversation where it left off.
+
+> **Coverage:** `AutoUpgradeCog` covers upgrade-triggered restarts. For *all other* shutdowns (`systemctl stop`, `bot.close()`, SIGTERM), `ClaudeChatCog.cog_unload()` provides a second automatic safety net.
 
 ---
 
