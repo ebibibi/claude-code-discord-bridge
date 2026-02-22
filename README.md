@@ -183,55 +183,103 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 
 ---
 
-## Quick Start
+## Quick Start — Claude in Discord in 5 Minutes
 
-### Requirements
+### Step 1 — Prerequisites
 
-- Python 3.10+
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- A Discord bot token with Message Content intent enabled
-- [uv](https://docs.astral.sh/uv/) (recommended) or pip
+- **Python 3.10+** and **[uv](https://docs.astral.sh/uv/)** installed
+- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated (`claude --version` should work)
+- A **Discord server** where you have admin access
 
-### Standalone
+### Step 2 — Create a Discord Bot
+
+1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) and click **New Application**
+2. Navigate to **Bot** → click **Add Bot**
+3. Under **Privileged Gateway Intents**, enable **Message Content Intent**
+4. Copy the bot **Token** (you'll need this shortly)
+5. Go to **OAuth2 → URL Generator**:
+   - Scopes: `bot`, `applications.commands`
+   - Bot Permissions: `Send Messages`, `Create Public Threads`, `Send Messages in Threads`, `Add Reactions`, `Manage Messages`, `Read Message History`
+6. Open the generated URL in your browser and invite the bot to your server
+
+### Step 3 — Get Your Discord IDs
+
+Enable **Developer Mode** in Discord (Settings → Advanced → Developer Mode), then:
+
+- **Channel ID**: Right-click the channel where Claude should listen → **Copy Channel ID**
+- **Your User ID**: Right-click your own username → **Copy User ID**
+
+### Step 4 — Run It
 
 ```bash
 git clone https://github.com/ebibibi/claude-code-discord-bridge.git
 cd claude-code-discord-bridge
-
 cp .env.example .env
-# Edit .env with your bot token and channel ID
+```
 
+Edit `.env`:
+
+```env
+DISCORD_BOT_TOKEN=your-bot-token-here
+DISCORD_CHANNEL_ID=123456789012345678    # the channel you copied above
+DISCORD_OWNER_ID=987654321098765432      # your user ID (for @-mentions)
+CLAUDE_WORKING_DIR=/path/to/your/project
+```
+
+Then start the bot:
+
+```bash
 uv run python -m claude_discord.main
 ```
 
-### Install as a package
+Send a message in the configured channel — Claude will reply in a new thread.
 
-If you already have a discord.py bot (Discord allows only one Gateway connection per token):
+---
+
+### Minimal Bot (Install as a Package)
+
+If you already have a discord.py bot, add ccdb as a package instead:
 
 ```bash
 uv add git+https://github.com/ebibibi/claude-code-discord-bridge.git
 ```
 
+Create a `bot.py`:
+
 ```python
+import asyncio
+import os
+from dotenv import load_dotenv
+import discord
 from discord.ext import commands
 from claude_discord import ClaudeRunner, setup_bridge
 
-bot = commands.Bot(...)
-runner = ClaudeRunner(command="claude", model="sonnet")
+load_dotenv()
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+runner = ClaudeRunner(
+    command="claude",
+    model="sonnet",
+    working_dir="/path/to/your/project",
+)
 
 @bot.event
 async def on_ready():
+    print(f"Logged in as {bot.user}")
     await setup_bridge(
         bot,
         runner,
-        claude_channel_id=YOUR_CHANNEL_ID,
-        allowed_user_ids={YOUR_USER_ID},
+        claude_channel_id=int(os.environ["DISCORD_CHANNEL_ID"]),
+        allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
     )
+
+asyncio.run(bot.start(os.environ["DISCORD_BOT_TOKEN"]))
 ```
 
-`setup_bridge()` wires all Cogs automatically. New Cogs added to ccdb are included with no consumer code changes.
-
-Update to the latest version:
+`setup_bridge()` wires all Cogs automatically. Update to the latest version:
 
 ```bash
 uv lock --upgrade-package claude-code-discord-bridge && uv sync
@@ -518,7 +566,7 @@ claude_discord/
 - **Discord as glue** — Discord provides UI, threading, reactions, webhooks, and persistent notifications; no custom frontend needed
 - **Framework, not application** — Install as a package, add Cogs to your existing bot, configure via code
 - **Zero-code extensibility** — Add scheduled tasks and webhook triggers without touching source
-- **Security by simplicity** — ~3000 lines of auditable Python; subprocess exec only, no shell expansion
+- **Security by simplicity** — ~8000 lines of auditable Python; subprocess exec only, no shell expansion
 
 ---
 
@@ -534,14 +582,14 @@ uv run pytest tests/ -v --cov=claude_discord
 
 ## How This Project Was Built
 
-**This entire codebase was written by [Claude Code](https://docs.anthropic.com/en/docs/claude-code)**, Anthropic's AI coding agent. The human author ([@ebibibi](https://github.com/ebibibi)) provided requirements and direction via natural language, but has not manually read or edited the source code.
+**This codebase is developed by [Claude Code](https://docs.anthropic.com/en/docs/claude-code)**, Anthropic's AI coding agent, under the direction of [@ebibibi](https://github.com/ebibibi). The human author defines requirements, reviews pull requests, and approves all changes — Claude Code does the implementation.
 
 This means:
 
-- **All code was AI-generated** — architecture, implementation, tests, documentation
-- **The human author cannot guarantee correctness at the code level** — review the source if you need assurance
+- **Implementation is AI-generated** — architecture, code, tests, documentation
+- **Human review is applied at the PR level** — every change goes through GitHub pull requests and CI before merging
 - **Bug reports and PRs are welcome** — Claude Code will be used to address them
-- **This is a real-world example of AI-authored open source software**
+- **This is a real-world example of human-directed, AI-implemented open source software**
 
 The project started on 2026-02-18 and continues to evolve through iterative conversation with Claude Code.
 
