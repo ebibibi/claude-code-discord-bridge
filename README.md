@@ -18,7 +18,7 @@ Each Discord thread becomes an isolated Claude Code session. Spin up as many as 
 
 ## The Big Idea: Parallel Sessions Without Fear
 
-When you send tasks to Claude Code in separate Discord threads, the bridge does three things automatically:
+When you send tasks to Claude Code in separate Discord threads, the bridge does four things automatically:
 
 1. **Concurrency notice injection** — Every session's system prompt includes mandatory instructions: create a git worktree, work only inside it, never touch the main working directory directly.
 
@@ -26,12 +26,14 @@ When you send tasks to Claude Code in separate Discord threads, the bridge does 
 
 3. **Coordination channel** — A shared Discord channel where sessions broadcast start/end events. Both Claude and humans can see at a glance what's happening across all active threads.
 
+4. **AI Lounge** — A session-to-session "breakroom" injected into every prompt. Before starting, each session reads recent lounge messages to see what other sessions are doing. Before disruptive operations (force push, bot restart, DB drop), sessions check the lounge first so they don't stomp on each other's work.
+
 ```
-Thread A (feature)   ──→  Claude Code (worktree-A)
-Thread B (PR review) ──→  Claude Code (worktree-B)
-Thread C (docs)      ──→  Claude Code (worktree-C)
-           ↓ lifecycle events
-   #coordination channel
+Thread A (feature)   ──→  Claude Code (worktree-A)  ─┐
+Thread B (PR review) ──→  Claude Code (worktree-B)   ├─→  #ai-lounge
+Thread C (docs)      ──→  Claude Code (worktree-C)  ─┘    "A: auth refactor in progress"
+           ↓ lifecycle events                              "B: PR #42 review done"
+   #coordination channel                                   "C: updating README"
    "A: started on auth refactor"
    "B: reviewing PR #42"
    "C: updating README"
@@ -81,6 +83,24 @@ GitHub PR ←── git push ←── Claude Code ─────────�
 
 Already use Claude Code CLI directly? Sync your existing terminal sessions into Discord threads with `/sync-sessions`. Backfills recent conversation messages so you can continue a CLI session from your phone without losing context.
 
+### AI Lounge
+
+A shared "breakroom" channel where all concurrent sessions announce themselves, read each other's updates, and coordinate before disruptive operations.
+
+Each Claude session receives the lounge context automatically in its system prompt: recent messages from other sessions, plus the rule to check before doing anything destructive.
+
+```bash
+# Sessions post their intentions before starting:
+curl -X POST "$CCDB_API_URL/api/lounge" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Starting auth refactor on feature/oauth — worktree-A", "label": "feature dev"}'
+
+# Read recent lounge messages (also injected into each session automatically):
+curl "$CCDB_API_URL/api/lounge"
+```
+
+The lounge channel doubles as a human-visible activity feed — open it in Discord to see at a glance what every active Claude session is currently doing.
+
 ### Programmatic Session Creation
 
 Spawn new Claude Code sessions from scripts, GitHub Actions, or other Claude sessions — without Discord message interaction.
@@ -128,6 +148,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Worktree instructions auto-injected** — Every session prompted to use `git worktree` before touching any file
 - **Automatic worktree cleanup** — Session worktrees (`wt-{thread_id}`) are removed automatically at session end and on bot startup; dirty worktrees are never auto-removed (safety invariant)
 - **Active session registry** — In-memory registry; each session sees what the others are doing
+- **AI Lounge** — Shared "breakroom" channel injected into every session prompt; sessions post intentions, read each other's status, and check before disruptive operations; humans see it as a live activity feed
 - **Coordination channel** — Optional shared channel for cross-session lifecycle broadcasts
 - **Coordination scripts** — Claude can call `coord_post.py` / `coord_read.py` from within a session to post and read events
 
@@ -422,6 +443,8 @@ uv add "claude-code-discord-bridge[api]"
 | PATCH | `/api/tasks/{id}` | Update a task (enable/disable, change schedule) |
 | POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking) |
 | POST | `/api/mark-resume` | Mark a thread for automatic resume on next bot startup |
+| GET | `/api/lounge` | Read recent AI Lounge messages |
+| POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |
 
 ```bash
 # Send notification
@@ -505,7 +528,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-470+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade, REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, and session sync.
+610+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade, REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, and startup resume.
 
 ---
 

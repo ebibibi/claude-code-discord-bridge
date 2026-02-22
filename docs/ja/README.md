@@ -23,7 +23,7 @@
 
 ## 基本的なアイデア: 競合なしの並行セッション
 
-複数の Discord スレッドで Claude Code にタスクを送ると、ブリッジは自動的に 3 つのことを行います:
+複数の Discord スレッドで Claude Code にタスクを送ると、ブリッジは自動的に 4 つのことを行います:
 
 1. **並行処理指示の自動注入** — すべてのセッションのシステムプロンプトに必須指示を含めます: git worktree を作成し、その中だけで作業し、メイン作業ディレクトリに直接触れないこと。
 
@@ -31,12 +31,14 @@
 
 3. **協調チャンネル** — セッションの開始/終了イベントをブロードキャストする共有 Discord チャンネル。Claude と人間の両方が、すべてのアクティブスレッドで何が起きているかを一目で確認できます。
 
+4. **AI Lounge** — すべてのセッションのプロンプトに注入される「控え室」チャンネル。作業を始める前に他のセッションのメッセージを読んで状況を把握し、破壊的な操作（force push、Bot 再起動、DB 操作など）の前には必ずラウンジを確認します。
+
 ```
-スレッド A (機能開発)  ──→  Claude Code (worktree-A)
-スレッド B (PR レビュー) ──→  Claude Code (worktree-B)
-スレッド C (ドキュメント) ──→  Claude Code (worktree-C)
-              ↓ ライフサイクルイベント
-     #coordination チャンネル
+スレッド A (機能開発)    ──→  Claude Code (worktree-A)  ─┐
+スレッド B (PR レビュー)  ──→  Claude Code (worktree-B)   ├─→  #ai-lounge
+スレッド C (ドキュメント) ──→  Claude Code (worktree-C)  ─┘    "A: auth リファクタリング中"
+              ↓ ライフサイクルイベント                          "B: PR #42 レビュー完了"
+     #coordination チャンネル                                   "C: README 更新中"
      "A: auth リファクタリング開始"
      "B: PR #42 レビュー中"
      "C: README 更新中"
@@ -86,6 +88,22 @@ GitHub PR ←── git push ←── Claude Code ─────────�
 
 Claude Code CLI を直接使っている場合は `/sync-sessions` で既存のターミナルセッションを Discord スレッドに同期。最近の会話メッセージを補完するので、スマートフォンから CLI セッションの続きを開けます。
 
+### AI Lounge
+
+すべての並行セッションが互いに状況を伝え合える「控え室」チャンネルです。各 Claude セッションはシステムプロンプトにラウンジのコンテキストを自動的に受け取ります — 他のセッションからの最近のメッセージと、破壊的な操作前に確認するルールが含まれます。
+
+```bash
+# セッションは作業を始める前に意図を投稿します:
+curl -X POST "$CCDB_API_URL/api/lounge" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "feature/oauth で auth リファクタリング開始 — worktree-A", "label": "機能開発"}'
+
+# 最近のラウンジメッセージを確認（各セッションにも自動注入）:
+curl "$CCDB_API_URL/api/lounge"
+```
+
+ラウンジチャンネルは人間が見るアクティビティフィードとしても機能します — Discord で開けば、すべてのアクティブな Claude セッションが今何をしているかを一目で確認できます。
+
 ### プログラム的なセッション作成
 
 スクリプト、GitHub Actions、または他の Claude セッションから Discord のメッセージ操作なしで新しい Claude Code セッションを起動できます。
@@ -133,6 +151,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **Worktree 指示の自動注入** — すべてのセッションに `git worktree` を使うよう指示
 - **Worktree の自動クリーンアップ** — セッション終了時および Bot 起動時に `wt-{thread_id}` ディレクトリを自動削除。未コミットの変更がある場合は絶対に削除しない（安全性保証）
 - **アクティブセッションレジストリ** — インメモリレジストリ。各セッションが他のセッションの状況を把握
+- **AI Lounge** — すべてのセッションプロンプトに注入される共有「控え室」チャンネル。セッションが意図を投稿し、互いのステータスを確認し、破壊的な操作前にチェックします。人間には live アクティビティフィードとして見えます
 - **協調チャンネル** — セッション間のライフサイクルブロードキャスト用オプション共有チャンネル
 - **協調スクリプト** — セッション内から `coord_post.py` / `coord_read.py` を呼び出してイベントを投稿・読み取り可能
 
@@ -427,6 +446,8 @@ uv add "claude-code-discord-bridge[api]"
 | PATCH | `/api/tasks/{id}` | タスクの更新（有効/無効、スケジュール変更） |
 | POST | `/api/spawn` | 新しい Discord スレッドを作成し Claude Code セッションを起動（非ブロッキング） |
 | POST | `/api/mark-resume` | 次回 Bot 起動時のスレッド自動リジュームを登録 |
+| GET | `/api/lounge` | AI Lounge の最近のメッセージを取得 |
+| POST | `/api/lounge` | AI Lounge にメッセージを投稿（`label` オプション） |
 
 ```bash
 # 通知の送信
@@ -510,7 +531,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-470 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期をカバーしています。
+610 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジュームをカバーしています。
 
 ---
 
