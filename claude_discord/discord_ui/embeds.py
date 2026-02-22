@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import discord
 
-from ..claude.types import ToolCategory, ToolUseEvent
+from ..claude.types import TodoItem, ToolCategory, ToolUseEvent
 
 # Colors
 COLOR_INFO = 0x5865F2  # Discord blurple
@@ -13,6 +13,7 @@ COLOR_ERROR = 0xED4245  # Red
 COLOR_TOOL = 0xFEE75C  # Yellow
 COLOR_THINKING = 0x9B59B6  # Purple
 COLOR_ASK = 0x3498DB  # Blue — question-like
+COLOR_TODO = 0xE67E22  # Orange — task list
 
 AUTOCOMPACT_THRESHOLD = 83.5
 
@@ -223,4 +224,102 @@ def stopped_embed() -> discord.Embed:
             "or use `/clear` to start fresh."
         ),
         color=0xFFA500,  # Orange — not an error, just interrupted
+    )
+
+
+# Status icons for each todo state
+_TODO_ICON = {
+    "pending": "⬜",
+    "in_progress": "🔄",
+    "completed": "✅",
+}
+
+
+def todo_embed(todos: list[TodoItem]) -> discord.Embed:
+    """Create (or update) a Discord embed showing the current TodoWrite task list.
+
+    Each todo item is rendered as a single line:
+      ✅ Task description
+      🔄 Active task label (while in_progress)
+      ⬜ Pending task
+
+    The embed is posted once and then **edited in-place** as the task list
+    changes, so the user sees a single live progress view in the thread.
+    """
+    lines: list[str] = []
+    for item in todos:
+        icon = _TODO_ICON.get(item.status, "⬜")
+        label = (
+            item.active_form if item.status == "in_progress" and item.active_form else item.content
+        )
+        lines.append(f"{icon} {label}")
+
+    description = "\n".join(lines) if lines else "*(no tasks)*"
+    completed = sum(1 for t in todos if t.status == "completed")
+    total = len(todos)
+    title = f"📋 Tasks ({completed}/{total})"
+
+    return discord.Embed(
+        title=title,
+        description=description[:4096],
+        color=COLOR_TODO,
+    )
+
+
+def plan_embed(plan_text: str) -> discord.Embed:
+    """Create an embed showing Claude's plan with Approve/Cancel buttons pending.
+
+    Posted when ExitPlanMode is detected: Claude has finished planning and is
+    waiting for the user to approve or cancel before executing.
+    """
+    max_text = 4096 - 8 - len("\n... (truncated)")
+    truncated = plan_text[:max_text]
+    if len(plan_text) > max_text:
+        truncated += "\n... (truncated)"
+    return discord.Embed(
+        title="📋 Plan ready — approve to execute",
+        description=f"```\n{truncated}\n```" if truncated else "*(no plan text)*",
+        color=0x2ECC71,  # Emerald green — action required
+    )
+
+
+def permission_embed(request) -> discord.Embed:
+    """Create an embed for a tool permission request.
+
+    Displays the tool name and its input arguments so the user can make an
+    informed Allow/Deny decision.
+    """
+    import json
+
+    tool_name = request.tool_name
+    tool_input = request.tool_input
+
+    # Format tool input as readable JSON (compact but not one-liner for long inputs).
+    try:
+        input_str = json.dumps(tool_input, ensure_ascii=False, indent=2)
+    except Exception:
+        input_str = str(tool_input)
+
+    max_input = 4096 - 8 - len(f"**Tool:** `{tool_name}`\n\n**Input:**\n```json\n\n```")
+    if len(input_str) > max_input:
+        input_str = input_str[:max_input] + "\n... (truncated)"
+
+    description = f"**Tool:** `{tool_name}`\n\n**Input:**\n```json\n{input_str}\n```"
+    return discord.Embed(
+        title="🔐 Permission required",
+        description=description[:4096],
+        color=0xE74C3C,  # Alizarin red — requires attention
+    )
+
+
+def elicitation_embed(request) -> discord.Embed:
+    """Create an embed for an MCP elicitation request."""
+    mode_label = "Form" if request.mode == "form-mode" else "URL"
+    title = f"🔌 MCP input required ({mode_label}) — {request.server_name}"
+
+    description = request.message or "An MCP server needs your input to continue."
+    return discord.Embed(
+        title=title[:256],
+        description=description[:4096],
+        color=0x9B59B6,  # Purple — MCP / external
     )

@@ -39,6 +39,7 @@ class ClaudeRunner:
         api_secret: str | None = None,
         thread_id: int | None = None,
         append_system_prompt: str | None = None,
+        image_paths: list[str] | None = None,
     ) -> None:
         self.command = command
         self.model = model
@@ -52,6 +53,7 @@ class ClaudeRunner:
         self.api_secret = api_secret
         self.thread_id = thread_id
         self.append_system_prompt = append_system_prompt
+        self.image_paths = image_paths
         self._process: asyncio.subprocess.Process | None = None
 
     async def run(
@@ -77,8 +79,13 @@ class ClaudeRunner:
 
         logger.info("Starting Claude CLI: %s", " ".join(args[:6]) + " ...")
 
+        # stdin=PIPE enables bidirectional communication: we can send
+        # tool results / permission responses back to the Claude process
+        # while it is still running. This is required for Plan Mode (#44),
+        # Permission requests (#47), and MCP elicitation (#48).
         self._process = await asyncio.create_subprocess_exec(
             *args,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
@@ -136,7 +143,34 @@ class ClaudeRunner:
                 if append_system_prompt is not None
                 else self.append_system_prompt
             ),
+            # image_paths are NOT inherited — they are per-invocation.
+            # The caller (run_claude_with_config) passes them via RunConfig.
         )
+
+    async def inject_tool_result(self, request_id: str, data: dict) -> None:
+        """Send a tool result or permission/elicitation response to the Claude process via stdin.
+
+        Claude Code CLI reads JSON objects from stdin when it is waiting for
+        interactive input (permission approvals, elicitation forms, plan approvals).
+        Each line must be a complete JSON object followed by a newline.
+
+        Args:
+            request_id: The request_id from the PermissionRequest or ElicitationRequest.
+            data: The response payload (content depends on the request type).
+        """
+        import json
+
+        if self._process is None or self._process.stdin is None:
+            logger.warning("inject_tool_result: no active process stdin, ignoring")
+            return
+        payload = {"request_id": request_id, **data}
+        line = json.dumps(payload) + "\n"
+        try:
+            self._process.stdin.write(line.encode())
+            await self._process.stdin.drain()
+            logger.debug("Injected tool result for request %s", request_id)
+        except Exception:
+            logger.warning("inject_tool_result: failed to write to stdin", exc_info=True)
 
     async def interrupt(self) -> None:
         """Interrupt the subprocess with SIGINT (graceful stop, like Ctrl+C / Escape).
@@ -196,6 +230,10 @@ class ClaudeRunner:
 
         if self.append_system_prompt:
             args.extend(["--append-system-prompt", self.append_system_prompt])
+
+        if self.image_paths:
+            for path in self.image_paths:
+                args.extend(["--image", path])
 
         # Use -- to separate flags from positional args (prevents prompt
         # content starting with - from being interpreted as a flag)

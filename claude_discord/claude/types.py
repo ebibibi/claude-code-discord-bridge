@@ -39,6 +39,8 @@ class ToolCategory(Enum):
     WEB = "web"
     THINK = "think"
     ASK = "ask"
+    TASK = "task"
+    PLAN = "plan"
     OTHER = "other"
 
 
@@ -56,6 +58,8 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
     "WebSearch": ToolCategory.WEB,
     "Task": ToolCategory.OTHER,
     "AskUserQuestion": ToolCategory.ASK,
+    "TodoWrite": ToolCategory.TASK,
+    "ExitPlanMode": ToolCategory.PLAN,
 }
 
 
@@ -75,6 +79,36 @@ class AskQuestion:
     header: str = ""
     multi_select: bool = False
     options: list[AskOption] = field(default_factory=list)
+
+
+@dataclass
+class TodoItem:
+    """A single item in a TodoWrite task list."""
+
+    content: str
+    status: str  # "pending", "in_progress", "completed"
+    active_form: str = ""  # Present-continuous label shown while in_progress
+
+
+@dataclass
+class PermissionRequest:
+    """A permission request from Claude Code for a tool execution."""
+
+    request_id: str
+    tool_name: str
+    tool_input: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ElicitationRequest:
+    """An elicitation request from an MCP server."""
+
+    request_id: str
+    server_name: str
+    mode: str  # "form-mode" or "url-mode"
+    message: str = ""
+    url: str = ""  # url-mode only
+    schema: dict[str, Any] = field(default_factory=dict)  # form-mode only
 
 
 @dataclass
@@ -130,6 +164,10 @@ class StreamEvent:
     thinking: str | None = None
     has_redacted_thinking: bool = False
     ask_questions: list[AskQuestion] | None = None
+    todo_list: list[TodoItem] | None = None
+    is_plan_approval: bool = False
+    permission_request: PermissionRequest | None = None
+    elicitation: ElicitationRequest | None = None
     is_compact: bool = False
     compact_trigger: str | None = None
     compact_pre_tokens: int | None = None
@@ -162,3 +200,5 @@ class SessionState:
     partial_text: str = ""
     active_tools: dict[str, discord.Message] = field(default_factory=dict)
     active_timers: dict[str, asyncio.Task[None]] = field(default_factory=dict)
+    # TodoWrite: reference to the live todo embed message (edited in-place on each update)
+    todo_message: discord.Message | None = None

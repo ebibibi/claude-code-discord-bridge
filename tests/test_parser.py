@@ -393,3 +393,132 @@ class TestProgressEvent:
         event = parse_line(line)
         assert event is not None
         assert event.message_type == MessageType.PROGRESS
+
+
+class TestTodoWriteParsing:
+    """Tests for TodoWrite tool input parsing."""
+
+    def _make_todo_line(self, todos: list[dict]) -> str:
+        import json
+
+        return json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "todo-1",
+                            "name": "TodoWrite",
+                            "input": {"todos": todos},
+                        }
+                    ]
+                },
+            }
+        )
+
+    def test_todo_write_parsed(self):
+        todos = [
+            {"content": "Write tests", "status": "completed", "activeForm": "Writing tests"},
+            {
+                "content": "Implement feature",
+                "status": "in_progress",
+                "activeForm": "Implementing feature",
+            },
+            {"content": "Submit PR", "status": "pending", "activeForm": "Submitting PR"},
+        ]
+        event = parse_line(self._make_todo_line(todos))
+        assert event is not None
+        assert event.todo_list is not None
+        assert len(event.todo_list) == 3
+        assert event.todo_list[0].content == "Write tests"
+        assert event.todo_list[0].status == "completed"
+        assert event.todo_list[1].status == "in_progress"
+        assert event.todo_list[1].active_form == "Implementing feature"
+        assert event.todo_list[2].status == "pending"
+
+    def test_todo_write_skips_empty_content(self):
+        todos = [
+            {"content": "", "status": "pending"},
+            {"content": "Real task", "status": "pending"},
+        ]
+        event = parse_line(self._make_todo_line(todos))
+        assert event is not None
+        assert event.todo_list is not None
+        assert len(event.todo_list) == 1
+        assert event.todo_list[0].content == "Real task"
+
+    def test_todo_write_empty_list(self):
+        event = parse_line(self._make_todo_line([]))
+        assert event is not None
+        assert event.todo_list == []
+
+    def test_todo_write_missing_active_form(self):
+        todos = [{"content": "Task", "status": "in_progress"}]
+        event = parse_line(self._make_todo_line(todos))
+        assert event is not None
+        assert event.todo_list is not None
+        assert event.todo_list[0].active_form == ""
+
+    def test_exit_plan_mode_sets_is_plan_approval(self):
+        import json
+
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "plan-1",
+                            "name": "ExitPlanMode",
+                            "input": {},
+                        }
+                    ]
+                },
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.is_plan_approval is True
+
+    def test_permission_request_parsed(self):
+        import json
+
+        line = json.dumps(
+            {
+                "type": "system",
+                "subtype": "permission_request",
+                "request_id": "req-1",
+                "tool_name": "Bash",
+                "tool_input": {"command": "rm -rf /tmp/test"},
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.permission_request is not None
+        assert event.permission_request.request_id == "req-1"
+        assert event.permission_request.tool_name == "Bash"
+        assert event.permission_request.tool_input == {"command": "rm -rf /tmp/test"}
+
+    def test_elicitation_parsed(self):
+        import json
+
+        line = json.dumps(
+            {
+                "type": "system",
+                "subtype": "elicitation",
+                "request_id": "elic-1",
+                "server_name": "my-mcp-server",
+                "mode": "form-mode",
+                "message": "Please fill in the form",
+                "schema": {"type": "object", "properties": {"name": {"type": "string"}}},
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.elicitation is not None
+        assert event.elicitation.request_id == "elic-1"
+        assert event.elicitation.server_name == "my-mcp-server"
+        assert event.elicitation.mode == "form-mode"
+        assert event.elicitation.message == "Please fill in the form"

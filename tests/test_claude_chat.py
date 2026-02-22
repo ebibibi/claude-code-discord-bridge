@@ -209,18 +209,44 @@ class TestBuildPrompt:
         assert "file content here" in result
 
     @pytest.mark.asyncio
-    async def test_binary_attachment_skipped(self) -> None:
+    async def test_image_attachment_not_inlined_in_prompt(self) -> None:
+        """Images are downloaded to tempfiles, NOT inlined into the prompt text."""
+        import os
+
         cog = _make_cog()
         att = self._make_attachment(
             filename="image.png",
             content_type="image/png",
+            size=100,
             content=b"\x89PNG...",
         )
         msg = self._make_message(content="see image", attachments=[att])
 
+        prompt, image_paths = await cog._build_prompt_and_images(msg)
+
+        # Prompt text stays clean — no image content inlined.
+        assert prompt == "see image"
+        # One tempfile created for the image.
+        assert len(image_paths) == 1
+        assert os.path.exists(image_paths[0])
+        # Clean up.
+        for p in image_paths:
+            os.unlink(p)
+
+    @pytest.mark.asyncio
+    async def test_binary_non_image_skipped(self) -> None:
+        """Non-image binary files (e.g. zip) are still silently skipped."""
+        cog = _make_cog()
+        att = self._make_attachment(
+            filename="archive.zip",
+            content_type="application/zip",
+            content=b"PK...",
+        )
+        msg = self._make_message(content="see zip", attachments=[att])
+
         result = await cog._build_prompt(msg)
 
-        assert result == "see image"
+        assert result == "see zip"
         att.read.assert_not_called()
 
     @pytest.mark.asyncio
