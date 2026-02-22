@@ -87,7 +87,7 @@ Already use Claude Code CLI directly? Sync your existing terminal sessions into 
 
 A shared "breakroom" channel where all concurrent sessions announce themselves, read each other's updates, and coordinate before disruptive operations.
 
-Each Claude session receives the lounge context automatically in its system prompt: recent messages from other sessions, plus the rule to check before doing anything destructive.
+Each Claude session receives the lounge context automatically via `--append-system-prompt` — injected as ephemeral system context rather than as part of the conversation history. This prevents the context from accumulating across turns, which would otherwise cause "Prompt is too long" errors in long-running sessions. The injected context includes: recent messages from other sessions, plus the rule to check before doing anything destructive.
 
 ```bash
 # Sessions post their intentions before starting:
@@ -152,7 +152,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Worktree instructions auto-injected** — Every session prompted to use `git worktree` before touching any file
 - **Automatic worktree cleanup** — Session worktrees (`wt-{thread_id}`) are removed automatically at session end and on bot startup; dirty worktrees are never auto-removed (safety invariant)
 - **Active session registry** — In-memory registry; each session sees what the others are doing
-- **AI Lounge** — Shared "breakroom" channel injected into every session prompt; sessions post intentions, read each other's status, and check before disruptive operations; humans see it as a live activity feed
+- **AI Lounge** — Shared "breakroom" channel; context injected via `--append-system-prompt` (ephemeral, never accumulates in history) so long sessions never hit "Prompt is too long"; sessions post intentions, read each other's status, and check before disruptive operations; humans see it as a live activity feed
 - **Coordination channel** — Optional shared channel for cross-session lifecycle broadcasts
 - **Coordination scripts** — Claude can call `coord_post.py` / `coord_read.py` from within a session to post and read events
 
