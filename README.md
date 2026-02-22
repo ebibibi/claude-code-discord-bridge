@@ -128,29 +128,39 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 ## Features
 
 ### Interactive Chat
+
+#### 🔗 Session Basics
 - **Thread = Session** — 1:1 mapping between Discord thread and Claude Code session
+- **Session persistence** — Resume conversations across messages via `--resume`
+- **Concurrent sessions** — Multiple parallel sessions with configurable limit
+- **Stop without clearing** — `/stop` halts a session while preserving it for resume
+- **Session interrupt** — Sending a new message to an active thread sends SIGINT to the running session and starts fresh with the new instruction; no manual `/stop` needed
+
+#### 📡 Real-time Feedback
 - **Real-time status** — Emoji reactions: 🧠 thinking, 🛠️ reading files, 💻 editing, 🌐 web search
 - **Streaming text** — Intermediate assistant text appears as Claude works
 - **Tool result embeds** — Live tool call results with elapsed time ticking up every 10s
 - **Extended thinking** — Reasoning shown as spoiler-tagged embeds (click to reveal)
-- **Session persistence** — Resume conversations across messages via `--resume`
-- **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume
-- **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
-- **Concurrent sessions** — Multiple parallel sessions with configurable limit
-- **Stop without clearing** — `/stop` halts a session while preserving it for resume
-- **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images downloaded and passed via `--image` (up to 4 × 5 MB)
-- **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
+- **Thread dashboard** — Live pinned embed showing which threads are active vs. waiting; owner @-mentioned when input is needed
+
+#### 🤝 Human-in-the-Loop
 - **Interactive questions** — `AskUserQuestion` renders as Discord Buttons or Select Menu; session resumes with your answer; buttons survive bot restarts
 - **Plan Mode** — When Claude calls `ExitPlanMode`, a Discord embed shows the full plan with Approve/Cancel buttons; Claude proceeds only after approval; auto-cancel on 5-minute timeout
 - **Tool permission requests** — When Claude needs permission to execute a tool, Discord shows Allow/Deny buttons with the tool name and input; auto-deny after 2 minutes
 - **MCP Elicitation** — MCP servers can request user input via Discord (form-mode: up to 5 Modal fields from JSON schema; url-mode: URL button + Done confirmation); 5-minute timeout
 - **Live TodoWrite progress** — When Claude calls `TodoWrite`, a single Discord embed is posted and edited in-place on each update; shows ✅ completed, 🔄 active (with `activeForm` label), ⬜ pending items
-- **Thread dashboard** — Live pinned embed showing which threads are active vs. waiting; owner @-mentioned when input is needed
+
+#### 📊 Observability
 - **Token usage** — Cache hit rate and token counts shown in session-complete embed
 - **Context usage** — Context window percentage (input + cache tokens, excluding output) and remaining capacity until auto-compact shown in session-complete embed; ⚠️ warning when above 83.5%
 - **Compact detection** — Notifies in-thread when context compaction occurs (trigger type + token count before compact)
-- **Session interrupt** — Sending a new message to an active thread sends SIGINT to the running session and starts fresh with the new instruction; no manual `/stop` needed
 - **Hard stall notification** — Thread message after 30 s of no activity (extended thinking or context compression); resets automatically when Claude resumes
+- **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
+
+#### 🔌 Input & Skills
+- **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images downloaded and passed via `--image` (up to 4 × 5 MB)
+- **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume
+- **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
 
 ### Concurrency & Coordination
 - **Worktree instructions auto-injected** — Every session prompted to use `git worktree` before touching any file
