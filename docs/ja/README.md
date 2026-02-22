@@ -127,6 +127,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 
 ### 並行処理と協調
 - **Worktree 指示の自動注入** — すべてのセッションに `git worktree` を使うよう指示
+- **Worktree の自動クリーンアップ** — セッション終了時および Bot 起動時に `wt-{thread_id}` ディレクトリを自動削除。未コミットの変更がある場合は絶対に削除しない（安全性保証）
 - **アクティブセッションレジストリ** — インメモリレジストリ。各セッションが他のセッションの状況を把握
 - **協調チャンネル** — セッション間のライフサイクルブロードキャスト用オプション共有チャンネル
 - **協調スクリプト** — セッション内から `coord_post.py` / `coord_read.py` を呼び出してイベントを投稿・読み取り可能
@@ -150,6 +151,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **スタートアップリジューム** — Bot 再起動後に中断セッションを自動再開（`POST /api/mark-resume` で登録）
 - **プログラム的スポーン** — `POST /api/spawn` でスクリプトや Claude サブプロセスから新しい Discord スレッド + Claude セッションを作成。スレッド作成後すぐに非ブロッキング 201 を返す
 - **スレッド ID 注入** — すべての Claude サブプロセスに `DISCORD_THREAD_ID` 環境変数を渡し、セッションから `$CCDB_API_URL/api/spawn` で子セッションを起動可能
+- **Worktree 管理** — `/worktree-list` でアクティブなセッション Worktree を clean/dirty ステータス付きで表示、`/worktree-cleanup` で孤立した clean な Worktree を削除（`dry_run` プレビューあり）
 
 ### セキュリティ
 - **シェルインジェクション防止** — `asyncio.create_subprocess_exec` のみ使用、`shell=True` は一切なし
@@ -231,6 +233,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `DISCORD_OWNER_ID` | Claude が入力待ちのとき @mention する Discord ユーザー ID | （オプション） |
 | `COORDINATION_CHANNEL_ID` | セッション間イベントブロードキャスト用チャンネル ID | （オプション） |
 | `CCDB_COORDINATION_CHANNEL_NAME` | 協調チャンネルを名前で自動作成 | （オプション） |
+| `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
 
 ---
 
@@ -467,6 +470,7 @@ claude_discord/
     tool_timer.py          # LiveToolTimer — 長時間ツール実行の経過時間カウンター
     thread_dashboard.py    # スレッドのセッション状態を表示する live ピン embed
   session_sync.py          # CLI セッションの検出とインポート
+  worktree.py              # WorktreeManager — git worktree の安全なライフサイクル管理（セッション終了・起動時のクリーンアップ）
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）
   utils/

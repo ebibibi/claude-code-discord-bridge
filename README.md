@@ -122,6 +122,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 
 ### Concurrency & Coordination
 - **Worktree instructions auto-injected** — Every session prompted to use `git worktree` before touching any file
+- **Automatic worktree cleanup** — Session worktrees (`wt-{thread_id}`) are removed automatically at session end and on bot startup; dirty worktrees are never auto-removed (safety invariant)
 - **Active session registry** — In-memory registry; each session sees what the others are doing
 - **Coordination channel** — Optional shared channel for cross-session lifecycle broadcasts
 - **Coordination scripts** — Claude can call `coord_post.py` / `coord_read.py` from within a session to post and read events
@@ -145,6 +146,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Startup resume** — Interrupted sessions restart automatically after bot reboot (marked via `POST /api/mark-resume`)
 - **Programmatic spawn** — `POST /api/spawn` creates a new Discord thread + Claude session from any script or Claude subprocess; returns non-blocking 201 immediately after thread creation
 - **Thread ID injection** — `DISCORD_THREAD_ID` env var is passed to every Claude subprocess, enabling sessions to spawn child sessions via `$CCDB_API_URL/api/spawn`
+- **Worktree management** — `/worktree-list` shows all active session worktrees with clean/dirty status; `/worktree-cleanup` removes orphaned clean worktrees (supports `dry_run` preview)
 
 ### Security
 - **No shell injection** — `asyncio.create_subprocess_exec` only, never `shell=True`
@@ -226,6 +228,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
 | `COORDINATION_CHANNEL_ID` | Channel ID for cross-session event broadcasts | (optional) |
 | `CCDB_COORDINATION_CHANNEL_NAME` | Auto-create coordination channel by name | (optional) |
+| `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
 
 ---
 
@@ -462,6 +465,7 @@ claude_discord/
     tool_timer.py          # LiveToolTimer — elapsed time counter for long-running tools
     thread_dashboard.py    # Live pinned embed showing session states
   session_sync.py          # CLI session discovery and import
+  worktree.py              # WorktreeManager — safe git worktree lifecycle (cleanup at session end + startup)
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
   utils/
