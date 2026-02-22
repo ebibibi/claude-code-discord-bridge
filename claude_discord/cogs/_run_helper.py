@@ -2,7 +2,7 @@
 
 Both ClaudeChatCog and SkillCommandCog need to run Claude and post results.
 This module is the thin orchestration layer that:
-1. Prepares the prompt (lounge context + concurrency notice)
+1. Builds ephemeral system context (lounge + concurrency notice) via --append-system-prompt
 2. Delegates event processing to EventProcessor
 3. Handles AskUserQuestion flow (recursive resume)
 
@@ -56,28 +56,34 @@ def _truncate_result(content: str) -> str:
     return content[:TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
 
 
-async def _prepare_prompt(config: RunConfig) -> str:
-    """Prepend AI Lounge context and concurrency notice to the prompt."""
-    prompt = config.prompt
+async def _build_system_context(config: RunConfig) -> str | None:
+    """Build ephemeral system context from AI Lounge and concurrency notice.
 
-    # Layer 3: Prepend AI Lounge context (recent messages + invitation).
+    Returns a string to inject via --append-system-prompt, or None if no context
+    is available. Injecting as a system prompt (rather than prepending to the user
+    message) prevents this ephemeral metadata from accumulating in session history,
+    which would otherwise cause "Prompt is too long" errors over long conversations.
+    """
+    parts: list[str] = []
+
+    # Layer 3: AI Lounge context (recent messages + invitation).
     if config.lounge_repo is not None:
         try:
             recent = await config.lounge_repo.get_recent(limit=10)
             lounge_context = build_lounge_prompt(recent)
-            prompt = lounge_context + "\n\n" + prompt
-            logger.debug("Lounge context injected (%d recent message(s))", len(recent))
+            parts.append(lounge_context)
+            logger.debug("Lounge context built (%d recent message(s))", len(recent))
         except Exception:
             logger.warning("Failed to fetch lounge context — skipping", exc_info=True)
 
-    # Layer 1 + 2: Register session and prepend concurrency notice.
+    # Layer 1 + 2: Register session and build concurrency notice.
     if config.registry is not None:
-        config.registry.register(config.thread.id, prompt[:100], config.runner.working_dir)
+        config.registry.register(config.thread.id, config.prompt[:100], config.runner.working_dir)
         others = config.registry.list_others(config.thread.id)
         notice = config.registry.build_concurrency_notice(config.thread.id)
-        prompt = notice + "\n\n" + prompt
+        parts.append(notice)
         logger.info(
-            "Concurrency notice injected for thread %d (%d other active session(s), dir=%s)",
+            "Concurrency notice built for thread %d (%d other active session(s), dir=%s)",
             config.thread.id,
             len(others),
             config.runner.working_dir or "(default)",
@@ -87,7 +93,7 @@ async def _prepare_prompt(config: RunConfig) -> str:
             "No session registry — concurrency notice skipped for thread %d", config.thread.id
         )
 
-    return prompt
+    return "\n\n".join(parts) if parts else None
 
 
 async def _cleanup_session_worktree(config: RunConfig) -> None:
@@ -142,11 +148,16 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
     Returns:
         The final session_id, or None if the run failed.
     """
-    prompt = await _prepare_prompt(config)
-    processor = EventProcessor(config.with_prompt(prompt))
+    system_context = await _build_system_context(config)
+    runner = (
+        config.runner.clone(append_system_prompt=system_context)
+        if system_context
+        else config.runner
+    )
+    processor = EventProcessor(config)
 
     try:
-        async for event in config.runner.run(prompt, session_id=config.session_id):
+        async for event in runner.run(config.prompt, session_id=config.session_id):
             if processor.should_drain:
                 continue
             await processor.process(event)

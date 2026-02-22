@@ -705,7 +705,11 @@ class TestConcurrencyIntegration:
 
     @pytest.fixture
     def runner(self) -> MagicMock:
-        return MagicMock()
+        r = MagicMock()
+        r.working_dir = None
+        # clone() returns the same mock so run() assignments in tests carry over.
+        r.clone.return_value = r
+        return r
 
     def _make_async_gen(self, events: list[StreamEvent]):
         async def gen(*args, **kwargs):
@@ -728,10 +732,14 @@ class TestConcurrencyIntegration:
         ]
 
     @pytest.mark.asyncio
-    async def test_prompt_includes_concurrency_notice(
+    async def test_concurrency_notice_injected_as_system_prompt(
         self, thread: MagicMock, runner: MagicMock, repo: MagicMock
     ) -> None:
-        """When registry is provided, prompt should be prefixed with notice."""
+        """When registry is provided, concurrency notice goes into --append-system-prompt.
+
+        The user prompt is passed unchanged; the notice is injected as an ephemeral
+        system prompt so it does NOT accumulate in session history.
+        """
         registry = SessionRegistry()
         captured_prompt = []
 
@@ -744,9 +752,15 @@ class TestConcurrencyIntegration:
 
         await run_claude_in_thread(thread, runner, repo, "fix the bug", None, registry=registry)
 
+        # Prompt is unchanged — notice moved to --append-system-prompt via clone().
         assert len(captured_prompt) == 1
-        assert captured_prompt[0].startswith("[CONCURRENCY NOTICE")
-        assert "fix the bug" in captured_prompt[0]
+        assert captured_prompt[0] == "fix the bug"
+
+        # clone() must have been called with the concurrency notice as system prompt.
+        runner.clone.assert_called_once()
+        _, kwargs = runner.clone.call_args
+        system_prompt = kwargs.get("append_system_prompt", "")
+        assert "[CONCURRENCY NOTICE" in system_prompt
 
     @pytest.mark.asyncio
     async def test_session_registered_during_run(
@@ -801,10 +815,10 @@ class TestConcurrencyIntegration:
         assert registry.list_active() == []
 
     @pytest.mark.asyncio
-    async def test_other_sessions_in_notice(
+    async def test_other_sessions_in_system_prompt(
         self, thread: MagicMock, runner: MagicMock, repo: MagicMock
     ) -> None:
-        """When other sessions exist, their info should appear in the prompt."""
+        """When other sessions exist, their info should appear in --append-system-prompt."""
         registry = SessionRegistry()
         registry.register(9999, "running /goodmorning", "/home/ebi")
 
@@ -819,15 +833,20 @@ class TestConcurrencyIntegration:
 
         await run_claude_in_thread(thread, runner, repo, "fix the bug", None, registry=registry)
 
+        # User prompt is unchanged.
         assert len(captured_prompt) == 1
-        assert "/goodmorning" in captured_prompt[0]
-        assert "fix the bug" in captured_prompt[0]
+        assert captured_prompt[0] == "fix the bug"
+
+        # Other session info is in the system prompt, not the user message.
+        _, kwargs = runner.clone.call_args
+        system_prompt = kwargs.get("append_system_prompt", "")
+        assert "/goodmorning" in system_prompt
 
     @pytest.mark.asyncio
-    async def test_no_registry_no_prefix(
+    async def test_no_registry_no_clone(
         self, thread: MagicMock, runner: MagicMock, repo: MagicMock
     ) -> None:
-        """Without registry, prompt should be passed as-is."""
+        """Without registry or lounge, runner is used directly (no clone needed)."""
         captured_prompt = []
 
         async def capturing_gen(prompt, **kwargs):
@@ -840,6 +859,8 @@ class TestConcurrencyIntegration:
         await run_claude_in_thread(thread, runner, repo, "fix the bug", None)
 
         assert captured_prompt[0] == "fix the bug"
+        # No system context → runner.clone should not have been called.
+        runner.clone.assert_not_called()
 
 
 class TestLiveToolTimer:

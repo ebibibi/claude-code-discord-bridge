@@ -38,6 +38,7 @@ class ClaudeRunner:
         api_port: int | None = None,
         api_secret: str | None = None,
         thread_id: int | None = None,
+        append_system_prompt: str | None = None,
     ) -> None:
         self.command = command
         self.model = model
@@ -50,6 +51,7 @@ class ClaudeRunner:
         self.api_port = api_port
         self.api_secret = api_secret
         self.thread_id = thread_id
+        self.append_system_prompt = append_system_prompt
         self._process: asyncio.subprocess.Process | None = None
 
     async def run(
@@ -98,7 +100,12 @@ class ClaudeRunner:
         finally:
             await self._cleanup()
 
-    def clone(self, thread_id: int | None = None, model: str | None = None) -> ClaudeRunner:
+    def clone(
+        self,
+        thread_id: int | None = None,
+        model: str | None = None,
+        append_system_prompt: str | None = None,
+    ) -> ClaudeRunner:
         """Create a fresh runner with the same configuration but no active process.
 
         Args:
@@ -107,6 +114,10 @@ class ClaudeRunner:
             model: Optional model override for this clone. When provided, the clone
                    uses this model instead of self.model. Useful for per-session
                    model switching without mutating the shared base runner.
+            append_system_prompt: Text to inject via --append-system-prompt.
+                   Overrides the instance-level value if provided.
+                   Use this for ephemeral context (e.g. lounge state, concurrency
+                   notices) that should NOT accumulate in session history.
         """
         return ClaudeRunner(
             command=self.command,
@@ -120,6 +131,11 @@ class ClaudeRunner:
             api_port=self.api_port,
             api_secret=self.api_secret,
             thread_id=thread_id if thread_id is not None else self.thread_id,
+            append_system_prompt=(
+                append_system_prompt
+                if append_system_prompt is not None
+                else self.append_system_prompt
+            ),
         )
 
     async def interrupt(self) -> None:
@@ -177,6 +193,9 @@ class ClaudeRunner:
             if not re.match(r"^[a-f0-9\-]+$", session_id):
                 raise ValueError(f"Invalid session_id format: {session_id!r}")
             args.extend(["--resume", session_id])
+
+        if self.append_system_prompt:
+            args.extend(["--append-system-prompt", self.append_system_prompt])
 
         # Use -- to separate flags from positional args (prevents prompt
         # content starting with - from being interpreted as a flag)

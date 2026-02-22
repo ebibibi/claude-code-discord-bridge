@@ -75,6 +75,45 @@ class TestBuildArgs:
         args = runner._build_args("hello", session_id=None)
         assert "--include-partial-messages" not in args
 
+    def test_append_system_prompt_included(self) -> None:
+        """--append-system-prompt flag is added when set."""
+        runner = ClaudeRunner(append_system_prompt="You are in a concurrent env.")
+        args = runner._build_args("hello", session_id=None)
+        assert "--append-system-prompt" in args
+        idx = args.index("--append-system-prompt")
+        assert args[idx + 1] == "You are in a concurrent env."
+
+    def test_append_system_prompt_before_double_dash(self) -> None:
+        """--append-system-prompt must appear before the -- separator."""
+        runner = ClaudeRunner(append_system_prompt="ctx")
+        args = runner._build_args("hello", session_id=None)
+        sp_idx = args.index("--append-system-prompt")
+        dd_idx = args.index("--")
+        assert sp_idx < dd_idx
+
+    def test_no_append_system_prompt_by_default(self) -> None:
+        runner = ClaudeRunner()
+        args = runner._build_args("hello", session_id=None)
+        assert "--append-system-prompt" not in args
+
+    def test_clone_propagates_append_system_prompt(self) -> None:
+        """clone() with append_system_prompt overrides the parent value."""
+        base = ClaudeRunner(append_system_prompt="old context")
+        cloned = base.clone(append_system_prompt="new context")
+        assert cloned.append_system_prompt == "new context"
+
+    def test_clone_inherits_append_system_prompt(self) -> None:
+        """clone() without append_system_prompt inherits parent value."""
+        base = ClaudeRunner(append_system_prompt="persistent context")
+        cloned = base.clone()
+        assert cloned.append_system_prompt == "persistent context"
+
+    def test_clone_none_inherits_parent_append_system_prompt(self) -> None:
+        """clone(append_system_prompt=None) inherits parent value (None means 'not provided')."""
+        base = ClaudeRunner(append_system_prompt="ctx")
+        cloned = base.clone(append_system_prompt=None)
+        assert cloned.append_system_prompt == "ctx"  # inherits parent
+
 
 class TestBuildEnv:
     """Tests for _build_env method."""

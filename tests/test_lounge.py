@@ -307,10 +307,15 @@ class TestLoungeApiEndpoints:
 
 
 class TestRunHelperLoungeInjection:
-    """Verify that lounge context is prepended to the prompt when lounge_repo is set."""
+    """Verify that lounge context is injected as --append-system-prompt when lounge_repo is set."""
 
-    async def test_lounge_context_injected_into_prompt(self) -> None:
-        """When lounge_repo has messages, they appear before the user prompt."""
+    async def test_lounge_context_injected_as_system_prompt(self) -> None:
+        """When lounge_repo has messages, they appear in --append-system-prompt (not user prompt).
+
+        Lounge context is ephemeral metadata that must NOT accumulate in session history.
+        Injecting it via --append-system-prompt (system prompt) prevents the "Prompt is too
+        long" error that would otherwise occur in long-running sessions.
+        """
         from claude_discord.cogs._run_helper import run_claude_in_thread
 
         lounge_repo_mock = AsyncMock(spec=LoungeRepository)
@@ -324,7 +329,6 @@ class TestRunHelperLoungeInjection:
 
         async def fake_run(prompt: str, session_id: str | None):
             captured_prompt.append(prompt)
-            # Yield a minimal result event
             from claude_discord.claude.types import MessageType, StreamEvent
 
             result = StreamEvent(message_type=MessageType.RESULT)
@@ -338,6 +342,8 @@ class TestRunHelperLoungeInjection:
 
         runner = MagicMock()
         runner.working_dir = None
+        # clone() returns the same mock so fake_run is accessible from the clone.
+        runner.clone.return_value = runner
         runner.run = fake_run
 
         await run_claude_in_thread(
@@ -350,15 +356,18 @@ class TestRunHelperLoungeInjection:
         )
 
         assert captured_prompt, "runner.run was not called"
-        full_prompt = captured_prompt[0]
-        assert "BotX" in full_prompt
-        assert "Busy here!" in full_prompt
-        assert "Do something cool" in full_prompt
-        # Lounge context comes before the user prompt
-        assert full_prompt.index("BotX") < full_prompt.index("Do something cool")
+        # User prompt is unchanged — lounge context is NOT in the user message.
+        assert captured_prompt[0] == "Do something cool"
+
+        # Lounge context is in --append-system-prompt via clone().
+        runner.clone.assert_called_once()
+        _, kwargs = runner.clone.call_args
+        system_prompt = kwargs.get("append_system_prompt", "")
+        assert "BotX" in system_prompt
+        assert "Busy here!" in system_prompt
 
     async def test_no_lounge_context_when_repo_is_none(self) -> None:
-        """When lounge_repo is None, the prompt is unchanged."""
+        """When lounge_repo is None, the prompt is unchanged and runner is not cloned."""
         from claude_discord.cogs._run_helper import run_claude_in_thread
 
         captured_prompt: list[str] = []
@@ -391,6 +400,6 @@ class TestRunHelperLoungeInjection:
         )
 
         assert captured_prompt
-        # Without lounge_repo, the prompt should not be prefixed with lounge invite
-        assert "AI LOUNGE" not in captured_prompt[0]
-        assert user_prompt in captured_prompt[0]
+        # Without lounge_repo, prompt is as-is and runner is used directly.
+        assert captured_prompt[0] == user_prompt
+        runner.clone.assert_not_called()
