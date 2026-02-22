@@ -9,9 +9,9 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**複数の Claude Code セッションを安全に Discord 経由で並列実行するフレームワーク。**
+**スマホの Discord から Claude Code をガンガン使おう。複数スレッドを同時に回して、本格開発もOK。**
 
-各 Discord スレッドが独立した Claude Code セッションになります。必要なだけスレッドを立ち上げ、あるスレッドで機能開発、別のスレッドで PR レビュー、さらに別のスレッドでスケジュールタスクを実行できます。並行セッションの調整はブリッジが自動的に処理します。
+Discord のスレッドを開くだけで、Claude Code セッションが立ち上がります。スマートフォンから何スレッドでも並行して動かせます — あるスレッドで機能開発、別のスレッドで PR レビュー、さらに別のスレッドでバックグラウンドタスク。全部同時進行。コンフリクトしないように、ブリッジがセッション間の調整を完全自動化します。
 
 **[English](../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[한국어](../ko/README.md)** | **[Español](../es/README.md)** | **[Português](../pt-BR/README.md)** | **[Français](../fr/README.md)**
 

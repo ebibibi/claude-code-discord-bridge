@@ -4,9 +4,9 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Run multiple Claude Code sessions in parallel — safely — through Discord.**
+**Use Claude Code on your phone. Multiple threads. All at once. Real development included.**
 
-Each Discord thread becomes an isolated Claude Code session. Spin up as many as you need: work on a feature in one thread, review a PR in another, run a scheduled task in a third. The bridge handles coordination automatically so concurrent sessions don't clobber each other.
+Open Claude Code from your smartphone's Discord app, spin up multiple threads, and run parallel development sessions — all without touching a keyboard. Each Discord thread becomes a fully isolated Claude Code session. Work on a feature in one thread, review a PR in another, and run a background task in a third — simultaneously. The bridge handles all the coordination so sessions never clobber each other.
 
 **[日本語](docs/ja/README.md)** | **[简体中文](docs/zh-CN/README.md)** | **[한국어](docs/ko/README.md)** | **[Español](docs/es/README.md)** | **[Português](docs/pt-BR/README.md)** | **[Français](docs/fr/README.md)**
 
