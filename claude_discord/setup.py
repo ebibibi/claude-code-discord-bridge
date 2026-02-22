@@ -147,6 +147,11 @@ async def setup_bridge(
     resume_repo = PendingResumeRepository(session_db_path)
     logger.info("Session DB initialized: %s", session_db_path)
 
+    # Attach repos to bot so generic cogs (e.g. AutoUpgradeCog) can discover them
+    # without a hard import dependency on ccdb internals.
+    bot.session_repo = session_repo  # type: ignore[attr-defined]
+    bot.resume_repo = resume_repo  # type: ignore[attr-defined]
+
     # --- ClaudeChatCog ---
     chat_cog = ClaudeChatCog(
         bot,  # type: ignore[arg-type]  # consumers pass their own Bot subclass
