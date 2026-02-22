@@ -214,6 +214,92 @@ class TestInterrupt:
         mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
         mock_kill.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_interrupt_falls_back_to_kill_on_asyncio_timeout(self) -> None:
+        """interrupt() calls kill() on asyncio.TimeoutError (Python 3.10 compat).
+
+        On Python 3.10, asyncio.TimeoutError is NOT a subclass of the built-in
+        TimeoutError.  This test verifies the correct exception is caught so
+        interrupt() doesn't propagate an unhandled exception to the caller.
+        """
+        import asyncio
+
+        runner = ClaudeRunner()
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        mock_process.wait = AsyncMock(return_value=0)
+        runner._process = mock_process
+
+        with (
+            patch("asyncio.wait_for", side_effect=asyncio.TimeoutError),
+            patch.object(runner, "kill", new_callable=AsyncMock) as mock_kill,
+        ):
+            await runner.interrupt()  # must not raise
+
+        mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
+        mock_kill.assert_called_once()
+
+
+class TestKill:
+    """Tests for kill() method."""
+
+    @pytest.mark.asyncio
+    async def test_kill_force_kills_on_asyncio_timeout(self) -> None:
+        """kill() force-kills the process on asyncio.TimeoutError (Python 3.10 compat).
+
+        On Python 3.10, asyncio.TimeoutError is NOT a subclass of the built-in
+        TimeoutError.  Verify kill() still calls process.kill() rather than
+        propagating an unhandled exception.
+        """
+        import asyncio
+
+        runner = ClaudeRunner()
+        mock_process = MagicMock()
+        mock_process.returncode = None
+        mock_process.wait = AsyncMock(return_value=0)
+        runner._process = mock_process
+
+        with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+            await runner.kill()  # must not raise
+
+        mock_process.kill.assert_called_once()
+
+
+class TestRunTimeout:
+    """Tests for timeout handling in run()."""
+
+    @pytest.mark.asyncio
+    async def test_run_yields_error_on_asyncio_timeout(self) -> None:
+        """run() yields a timeout error event on asyncio.TimeoutError (Python 3.10 compat).
+
+        On Python 3.10, asyncio.TimeoutError is NOT a subclass of the built-in
+        TimeoutError.  Verify run() catches it and yields a proper error event
+        instead of propagating the exception to callers.
+        """
+
+        runner = ClaudeRunner(timeout_seconds=5)
+
+        mock_process = AsyncMock()
+        mock_process.returncode = None
+        mock_process.stdout = AsyncMock()
+        mock_process.stderr = AsyncMock()
+
+        async def _stream_raises():
+            raise TimeoutError
+            yield  # make it an async generator
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process),
+            patch.object(runner, "_read_stream", _stream_raises),
+            patch.object(runner, "_cleanup", new_callable=AsyncMock),
+        ):
+            events = [event async for event in runner.run("hello")]
+
+        assert len(events) == 1
+        assert events[0].is_complete
+        assert events[0].error is not None
+        assert "imed out" in events[0].error
+
 
 class TestSignalKillSuppression:
     """Tests that signal-killed processes (negative returncode) don't emit error events."""
