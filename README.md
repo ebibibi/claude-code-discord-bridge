@@ -168,6 +168,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **DrainAware restart** — Waits for active sessions to finish before restarting
 - **Auto-resume marking** — Active sessions are automatically marked for resume on any shutdown (upgrade restart via `AutoUpgradeCog`, or any other shutdown via `ClaudeChatCog.cog_unload()`); they pick up where they left off after the bot comes back online
 - **Restart approval** — Optional gate to confirm upgrades before applying
+- **Manual upgrade trigger** — `/upgrade` slash command lets authorised users trigger the upgrade pipeline directly from Discord (opt-in via `slash_command_enabled=True`)
 
 ### Session Management
 - **Session sync** — Import CLI sessions as Discord threads (`/sync-sessions`)
@@ -462,11 +463,16 @@ config = UpgradeConfig(
     trigger_prefix="🔄 bot-upgrade",
     working_dir="/home/user/my-bot",
     restart_command=["sudo", "systemctl", "restart", "my-bot.service"],
-    restart_approval=True,  # React with ✅ to confirm restart
+    restart_approval=True,       # React with ✅ to confirm restart
+    slash_command_enabled=True,  # Enable /upgrade slash command (opt-in, default False)
 )
 
 await bot.add_cog(AutoUpgradeCog(bot, config))
 ```
+
+#### Manual Trigger via `/upgrade`
+
+When `slash_command_enabled=True`, any authorised user can run `/upgrade` directly in Discord to trigger the same upgrade pipeline — no webhook required. The command respects `upgrade_approval` and `restart_approval` gates, creates a progress thread, and gracefully handles concurrent runs (replies ephemerally if an upgrade is already in progress).
 
 Before restarting, `AutoUpgradeCog`:
 
@@ -598,7 +604,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-666+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade, REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, and compact detection.
+674+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, and compact detection.
 
 ---
 

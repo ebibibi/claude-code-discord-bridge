@@ -171,6 +171,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **DrainAware 再起動** — 再起動前にアクティブセッションの完了を待機
 - **自動リジューム登録** — アップグレード再起動（`AutoUpgradeCog`）または任意のシャットダウン（`ClaudeChatCog.cog_unload()`）でアクティブセッションを自動登録。Bot 再起動後に中断した作業を自動的に再開
 - **再起動承認** — アップグレード適用前の確認ゲート（オプション）
+- **手動アップグレードトリガー** — `/upgrade` スラッシュコマンドで Discord から直接アップグレードパイプラインを実行（`slash_command_enabled=True` でオプトイン）
 
 ### セッション管理
 - **セッション同期** — CLI セッションを Discord スレッドにインポート（`/sync-sessions`）
@@ -400,11 +401,16 @@ config = UpgradeConfig(
     trigger_prefix="🔄 bot-upgrade",
     working_dir="/home/user/my-bot",
     restart_command=["sudo", "systemctl", "restart", "my-bot.service"],
-    restart_approval=True,  # 再起動確認に ✅ リアクション
+    restart_approval=True,       # 再起動確認に ✅ リアクション
+    slash_command_enabled=True,  # /upgrade スラッシュコマンドを有効化（オプトイン、デフォルト False）
 )
 
 await bot.add_cog(AutoUpgradeCog(bot, config))
 ```
+
+#### `/upgrade` スラッシュコマンドによる手動トリガー
+
+`slash_command_enabled=True` の場合、認可されたユーザーが Discord から `/upgrade` を実行することで、Webhook なしで同じアップグレードパイプラインをトリガーできます。`upgrade_approval` および `restart_approval` のゲートが適用され、進捗スレッドが作成されます。すでにアップグレードが実行中の場合はエフェメラルで通知します。
 
 再起動前に `AutoUpgradeCog` は以下の手順を実行します:
 
@@ -536,7 +542,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-666 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジューム、モデル切り替え、コンパクト検出をカバーしています。
+674 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード（`/upgrade` スラッシュコマンド含む）、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジューム、モデル切り替え、コンパクト検出をカバーしています。
 
 ---
 
