@@ -139,6 +139,16 @@ async def _cleanup_session_worktree(config: RunConfig) -> None:
         logger.exception("Unexpected error during worktree cleanup for thread %d", config.thread.id)
 
 
+async def _cleanup_image_tempfiles(image_paths: list[str]) -> None:
+    """Delete image tempfiles downloaded for --image flags."""
+    import os
+
+    for path in image_paths:
+        with contextlib.suppress(Exception):
+            os.unlink(path)
+            logger.debug("Deleted image tempfile: %s", path)
+
+
 async def run_claude_with_config(config: RunConfig) -> str | None:
     """Execute Claude Code CLI and stream results to a Discord thread.
 
@@ -154,6 +164,10 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
         if system_context
         else config.runner
     )
+    # Inject per-invocation image paths (not inherited by runner.clone()).
+    if config.image_paths:
+        runner.image_paths = config.image_paths
+
     processor = EventProcessor(config)
 
     try:
@@ -177,6 +191,8 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
             config.registry.unregister(config.thread.id)
         if config.worktree_manager is not None:
             await _cleanup_session_worktree(config)
+        if config.image_paths:
+            await _cleanup_image_tempfiles(config.image_paths)
 
     # After the stream ends, handle pending AskUserQuestion by showing Discord
     # UI and resuming the session with the user's answer.

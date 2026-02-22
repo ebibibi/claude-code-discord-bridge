@@ -15,13 +15,20 @@ import logging
 
 from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent
 from ..discord_ui.chunker import chunk_message
+from ..discord_ui.elicitation_view import ElicitationFormView, ElicitationUrlView
 from ..discord_ui.embeds import (
+    elicitation_embed,
+    permission_embed,
+    plan_embed,
     redacted_thinking_embed,
     session_start_embed,
     thinking_embed,
+    todo_embed,
     tool_result_embed,
     tool_use_embed,
 )
+from ..discord_ui.permission_view import PermissionView
+from ..discord_ui.plan_view import PlanApprovalView
 from ..discord_ui.streaming_manager import StreamingMessageManager
 from ..discord_ui.tool_timer import LiveToolTimer
 from .run_config import RunConfig
@@ -152,6 +159,16 @@ class EventProcessor:
             with contextlib.suppress(Exception):
                 await self._config.thread.send(f"-# {label}")
 
+        # Permission request — show Allow/Deny buttons
+        if event.permission_request is not None:
+            await self._handle_permission_request(event)
+            return
+
+        # MCP elicitation — show form or URL button
+        if event.elicitation is not None:
+            await self._handle_elicitation(event)
+            return
+
         if not event.session_id:
             return
 
@@ -181,6 +198,14 @@ class EventProcessor:
         # Tool use — post embed and start live timer.
         if event.tool_use:
             await self._handle_tool_use(event)
+
+        # TodoWrite — post or edit the live todo progress embed.
+        if event.todo_list is not None:
+            await self._handle_todo_write(event)
+
+        # ExitPlanMode — show plan embed with Approve/Cancel buttons.
+        if event.is_plan_approval and not event.is_partial:
+            await self._handle_plan_approval(event)
 
         # AskUserQuestion — set pending and signal caller to interrupt runner.
         if event.ask_questions:
@@ -318,6 +343,68 @@ class EventProcessor:
         self._state.active_timers[event.tool_use.tool_id] = timer.start()
 
         await self._bump_stop()
+
+    async def _handle_plan_approval(self, event: StreamEvent) -> None:
+        """Post the plan embed with Approve/Cancel buttons (ExitPlanMode)."""
+        plan_text = event.text or ""
+        embed = plan_embed(plan_text)
+        # ExitPlanMode does not carry a request_id in the current CLI protocol;
+        # we use the session_id as a stable identifier for the inject payload.
+        request_id = self._state.session_id or "plan"
+        view = PlanApprovalView(self._config.runner, request_id)
+        with contextlib.suppress(Exception):
+            await self._config.thread.send(embed=embed, view=view)
+        logger.info("Plan approval prompt posted (session=%s)", request_id)
+
+    async def _handle_permission_request(self, event: StreamEvent) -> None:
+        """Post permission embed with Allow/Deny buttons."""
+        assert event.permission_request is not None
+        embed = permission_embed(event.permission_request)
+        view = PermissionView(self._config.runner, event.permission_request)
+        with contextlib.suppress(Exception):
+            await self._config.thread.send(embed=embed, view=view)
+        logger.info(
+            "Permission request posted: %s (request_id=%s)",
+            event.permission_request.tool_name,
+            event.permission_request.request_id,
+        )
+
+    async def _handle_elicitation(self, event: StreamEvent) -> None:
+        """Post elicitation embed with appropriate UI (URL button or form Modal button)."""
+        assert event.elicitation is not None
+        req = event.elicitation
+        embed = elicitation_embed(req)
+        if req.mode == "url-mode":
+            view = ElicitationUrlView(self._config.runner, req)
+        else:
+            view = ElicitationFormView(self._config.runner, req)
+        with contextlib.suppress(Exception):
+            await self._config.thread.send(embed=embed, view=view)
+        logger.info(
+            "Elicitation posted: %s (%s, request_id=%s)",
+            req.server_name,
+            req.mode,
+            req.request_id,
+        )
+
+    async def _handle_todo_write(self, event: StreamEvent) -> None:
+        """Post or edit the live todo progress embed.
+
+        On the first TodoWrite call the embed is posted as a new message.
+        On subsequent calls (Claude updating the list) the same message is
+        edited in-place so the user sees a single, live progress view.
+        """
+        assert event.todo_list is not None
+
+        embed = todo_embed(event.todo_list)
+        if self._state.todo_message is None:
+            # First time: post a new embed and store the reference.
+            with contextlib.suppress(Exception):
+                self._state.todo_message = await self._config.thread.send(embed=embed)
+        else:
+            # Subsequent updates: edit in-place.
+            with contextlib.suppress(Exception):
+                await self._state.todo_message.edit(embed=embed)
 
     async def _bump_stop(self) -> None:
         """Move the Stop button to the bottom of the thread if configured."""

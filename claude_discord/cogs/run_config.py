@@ -62,6 +62,9 @@ class RunConfig:
     lounge_repo: LoungeRepository | None = None
     stop_view: StopView | None = None
     worktree_manager: WorktreeManager | None = None
+    # Paths to downloaded image tempfiles passed via --image flags.
+    # Cleaned up in run_claude_with_config() finally block.
+    image_paths: list[str] | None = None
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

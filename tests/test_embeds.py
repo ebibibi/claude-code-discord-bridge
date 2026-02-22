@@ -299,3 +299,59 @@ class TestRedactedThinkingEmbed:
         regular = thinking_embed("x")
         redacted = redacted_thinking_embed()
         assert redacted.colour.value != regular.colour.value
+
+
+class TestTodoEmbed:
+    """Tests for todo_embed()."""
+
+    def test_shows_all_statuses(self) -> None:
+        from claude_discord.claude.types import TodoItem
+        from claude_discord.discord_ui.embeds import todo_embed
+
+        todos = [
+            TodoItem(content="Task A", status="completed"),
+            TodoItem(content="Task B", status="in_progress", active_form="Doing Task B"),
+            TodoItem(content="Task C", status="pending"),
+        ]
+        embed = todo_embed(todos)
+        assert embed.description is not None
+        assert "✅" in embed.description
+        assert "🔄" in embed.description
+        assert "⬜" in embed.description
+
+    def test_in_progress_shows_active_form(self) -> None:
+        from claude_discord.claude.types import TodoItem
+        from claude_discord.discord_ui.embeds import todo_embed
+
+        todos = [TodoItem(content="Task", status="in_progress", active_form="Running Task")]
+        embed = todo_embed(todos)
+        assert embed.description is not None
+        assert "Running Task" in embed.description
+
+    def test_in_progress_falls_back_to_content(self) -> None:
+        from claude_discord.claude.types import TodoItem
+        from claude_discord.discord_ui.embeds import todo_embed
+
+        todos = [TodoItem(content="Task without active form", status="in_progress", active_form="")]
+        embed = todo_embed(todos)
+        assert embed.description is not None
+        assert "Task without active form" in embed.description
+
+    def test_title_shows_progress_count(self) -> None:
+        from claude_discord.claude.types import TodoItem
+        from claude_discord.discord_ui.embeds import todo_embed
+
+        todos = [
+            TodoItem(content="Done", status="completed"),
+            TodoItem(content="Pending", status="pending"),
+        ]
+        embed = todo_embed(todos)
+        assert embed.title is not None
+        assert "1/2" in embed.title
+
+    def test_empty_list(self) -> None:
+        from claude_discord.discord_ui.embeds import todo_embed
+
+        embed = todo_embed([])
+        assert embed.description is not None
+        assert "no tasks" in embed.description

@@ -14,8 +14,11 @@ from .types import (
     AskOption,
     AskQuestion,
     ContentBlockType,
+    ElicitationRequest,
     MessageType,
+    PermissionRequest,
     StreamEvent,
+    TodoItem,
     ToolCategory,
     ToolUseEvent,
 )
@@ -77,6 +80,23 @@ def _parse_system(data: dict[str, Any], event: StreamEvent) -> None:
             event.compact_trigger,
             event.compact_pre_tokens,
         )
+    elif subtype == "permission_request":
+        event.permission_request = PermissionRequest(
+            request_id=data.get("request_id", ""),
+            tool_name=data.get("tool_name", ""),
+            tool_input=data.get("tool_input", {}),
+        )
+        logger.info("Permission request: %s", data.get("tool_name"))
+    elif subtype == "elicitation":
+        event.elicitation = ElicitationRequest(
+            request_id=data.get("request_id", ""),
+            server_name=data.get("server_name", ""),
+            mode=data.get("mode", "form-mode"),
+            message=data.get("message", ""),
+            url=data.get("url", ""),
+            schema=data.get("schema", {}),
+        )
+        logger.info("MCP elicitation: %s (%s)", data.get("server_name"), data.get("mode"))
 
 
 def _parse_assistant(data: dict[str, Any], event: StreamEvent) -> None:
@@ -112,6 +132,10 @@ def _parse_assistant(data: dict[str, Any], event: StreamEvent) -> None:
             )
             if tool_name == "AskUserQuestion":
                 event.ask_questions = _parse_ask_questions(tool_input)
+            elif tool_name == "TodoWrite":
+                event.todo_list = _parse_todo_items(tool_input)
+            elif tool_name == "ExitPlanMode":
+                event.is_plan_approval = True
 
         elif block_type == ContentBlockType.THINKING.value:
             thinking_text = block.get("thinking", "")
@@ -201,6 +225,24 @@ def _parse_ask_questions(tool_input: dict[str, Any]) -> list[AskQuestion]:
                 header=q.get("header", ""),
                 multi_select=bool(q.get("multiSelect", False)),
                 options=options,
+            )
+        )
+    return result
+
+
+def _parse_todo_items(tool_input: dict[str, Any]) -> list[TodoItem]:
+    """Parse TodoWrite tool input into a list of TodoItem objects."""
+    todos_raw = tool_input.get("todos", [])
+    result: list[TodoItem] = []
+    for t in todos_raw:
+        content = t.get("content", "")
+        if not content:
+            continue
+        result.append(
+            TodoItem(
+                content=content,
+                status=t.get("status", "pending"),
+                active_form=t.get("activeForm", ""),
             )
         )
     return result

@@ -46,9 +46,12 @@ _ALLOWED_MIME_PREFIXES = (
     "application/json",
     "application/xml",
 )
+_IMAGE_MIME_PREFIXES = ("image/",)
 _MAX_ATTACHMENT_BYTES = 50_000  # 50 KB per file
-_MAX_TOTAL_BYTES = 100_000  # 100 KB across all attachments
+_MAX_IMAGE_BYTES = 5_000_000  # 5 MB per image
+_MAX_TOTAL_BYTES = 100_000  # 100 KB across all text attachments
 _MAX_ATTACHMENTS = 5
+_MAX_IMAGES = 4  # Claude supports up to 4 images per prompt
 
 
 class ClaudeChatCog(commands.Cog):
@@ -220,8 +223,8 @@ class ClaudeChatCog(commands.Cog):
         """Create a new thread and start a Claude Code session."""
         thread_name = message.content[:100] if message.content else "Claude Chat"
         thread = await message.create_thread(name=thread_name)
-        prompt = await self._build_prompt(message)
-        await self._run_claude(message, thread, prompt, session_id=None)
+        prompt, image_paths = await self._build_prompt_and_images(message)
+        await self._run_claude(message, thread, prompt, session_id=None, image_paths=image_paths)
 
     async def spawn_session(
         self,
@@ -403,7 +406,7 @@ class ClaudeChatCog(commands.Cog):
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
-        prompt = await self._build_prompt(message)
+        prompt, image_paths = await self._build_prompt_and_images(message)
 
         # Interrupt any active session in this thread before starting a new one.
         existing_runner = self._active_runners.get(thread.id)
@@ -417,22 +420,67 @@ class ClaudeChatCog(commands.Cog):
                 with contextlib.suppress(Exception):
                     await existing_task
 
-        await self._run_claude(message, thread, prompt, session_id=session_id)
+        await self._run_claude(
+            message, thread, prompt, session_id=session_id, image_paths=image_paths
+        )
 
     async def _build_prompt(self, message: discord.Message) -> str:
-        """Build the prompt string, appending eligible text attachments.
+        """Build the prompt string (text only). Use _build_prompt_and_images for full processing."""
+        prompt, _ = await self._build_prompt_and_images(message)
+        return prompt
 
-        Only plain-text MIME types are included (text/*, application/json,
-        application/xml).  Binary files and attachments exceeding the size
-        limits are silently skipped — never raise an error to the user.
+    async def _build_prompt_and_images(self, message: discord.Message) -> tuple[str, list[str]]:
+        """Build the prompt string and download image attachments to tempfiles.
+
+        Text attachments (text/*, application/json, application/xml) are appended
+        inline to the prompt.  Image attachments (image/*) are downloaded to
+        temporary files and returned as paths for the ``--image`` flag.
+
+        Both binary-file types that exceed size limits and unsupported types are
+        silently skipped — never raise an error to the user.
+
+        Returns:
+            (prompt_text, image_temp_paths) — callers must delete tempfiles.
         """
+        import tempfile
+
         prompt = message.content or ""
         if not message.attachments:
-            return prompt
+            return prompt, []
 
         total_bytes = 0
         sections: list[str] = []
+        image_paths: list[str] = []
+
         for attachment in message.attachments[:_MAX_ATTACHMENTS]:
+            content_type = attachment.content_type or ""
+
+            # ---- Image attachments → tempfile for --image flag ----
+            if content_type.startswith(_IMAGE_MIME_PREFIXES):
+                if len(image_paths) >= _MAX_IMAGES:
+                    logger.debug("Skipping image %s: max images reached", attachment.filename)
+                    continue
+                if attachment.size > _MAX_IMAGE_BYTES:
+                    logger.debug(
+                        "Skipping image %s: too large (%d bytes)",
+                        attachment.filename,
+                        attachment.size,
+                    )
+                    continue
+                try:
+                    data = await attachment.read()
+                    suffix = f"_{attachment.filename}"
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=suffix, prefix="ccdb_img_"
+                    ) as f:
+                        f.write(data)
+                        image_paths.append(f.name)
+                    logger.debug("Downloaded image %s → %s", attachment.filename, f.name)
+                except Exception:
+                    logger.debug("Failed to download image %s", attachment.filename, exc_info=True)
+                continue
+
+            # ---- Text attachments → inline in prompt ----
             if attachment.size > _MAX_ATTACHMENT_BYTES:
                 logger.debug(
                     "Skipping attachment %s: too large (%d bytes)",
@@ -440,7 +488,6 @@ class ClaudeChatCog(commands.Cog):
                     attachment.size,
                 )
                 continue
-            content_type = attachment.content_type or ""
             if not content_type.startswith(_ALLOWED_MIME_PREFIXES):
                 logger.debug(
                     "Skipping attachment %s: unsupported type %s",
@@ -460,7 +507,7 @@ class ClaudeChatCog(commands.Cog):
                 logger.debug("Failed to read attachment %s", attachment.filename, exc_info=True)
                 continue
 
-        return prompt + "".join(sections)
+        return prompt + "".join(sections), image_paths
 
     async def _run_claude(
         self,
@@ -468,6 +515,7 @@ class ClaudeChatCog(commands.Cog):
         thread: discord.Thread,
         prompt: str,
         session_id: str | None,
+        image_paths: list[str] | None = None,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
         if self._semaphore.locked():
@@ -527,6 +575,7 @@ class ClaudeChatCog(commands.Cog):
                         lounge_repo=self._lounge_repo,
                         stop_view=stop_view,
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
+                        image_paths=image_paths,
                     )
                 )
             finally:
