@@ -142,8 +142,8 @@ def check_claude_cli() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _print(msg: str = "") -> None:
-    print(msg, flush=True)
+def _print(msg: str = "", end: str = "\n") -> None:
+    print(msg, end=end, flush=True)
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -338,8 +338,8 @@ def cmd_setup(env_path: Path = Path(".env")) -> None:
 
 async def _run_start(env_path: Path) -> None:
     if not env_path.exists():
-        _print(f"❌  No .env file found at {env_path}.", file=sys.stderr)
-        _print("    Run 'ccdb setup' first to create it.", file=sys.stderr)
+        print(f"❌  No .env file found at {env_path}.", file=sys.stderr)
+        print("    Run 'ccdb setup' first to create it.", file=sys.stderr)
         sys.exit(1)
 
     # Import and run the existing main() from claude_discord.main
