@@ -14,6 +14,8 @@ COLOR_TOOL = 0xFEE75C  # Yellow
 COLOR_THINKING = 0x9B59B6  # Purple
 COLOR_ASK = 0x3498DB  # Blue — question-like
 
+AUTOCOMPACT_THRESHOLD = 83.5
+
 
 CATEGORY_ICON: dict[ToolCategory, str] = {
     ToolCategory.READ: "\U0001f4d6",  # 📖
@@ -68,6 +70,7 @@ def session_complete_embed(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     cache_read_tokens: int | None = None,
+    context_window: int | None = None,
 ) -> discord.Embed:
     """Create an embed for session completion."""
     parts: list[str] = []
@@ -88,13 +91,29 @@ def session_complete_embed(
             token_str += f" ({hit_pct}% cache)"
         parts.append(token_str)
 
+    if context_window and input_tokens is not None:
+        total_used = input_tokens + (cache_read_tokens or 0) + (output_tokens or 0)
+        usage_pct = total_used / context_window * 100
+        parts.append(f"\U0001f4ca {usage_pct:.0f}% context")
+
     description = " | ".join(parts) if parts else None
 
-    return discord.Embed(
+    embed = discord.Embed(
         title="\u2705 Done",
         description=description,
         color=COLOR_SUCCESS,
     )
+
+    if context_window and input_tokens is not None:
+        total_used = input_tokens + (cache_read_tokens or 0) + (output_tokens or 0)
+        usage_pct = total_used / context_window * 100
+        if usage_pct >= AUTOCOMPACT_THRESHOLD:
+            embed.set_footer(
+                text=f"\u26a0\ufe0f Context {usage_pct:.0f}% full"
+                " \u2014 auto-compact may run on next turn"
+            )
+
+    return embed
 
 
 def tool_result_embed(tool_title: str, result_content: str) -> discord.Embed:

@@ -248,6 +248,7 @@ class EventProcessor:
                     event.input_tokens,
                     event.output_tokens,
                     event.cache_read_tokens,
+                    event.context_window,
                 )
             )
             if self._config.status:

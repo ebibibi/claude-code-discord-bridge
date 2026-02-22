@@ -318,6 +318,62 @@ class TestCompactBoundary:
         assert event.compact_trigger is None
 
 
+class TestContextWindow:
+    """Tests for context_window extraction from RESULT events."""
+
+    def test_context_window_from_model_usage(self) -> None:
+        line = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "result": "done",
+                "session_id": "abc",
+                "usage": {"input_tokens": 50000, "output_tokens": 1000},
+                "modelUsage": {
+                    "claude-opus-4-6": {
+                        "inputTokens": 50000,
+                        "outputTokens": 1000,
+                        "contextWindow": 200000,
+                    }
+                },
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.context_window == 200000
+
+    def test_context_window_missing(self) -> None:
+        line = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "result": "done",
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.context_window is None
+
+    def test_context_window_multiple_models(self) -> None:
+        """First model with contextWindow wins."""
+        line = json.dumps(
+            {
+                "type": "result",
+                "subtype": "success",
+                "result": "done",
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+                "modelUsage": {
+                    "claude-sonnet-4-6": {"contextWindow": 200000},
+                    "claude-haiku-4-5": {"contextWindow": 200000},
+                },
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.context_window == 200000
+
+
 class TestProgressEvent:
     """Tests for progress event type."""
 

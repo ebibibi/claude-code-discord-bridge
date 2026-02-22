@@ -76,6 +76,53 @@ class TestSessionCompleteEmbed:
         assert "%" not in embed.description
 
 
+class TestSessionCompleteContextUsage:
+    """Tests for context usage display in session complete embed."""
+
+    def test_context_usage_shown(self) -> None:
+        embed = session_complete_embed(
+            input_tokens=100000,
+            output_tokens=5000,
+            context_window=200000,
+        )
+        assert embed.description is not None
+        assert "52% context" in embed.description  # (100000 + 5000) / 200000 ≈ 52%
+
+    def test_context_usage_with_cache(self) -> None:
+        embed = session_complete_embed(
+            input_tokens=50000,
+            output_tokens=5000,
+            cache_read_tokens=100000,
+            context_window=200000,
+        )
+        assert embed.description is not None
+        assert "78% context" in embed.description  # (50000 + 100000 + 5000) / 200000 = 77.5% → 78%
+
+    def test_autocompact_warning_when_above_threshold(self) -> None:
+        embed = session_complete_embed(
+            input_tokens=170000,
+            output_tokens=5000,
+            context_window=200000,
+        )
+        assert embed.footer is not None
+        assert "auto-compact" in embed.footer.text
+
+    def test_no_warning_below_threshold(self) -> None:
+        embed = session_complete_embed(
+            input_tokens=50000,
+            output_tokens=5000,
+            context_window=200000,
+        )
+        assert embed.footer is None or embed.footer.text is None
+
+    def test_no_context_info_without_context_window(self) -> None:
+        embed = session_complete_embed(
+            input_tokens=50000,
+            output_tokens=5000,
+        )
+        assert "% context" not in (embed.description or "")
+
+
 class TestToolUseEmbed:
     """Tests for tool_use_embed elapsed time display."""
 
