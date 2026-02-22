@@ -71,6 +71,7 @@ def session_complete_embed(
     output_tokens: int | None = None,
     cache_read_tokens: int | None = None,
     context_window: int | None = None,
+    cache_creation_tokens: int | None = None,
 ) -> discord.Embed:
     """Create an embed for session completion."""
     parts: list[str] = []
@@ -92,9 +93,19 @@ def session_complete_embed(
         parts.append(token_str)
 
     if context_window and input_tokens is not None:
-        total_used = input_tokens + (cache_read_tokens or 0) + (output_tokens or 0)
-        usage_pct = total_used / context_window * 100
-        parts.append(f"\U0001f4ca {usage_pct:.0f}% context")
+        # Context window usage = prompt tokens only (input + cache reads/creation).
+        # Output tokens are NOT included — they are not yet "in" the context window;
+        # they will be added as cached input on the next turn.
+        # This matches Claude Code's own lrH() calculation in the CLI source.
+        context_used = input_tokens + (cache_read_tokens or 0) + (cache_creation_tokens or 0)
+        usage_pct = min(100.0, context_used / context_window * 100)
+        remaining_pct = max(0.0, AUTOCOMPACT_THRESHOLD - usage_pct)
+        ctx_str = f"\U0001f4ca {usage_pct:.0f}% ctx"
+        if usage_pct < AUTOCOMPACT_THRESHOLD:
+            ctx_str += f" ({remaining_pct:.0f}% until compact)"
+        else:
+            ctx_str += " \u26a0\ufe0f"
+        parts.append(ctx_str)
 
     description = " | ".join(parts) if parts else None
 
@@ -105,8 +116,8 @@ def session_complete_embed(
     )
 
     if context_window and input_tokens is not None:
-        total_used = input_tokens + (cache_read_tokens or 0) + (output_tokens or 0)
-        usage_pct = total_used / context_window * 100
+        context_used = input_tokens + (cache_read_tokens or 0) + (cache_creation_tokens or 0)
+        usage_pct = min(100.0, context_used / context_window * 100)
         if usage_pct >= AUTOCOMPACT_THRESHOLD:
             embed.set_footer(
                 text=f"\u26a0\ufe0f Context {usage_pct:.0f}% full"

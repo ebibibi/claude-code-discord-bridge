@@ -143,7 +143,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Interactive questions** — `AskUserQuestion` renders as Discord Buttons or Select Menu; session resumes with your answer; buttons survive bot restarts
 - **Thread dashboard** — Live pinned embed showing which threads are active vs. waiting; owner @-mentioned when input is needed
 - **Token usage** — Cache hit rate and token counts shown in session-complete embed
-- **Context usage** — Context window percentage shown in session-complete embed; ⚠️ auto-compact warning at 83.5% full
+- **Context usage** — Context window percentage (input + cache tokens, excluding output) and remaining capacity until auto-compact shown in session-complete embed; ⚠️ warning when above 83.5%
 - **Compact detection** — Notifies in-thread when context compaction occurs (trigger type + token count before compact)
 - **Session interrupt** — Sending a new message to an active thread sends SIGINT to the running session and starts fresh with the new instruction; no manual `/stop` needed
 - **Hard stall notification** — Thread message after 30 s of no activity (extended thinking or context compression); resets automatically when Claude resumes
@@ -472,7 +472,7 @@ await bot.add_cog(AutoUpgradeCog(bot, config))
 
 #### Manual Trigger via `/upgrade`
 
-When `slash_command_enabled=True`, any authorised user can run `/upgrade` directly in Discord to trigger the same upgrade pipeline — no webhook required. The command respects `upgrade_approval` and `restart_approval` gates, creates a progress thread, and gracefully handles concurrent runs (replies ephemerally if an upgrade is already in progress).
+When `slash_command_enabled=True`, any authorised user can run `/upgrade` directly in Discord to trigger the same upgrade pipeline — no webhook required. The command works from both text channels and threads (running it inside a thread creates the upgrade thread in the parent channel). It respects `upgrade_approval` and `restart_approval` gates, creates a progress thread, and gracefully handles concurrent runs (replies ephemerally if an upgrade is already in progress).
 
 Before restarting, `AutoUpgradeCog`:
 
@@ -604,7 +604,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-682+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, and compact detection.
+685+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, and compact detection.
 
 ---
 

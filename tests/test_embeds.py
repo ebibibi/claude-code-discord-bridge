@@ -80,15 +80,28 @@ class TestSessionCompleteContextUsage:
     """Tests for context usage display in session complete embed."""
 
     def test_context_usage_shown(self) -> None:
+        # Output tokens are NOT counted — only input tokens determine context usage.
         embed = session_complete_embed(
             input_tokens=100000,
             output_tokens=5000,
             context_window=200000,
         )
         assert embed.description is not None
-        assert "52% context" in embed.description  # (100000 + 5000) / 200000 ≈ 52%
+        # 100000 / 200000 = 50% (output_tokens excluded)
+        assert "50% ctx" in embed.description
+
+    def test_context_usage_shows_remaining_until_compact(self) -> None:
+        embed = session_complete_embed(
+            input_tokens=100000,
+            output_tokens=5000,
+            context_window=200000,
+        )
+        assert embed.description is not None
+        # 50% used → AUTOCOMPACT_THRESHOLD(83.5) - 50 = 33.5 → 34% until compact
+        assert "until compact" in embed.description
 
     def test_context_usage_with_cache(self) -> None:
+        # cache_read_tokens counts toward context; output_tokens do not.
         embed = session_complete_embed(
             input_tokens=50000,
             output_tokens=5000,
@@ -96,9 +109,51 @@ class TestSessionCompleteContextUsage:
             context_window=200000,
         )
         assert embed.description is not None
-        assert "78% context" in embed.description  # (50000 + 100000 + 5000) / 200000 = 77.5% → 78%
+        # (50000 + 100000) / 200000 = 75% (output_tokens excluded)
+        assert "75% ctx" in embed.description
+
+    def test_context_usage_includes_cache_creation(self) -> None:
+        # cache_creation_tokens also count toward context usage.
+        embed = session_complete_embed(
+            input_tokens=50000,
+            output_tokens=5000,
+            cache_creation_tokens=50000,
+            context_window=200000,
+        )
+        assert embed.description is not None
+        # (50000 + 50000) / 200000 = 50%
+        assert "50% ctx" in embed.description
+
+    def test_output_tokens_do_not_affect_context_pct(self) -> None:
+        """Output tokens must be excluded from context window calculation."""
+        embed_small = session_complete_embed(
+            input_tokens=50000,
+            output_tokens=100,
+            context_window=200000,
+        )
+        embed_large = session_complete_embed(
+            input_tokens=50000,
+            output_tokens=100000,
+            context_window=200000,
+        )
+        # Both should show the same context % regardless of output size
+        assert embed_small.description is not None
+        assert embed_large.description is not None
+        assert "25% ctx" in embed_small.description
+        assert "25% ctx" in embed_large.description
+
+    def test_context_usage_capped_at_100_percent(self) -> None:
+        """Context % must never exceed 100% even with very large token counts."""
+        embed = session_complete_embed(
+            input_tokens=500000,
+            output_tokens=0,
+            context_window=200000,
+        )
+        assert embed.description is not None
+        assert "100% ctx" in embed.description
 
     def test_autocompact_warning_when_above_threshold(self) -> None:
+        # 170000 / 200000 = 85% > 83.5% threshold → footer warning
         embed = session_complete_embed(
             input_tokens=170000,
             output_tokens=5000,
@@ -106,6 +161,17 @@ class TestSessionCompleteContextUsage:
         )
         assert embed.footer is not None
         assert "auto-compact" in embed.footer.text
+
+    def test_above_threshold_shows_warning_icon_in_description(self) -> None:
+        embed = session_complete_embed(
+            input_tokens=170000,
+            output_tokens=5000,
+            context_window=200000,
+        )
+        assert embed.description is not None
+        # Should show ⚠️ in the description line instead of "until compact"
+        assert "⚠️" in embed.description
+        assert "until compact" not in embed.description
 
     def test_no_warning_below_threshold(self) -> None:
         embed = session_complete_embed(
@@ -120,7 +186,7 @@ class TestSessionCompleteContextUsage:
             input_tokens=50000,
             output_tokens=5000,
         )
-        assert "% context" not in (embed.description or "")
+        assert "% ctx" not in (embed.description or "")
 
 
 class TestToolUseEmbed:

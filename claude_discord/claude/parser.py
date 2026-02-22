@@ -162,6 +162,7 @@ def _parse_result(data: dict[str, Any], event: StreamEvent) -> None:
         event.input_tokens = usage.get("input_tokens")
         event.output_tokens = usage.get("output_tokens")
         event.cache_read_tokens = usage.get("cache_read_input_tokens")
+        event.cache_creation_tokens = usage.get("cache_creation_input_tokens")
 
     # Extract context window size from modelUsage (any model key).
     model_usage = data.get("modelUsage", {})
