@@ -63,6 +63,20 @@ jobs:
                 else
                   echo "Skipping docs-sync: docs-sync PR already open"
                 fi
+
+                # Trigger auto patch version bump (skip docs-sync PRs).
+                # repository_dispatch fires even when triggered by GITHUB_TOKEN,
+                # unlike push/pull_request events which are suppressed.
+                # jq --arg safely escapes PR_TITLE (prevents JSON injection).
+                echo "Dispatching pr-merged event for version bump..."
+                DISPATCH_PAYLOAD=$(jq -c -n \
+                  --arg event_type "pr-merged" \
+                  --arg pr_number "$PR_NUMBER" \
+                  --arg pr_title "$PR_TITLE" \
+                  '{event_type: $event_type, client_payload: {pr_number: $pr_number, pr_title: $pr_title}}')
+                echo "$DISPATCH_PAYLOAD" | gh api "repos/$GITHUB_REPOSITORY/dispatches" \
+                  --method POST \
+                  --input -
               else
                 echo "Skipping docs-sync: this is a docs-sync PR ($HEAD_REF)"
               fi

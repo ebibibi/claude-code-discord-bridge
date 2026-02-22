@@ -1,0 +1,97 @@
+name: Auto Patch Version Bump
+
+# Triggered by auto-approve.yml after a non-docs-sync PR is merged.
+# repository_dispatch works even when auto-approve.yml uses GITHUB_TOKEN
+# to squash-merge (push/pull_request events from GITHUB_TOKEN are suppressed
+# by GitHub, but repository_dispatch is explicitly sent so it always fires).
+on:
+  repository_dispatch:
+    types: [pr-merged]
+
+jobs:
+  version-bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Read current version from pyproject.toml
+        id: read
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILE_INFO=$(gh api "repos/$GITHUB_REPOSITORY/contents/pyproject.toml")
+          # Store SHA for the PUT request (required by GitHub Contents API)
+          FILE_SHA=$(echo "$FILE_INFO" | jq -r '.sha')
+          CONTENT=$(echo "$FILE_INFO" | jq -r '.content' | base64 -d)
+
+          CURRENT=$(echo "$CONTENT" | grep '^version = ' | sed 's/version = "\(.*\)"/\1/')
+          MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+          MINOR=$(echo "$CURRENT" | cut -d. -f2)
+          PATCH=$(echo "$CURRENT" | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+
+          echo "Bumping $CURRENT -> $NEW_VERSION"
+          echo "current=$CURRENT"          >> "$GITHUB_OUTPUT"
+          echo "new_version=$NEW_VERSION"  >> "$GITHUB_OUTPUT"
+          echo "new_tag=v$NEW_VERSION"     >> "$GITHUB_OUTPUT"
+          echo "file_sha=$FILE_SHA"        >> "$GITHUB_OUTPUT"
+
+          # Pass file content via temp file to avoid output size limits
+          printf '%s' "$CONTENT" > /tmp/pyproject_original.toml
+
+      - name: Commit bumped version to main
+        id: commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ steps.read.outputs.current }}
+          NEW_VERSION: ${{ steps.read.outputs.new_version }}
+          FILE_SHA: ${{ steps.read.outputs.file_sha }}
+        run: |
+          NEW_CONTENT=$(sed "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" /tmp/pyproject_original.toml)
+          # base64 -w 0 produces no line-wrapping (required by GitHub API)
+          ENCODED=$(printf '%s' "$NEW_CONTENT" | base64 -w 0)
+
+          # [skip ci] prevents CI from re-running on this trivial version bump commit
+          # jq --arg safely escapes all values (no injection risk)
+          COMMIT_INFO=$(jq -c -n \
+            --arg message "chore: bump version to $NEW_VERSION [skip ci]" \
+            --arg content "$ENCODED" \
+            --arg sha "$FILE_SHA" \
+            '{message: $message, content: $content, sha: $sha}')
+
+          RESULT=$(echo "$COMMIT_INFO" | gh api "repos/$GITHUB_REPOSITORY/contents/pyproject.toml" \
+            --method PUT \
+            --input -)
+
+          NEW_COMMIT_SHA=$(echo "$RESULT" | jq -r '.commit.sha')
+          echo "commit_sha=$NEW_COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "Committed version bump: $NEW_COMMIT_SHA"
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_TAG: ${{ steps.read.outputs.new_tag }}
+          NEW_VERSION: ${{ steps.read.outputs.new_version }}
+          COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
+        run: |
+          # Create lightweight tag pointing to the version bump commit
+          # jq --arg safely escapes all values
+          jq -c -n \
+            --arg ref "refs/tags/$NEW_TAG" \
+            --arg sha "$COMMIT_SHA" \
+            '{ref: $ref, sha: $sha}' \
+          | gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            --method POST \
+            --input -
+
+          echo "Created tag $NEW_TAG -> $COMMIT_SHA"
+
+          # Create GitHub Release with auto-generated notes (lists merged PRs since last tag)
+          gh release create "$NEW_TAG" \
+            --title "$NEW_TAG" \
+            --generate-notes \
+            --latest
+
+          echo "Released $NEW_TAG"
