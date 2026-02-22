@@ -26,6 +26,7 @@ from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..database.resume_repo import PendingResumeRepository
+from ..database.settings_repo import SettingsRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
@@ -65,6 +66,7 @@ class ClaudeChatCog(commands.Cog):
         ask_repo: PendingAskRepository | None = None,
         lounge_repo: LoungeRepository | None = None,
         resume_repo: PendingResumeRepository | None = None,
+        settings_repo: SettingsRepository | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -84,6 +86,8 @@ class ClaudeChatCog(commands.Cog):
         self._lounge_repo = lounge_repo or getattr(bot, "lounge_repo", None)
         # Pending resume repo (optional — startup resume disabled when None)
         self._resume_repo = resume_repo or getattr(bot, "resume_repo", None)
+        # Settings repo for dynamic model lookup (optional — falls back to runner.model)
+        self._settings_repo = settings_repo or getattr(bot, "settings_repo", None)
 
     @property
     def active_session_count(self) -> int:
@@ -100,6 +104,19 @@ class ClaudeChatCog(commands.Cog):
         if self._dashboard is None:
             self._dashboard = getattr(self.bot, "thread_dashboard", None)
         return self._dashboard
+
+    async def _get_current_model(self) -> str | None:
+        """Return the model override from settings_repo, or None to use runner default.
+
+        When /model set has been used to change the global model, this returns
+        the stored value. Returns None if no override is set or settings_repo
+        is unavailable.
+        """
+        if self._settings_repo is None:
+            return None
+        from .session_manage import SETTING_CLAUDE_MODEL
+
+        return await self._settings_repo.get(SETTING_CLAUDE_MODEL)
 
     def _get_coordination(self) -> CoordinationService:
         """Return the coordination service (zero-config: auto-creates from env if needed).
@@ -458,7 +475,8 @@ class ClaudeChatCog(commands.Cog):
             status = StatusManager(user_message, on_hard_stall=_notify_stall)
             await status.set_thinking()
 
-            runner = self.runner.clone(thread_id=thread.id)
+            model_override = await self._get_current_model()
+            runner = self.runner.clone(thread_id=thread.id, model=model_override)
             self._active_runners[thread.id] = runner
 
             stop_view = StopView(runner)

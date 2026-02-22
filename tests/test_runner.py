@@ -338,3 +338,16 @@ class TestSignalKillSuppression:
         error_events = [e for e in events if e.error]
         assert len(error_events) == 1
         assert "1" in error_events[0].error
+
+    def test_clone_with_model_override(self) -> None:
+        """clone() with model= overrides the runner's model for that clone."""
+        runner = ClaudeRunner(model="sonnet")
+        cloned = runner.clone(model="opus")
+        assert cloned.model == "opus"
+        assert runner.model == "sonnet"  # original unchanged
+
+    def test_clone_without_model_override_preserves_model(self) -> None:
+        """clone() without model= keeps the original model."""
+        runner = ClaudeRunner(model="haiku")
+        cloned = runner.clone()
+        assert cloned.model == "haiku"
