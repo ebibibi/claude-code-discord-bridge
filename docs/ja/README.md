@@ -410,7 +410,7 @@ await bot.add_cog(AutoUpgradeCog(bot, config))
 
 #### `/upgrade` スラッシュコマンドによる手動トリガー
 
-`slash_command_enabled=True` の場合、認可されたユーザーが Discord から `/upgrade` を実行することで、Webhook なしで同じアップグレードパイプラインをトリガーできます。`upgrade_approval` および `restart_approval` のゲートが適用され、進捗スレッドが作成されます。すでにアップグレードが実行中の場合はエフェメラルで通知します。
+`slash_command_enabled=True` の場合、認可されたユーザーが Discord から `/upgrade` を実行することで、Webhook なしで同じアップグレードパイプラインをトリガーできます。テキストチャンネルとスレッドの両方から実行でき（スレッド内から実行した場合は親チャンネルにアップグレードスレッドを作成します）。`upgrade_approval` および `restart_approval` のゲートが適用され、進捗スレッドが作成されます。すでにアップグレードが実行中の場合はエフェメラルで通知します。
 
 再起動前に `AutoUpgradeCog` は以下の手順を実行します:
 
@@ -542,7 +542,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-682 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード（`/upgrade` スラッシュコマンドおよび承認ボタン含む）、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジューム、モデル切り替え、コンパクト検出をカバーしています。
+685 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード（`/upgrade` スラッシュコマンド、スレッド内実行、承認ボタン含む）、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジューム、モデル切り替え、コンパクト検出をカバーしています。
 
 ---
 
