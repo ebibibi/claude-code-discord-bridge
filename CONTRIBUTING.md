@@ -38,7 +38,15 @@ main (always releasable)
 git clone https://github.com/ebibibi/claude-code-discord-bridge.git
 cd claude-code-discord-bridge
 uv sync --dev
+make setup   # register git hooks (one-time per clone)
 ```
+
+> **`make setup` is required** after every fresh clone. It configures git to use the
+> pre-commit hook in `.githooks/`, which auto-formats and lints staged Python files.
+> Without it, the hook never runs and bad code can slip through locally (CI will still
+> catch it, but you'll get a surprise red build).
+>
+> Run `make check-setup` at any time to verify your environment is ready.
 
 ## Running Tests
 
