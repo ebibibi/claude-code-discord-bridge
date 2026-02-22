@@ -18,6 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from ..protocols import DrainAware
@@ -64,6 +65,10 @@ class UpgradeConfig:
     """If True, wait for a user to react with ✅ before running any upgrade
     commands. Useful when you want manual control over when updates are applied.
     When False (default), upgrade steps run automatically on webhook trigger."""
+    slash_command_enabled: bool = False
+    """If True, register a /upgrade slash command that manually triggers the upgrade
+    pipeline. Defaults to False so existing bots are unaffected until explicitly opted in.
+    When enabled, the command respects upgrade_approval and restart_approval flags."""
 
 
 class AutoUpgradeCog(commands.Cog):
@@ -134,15 +139,66 @@ class AutoUpgradeCog(commands.Cog):
         async with self._lock:
             await self._run_upgrade(message)
 
-    async def _run_upgrade(self, trigger_message: discord.Message) -> None:
-        """Execute the upgrade pipeline."""
-        thread = await trigger_message.create_thread(name=self.config.trigger_prefix[:100])
+    @app_commands.command(name="upgrade", description="Manually trigger a package upgrade")
+    async def upgrade_command(self, interaction: discord.Interaction) -> None:
+        """Slash command entry point for manual upgrades.
 
+        Only active when config.slash_command_enabled=True. Requires no webhook —
+        any authorised user can trigger the upgrade from Discord directly.
+        The same upgrade_approval / restart_approval safety gates apply.
+        """
+        if not self.config.slash_command_enabled:
+            await interaction.response.send_message(
+                "⚠️ Slash command upgrades are not enabled for this bot.",
+                ephemeral=True,
+            )
+            return
+
+        if self._lock.locked():
+            await interaction.response.send_message(
+                "⏳ Upgrade is already running. Please wait.",
+                ephemeral=True,
+            )
+            return
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "⚠️ This command can only be used in a text channel.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+
+        async with self._lock:
+            thread = await channel.create_thread(
+                name=self.config.trigger_prefix[:100],
+            )
+            await self._run_pipeline(thread, status_target=None)
+
+    async def _run_upgrade(self, trigger_message: discord.Message) -> None:
+        """Execute the upgrade pipeline triggered by a webhook message."""
+        thread = await trigger_message.create_thread(name=self.config.trigger_prefix[:100])
+        await self._run_pipeline(thread, status_target=trigger_message)
+
+    async def _run_pipeline(
+        self,
+        thread: discord.Thread,
+        status_target: discord.Message | None,
+    ) -> None:
+        """Core upgrade pipeline: approve → upgrade → sync → restart.
+
+        Args:
+            thread: Discord thread to post progress updates into.
+            status_target: Message to add ✅/❌ reaction to on completion/failure.
+                           None when triggered via slash command (no message to react to).
+        """
         try:
             # Step 0: Optional upgrade approval before any subprocess runs
             if self.config.upgrade_approval:
                 await self._wait_for_approval(
-                    trigger_message,
+                    status_target,
                     thread,
                     prompt=(
                         f"📦 New release of **{self.config.package_name}** detected. "
@@ -159,36 +215,41 @@ class AutoUpgradeCog(commands.Cog):
             ]
             ok = await self._run_step(thread, "upgrade", upgrade_cmd)
             if not ok:
-                await trigger_message.add_reaction("❌")
+                if status_target is not None:
+                    await status_target.add_reaction("❌")
                 return
 
             # Step 2: Sync dependencies
             sync_cmd = self.config.sync_command or ["uv", "sync"]
             ok = await self._run_step(thread, "sync", sync_cmd)
             if not ok:
-                await trigger_message.add_reaction("❌")
+                if status_target is not None:
+                    await status_target.add_reaction("❌")
                 return
 
             # Step 3: Optional restart
             if self.config.restart_command:
                 if self.config.restart_approval:
-                    await self._wait_for_approval(trigger_message, thread)
+                    await self._wait_for_approval(status_target, thread)
                 # Snapshot active sessions BEFORE drain so we can resume them after restart.
                 active_thread_ids = self._collect_active_thread_ids()
                 await self._drain(thread)
                 await self._mark_sessions_for_resume(active_thread_ids, thread)
-                await self._restart(trigger_message, thread)
+                await self._restart(status_target, thread)
             else:
-                await trigger_message.add_reaction("✅")
+                if status_target is not None:
+                    await status_target.add_reaction("✅")
                 await thread.send("✅ Upgrade complete (no restart configured).")
 
         except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
             await thread.send("❌ Step timed out.")
-            await trigger_message.add_reaction("❌")
+            if status_target is not None:
+                await status_target.add_reaction("❌")
         except Exception:
             logger.exception("Auto-upgrade error")
             await thread.send("❌ Upgrade failed with an unexpected error.")
-            await trigger_message.add_reaction("❌")
+            if status_target is not None:
+                await status_target.add_reaction("❌")
 
     def _collect_active_thread_ids(self) -> frozenset[int]:
         """Return the IDs of threads with currently-running Claude sessions.
@@ -295,7 +356,7 @@ class AutoUpgradeCog(commands.Cog):
 
     async def _wait_for_approval(
         self,
-        trigger_message: discord.Message,
+        status_target: discord.Message | None,
         thread: discord.Thread,
         *,
         prompt: str | None = None,
@@ -307,7 +368,8 @@ class AutoUpgradeCog(commands.Cog):
         every ``_drain_timeout`` seconds while waiting.
 
         Args:
-            trigger_message: The original webhook/trigger message.
+            status_target: Message to watch for reactions. When None (slash command
+                           flow), approval is collected via the thread message itself.
             thread: The thread to post status messages in.
             prompt: Custom prompt text. Defaults to a restart-approval message.
         """
@@ -336,7 +398,7 @@ class AutoUpgradeCog(commands.Cog):
 
     async def _restart(
         self,
-        trigger_message: discord.Message,
+        status_target: discord.Message | None,
         thread: discord.Thread,
     ) -> None:
         """Execute the restart command (fire-and-forget).
@@ -345,7 +407,8 @@ class AutoUpgradeCog(commands.Cog):
         UpgradeConfig, not user input. Safe by construction.
         """
         await thread.send("🔄 Restarting...")
-        await trigger_message.add_reaction("✅")
+        if status_target is not None:
+            await status_target.add_reaction("✅")
         await asyncio.sleep(1)
         assert self.config.restart_command is not None  # Caller checks this
         await asyncio.create_subprocess_exec(
