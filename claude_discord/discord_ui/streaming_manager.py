@@ -92,5 +92,7 @@ class StreamingMessageManager:
             else:
                 await self._current_message.edit(content=display_text)
             self._last_edit_time = time.monotonic()
-        except discord.HTTPException:
-            logger.debug("Failed to edit streaming message", exc_info=True)
+        except Exception:
+            # Catch all exceptions including aiohttp.ClientError (e.g. ServerDisconnectedError
+            # on bot shutdown) which is not a subclass of discord.HTTPException.
+            logger.debug("Failed to send/edit streaming message", exc_info=True)

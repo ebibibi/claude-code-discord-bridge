@@ -15,6 +15,7 @@ Legacy shim (kept for backward compatibility):
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 
@@ -108,9 +109,13 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
             await processor.process(event)
     except Exception:
         logger.exception("Error running Claude CLI for thread %d", config.thread.id)
-        await config.thread.send(embed=error_embed("An unexpected error occurred."))
+        # Wrap Discord sends in suppress — the connection may already be closed
+        # (e.g. ServerDisconnectedError on bot shutdown), and sending would fail too.
+        with contextlib.suppress(Exception):
+            await config.thread.send(embed=error_embed("An unexpected error occurred."))
         if config.status:
-            await config.status.set_error()
+            with contextlib.suppress(Exception):
+                await config.status.set_error()
         return processor.session_id
     finally:
         await processor.finalize()
