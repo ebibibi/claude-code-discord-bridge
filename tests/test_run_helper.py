@@ -87,6 +87,20 @@ class TestStreamingMessageManager:
         # Buffer should still be "first" — append after finalize is ignored
         assert mgr._buffer == "first"
 
+    @pytest.mark.asyncio
+    async def test_flush_survives_connection_error(self, thread: MagicMock) -> None:
+        """Non-discord.HTTPException errors (e.g. ServerDisconnectedError) must not propagate.
+
+        Previously only discord.HTTPException was caught, so aiohttp.ClientError
+        (which ServerDisconnectedError inherits from) would propagate and crash
+        the entire session on bot shutdown.
+        """
+        thread.send.side_effect = Exception("Server disconnected")
+        mgr = StreamingMessageManager(thread)
+        mgr._buffer = "hello"
+        # Should not raise — connection errors are suppressed.
+        await mgr.finalize()
+
 
 class TestPartialMessageStreaming:
     """Tests for partial message streaming behavior introduced with --include-partial-messages.
@@ -463,6 +477,30 @@ class TestRunClaudeInThread:
 
         embed_calls = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
         assert any("Error" in (c.kwargs["embed"].title or "") for c in embed_calls)
+
+    @pytest.mark.asyncio
+    async def test_error_embed_send_failure_does_not_raise(
+        self, thread: MagicMock, runner: MagicMock, repo: MagicMock
+    ) -> None:
+        """If thread.send fails when sending the error embed, it should not crash.
+
+        This happens during bot shutdown: the Discord connection closes, then
+        the session fails, and the error-embed send also fails (ServerDisconnectedError).
+        The exception handler must suppress the secondary failure.
+        """
+
+        async def _failing_run(*args, **kwargs):
+            raise Exception("Server disconnected")
+            yield  # make it an async generator
+
+        runner.run = _failing_run
+
+        # Also make the error-embed send fail to simulate closed connection
+        thread.send.side_effect = Exception("Server disconnected")
+
+        # Should not raise even though both the session and the error-embed send fail
+        result = await run_claude_in_thread(thread, runner, repo, "test", None)
+        assert result is None  # returns None because session_id was never set
 
     @pytest.mark.asyncio
     async def test_duplicate_final_text_not_reposted(

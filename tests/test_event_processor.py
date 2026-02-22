@@ -395,6 +395,55 @@ class TestOnComplete:
         assert len(answer_sends) == 1  # Sent exactly once, not twice
 
 
+class TestConnectionErrorResilience:
+    """Discord/aiohttp connection errors must not crash the session.
+
+    ServerDisconnectedError (aiohttp.ClientError subclass) is raised when
+    the Discord HTTP session closes — e.g. during bot shutdown. It is NOT a
+    subclass of discord.HTTPException, so it was previously uncaught and
+    would propagate up to kill the entire session.
+    """
+
+    @pytest.mark.asyncio
+    async def test_tool_use_send_failure_does_not_raise(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """If thread.send fails (connection closed), _handle_tool_use returns silently."""
+        thread.send.side_effect = Exception("Server disconnected")
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        # Should not raise — failure is logged and the handler returns early.
+        await p.process(_make_tool_event("t1"))
+
+        # Tool was not tracked because send failed
+        assert "t1" not in p._state.active_tools
+        assert "t1" not in p._state.active_timers
+
+    @pytest.mark.asyncio
+    async def test_tool_result_edit_failure_does_not_raise(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """If tool embed edit raises a connection error, _on_tool_result suppresses it."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        fake_embed = MagicMock(spec=discord.Embed)
+        fake_embed.title = "Running: echo hi"
+        fake_msg = MagicMock(spec=discord.Message)
+        fake_msg.embeds = [fake_embed]
+        fake_msg.edit = AsyncMock(side_effect=Exception("Server disconnected"))
+        p._state.active_tools["t1"] = fake_msg
+
+        result_event = StreamEvent(
+            message_type=MessageType.USER,
+            tool_result_id="t1",
+            tool_result_content="output",
+        )
+        # Should not raise — failure is suppressed.
+        await p.process(result_event)
+
+
 class TestFinalize:
     """finalize() cleanup."""
 

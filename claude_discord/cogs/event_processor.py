@@ -13,8 +13,6 @@ from __future__ import annotations
 import contextlib
 import logging
 
-import discord
-
 from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent
 from ..discord_ui.chunker import chunk_message
 from ..discord_ui.embeds import (
@@ -193,7 +191,7 @@ class EventProcessor:
         tool_msg = self._state.active_tools.get(event.tool_result_id)
         if tool_msg and event.tool_result_content:
             truncated = _truncate_result(event.tool_result_content)
-            with contextlib.suppress(discord.HTTPException):
+            with contextlib.suppress(Exception):
                 await tool_msg.edit(
                     embed=tool_result_embed(
                         tool_msg.embeds[0].title or "",
@@ -289,7 +287,11 @@ class EventProcessor:
             await self._config.status.set_tool(event.tool_use.category)
 
         embed = tool_use_embed(event.tool_use, in_progress=True)
-        msg = await self._config.thread.send(embed=embed)
+        try:
+            msg = await self._config.thread.send(embed=embed)
+        except Exception:
+            logger.debug("Failed to send tool embed", exc_info=True)
+            return
         self._state.active_tools[event.tool_use.tool_id] = msg
 
         timer = LiveToolTimer(msg, event.tool_use)
