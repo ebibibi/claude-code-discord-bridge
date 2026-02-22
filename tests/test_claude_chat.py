@@ -1,4 +1,4 @@
-"""Tests for ClaudeChatCog: /stop command and attachment handling."""
+"""Tests for ClaudeChatCog: /stop command, attachment handling, and interrupt-on-new-message."""
 
 from __future__ import annotations
 
@@ -348,6 +348,141 @@ class TestRegistryAutoDiscovery:
         bot = MagicMock(spec=[])  # no attributes
         cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
         assert cog._registry is None
+
+
+class TestInterruptOnNewMessage:
+    """New message in active thread should interrupt the running session."""
+
+    def _make_thread_message(self, thread_id: int = 42) -> MagicMock:
+        """Return a discord.Message inside a Thread."""
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = thread_id
+        thread.parent_id = 999
+        thread.send = AsyncMock()
+        msg = MagicMock(spec=discord.Message)
+        msg.channel = thread
+        msg.content = "new instruction"
+        msg.attachments = []
+        msg.author = MagicMock()
+        msg.author.bot = False
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_interrupt_called_when_runner_active(self) -> None:
+        """When a runner is active for a thread, _handle_thread_reply must interrupt it."""
+        cog = _make_cog()
+        thread_id = 42
+        message = self._make_thread_message(thread_id)
+
+        # Plant an active runner in the cog
+        existing_runner = MagicMock()
+        existing_runner.interrupt = AsyncMock()
+        cog._active_runners[thread_id] = existing_runner
+
+        # Stub _run_claude so we don't actually spawn Claude
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_thread_reply(message)
+
+        existing_runner.interrupt.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_message_sent_to_thread(self) -> None:
+        """The thread should receive a notification when the session is interrupted."""
+        cog = _make_cog()
+        thread_id = 42
+        message = self._make_thread_message(thread_id)
+        thread = message.channel
+
+        existing_runner = MagicMock()
+        existing_runner.interrupt = AsyncMock()
+        cog._active_runners[thread_id] = existing_runner
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_thread_reply(message)
+
+        thread.send.assert_called_once()
+        sent_text: str = thread.send.call_args.args[0]
+        assert "interrupted" in sent_text.lower() or "⚡" in sent_text
+
+    @pytest.mark.asyncio
+    async def test_no_interrupt_when_no_active_runner(self) -> None:
+        """When no runner is active, _handle_thread_reply skips interrupt."""
+        cog = _make_cog()
+        message = self._make_thread_message(thread_id=42)
+        thread = message.channel
+
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_thread_reply(message)
+
+        # No notification message sent for interruption
+        thread.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_awaits_existing_task_before_new_session(self) -> None:
+        """_handle_thread_reply must await the existing task to ensure cleanup completes."""
+        cog = _make_cog()
+        thread_id = 42
+        message = self._make_thread_message(thread_id)
+
+        existing_runner = MagicMock()
+        existing_runner.interrupt = AsyncMock()
+        cog._active_runners[thread_id] = existing_runner
+
+        # A future that we can control to simulate a running task
+        cleanup_done = asyncio.Event()
+        call_order: list[str] = []
+
+        async def slow_task() -> None:
+            await cleanup_done.wait()
+            call_order.append("task_done")
+
+        task = asyncio.ensure_future(slow_task())
+        cog._active_tasks[thread_id] = task
+
+        async def run_claude_stub(*args, **kwargs) -> None:
+            call_order.append("new_session_started")
+
+        cog._run_claude = run_claude_stub
+
+        # Let cleanup complete so the await resolves
+        cleanup_done.set()
+
+        await cog._handle_thread_reply(message)
+
+        assert call_order == ["task_done", "new_session_started"]
+
+    @pytest.mark.asyncio
+    async def test_run_claude_called_with_session_id_after_interrupt(self) -> None:
+        """After interrupt, _run_claude is called with the session_id from the DB."""
+        cog = _make_cog()
+        thread_id = 42
+        message = self._make_thread_message(thread_id)
+
+        # Simulate a saved session in DB
+        record = MagicMock()
+        record.session_id = "abc-123"
+        cog.repo.get = AsyncMock(return_value=record)
+
+        existing_runner = MagicMock()
+        existing_runner.interrupt = AsyncMock()
+        cog._active_runners[thread_id] = existing_runner
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_thread_reply(message)
+
+        cog._run_claude.assert_called_once()
+        _, kwargs = cog._run_claude.call_args
+        assert kwargs.get("session_id") == "abc-123"
+
+    @pytest.mark.asyncio
+    async def test_active_tasks_dict_initialized(self) -> None:
+        """ClaudeChatCog must initialize _active_tasks as an empty dict."""
+        cog = _make_cog()
+        assert hasattr(cog, "_active_tasks")
+        assert isinstance(cog._active_tasks, dict)
+        assert len(cog._active_tasks) == 0
 
 
 class TestZeroConfigCoordination:

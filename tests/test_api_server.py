@@ -362,7 +362,9 @@ class TestMarkResume:
 
     @pytest.fixture
     async def resume_client(self, repo: NotificationRepository, bot: MagicMock) -> TestClient:
-        import tempfile, os
+        import os
+        import tempfile
+
         from claude_discord.database.models import init_db as _init
         from claude_discord.database.resume_repo import PendingResumeRepository
 
@@ -381,9 +383,7 @@ class TestMarkResume:
 
     @pytest.mark.asyncio
     async def test_mark_resume_returns_201(self, resume_client: TestClient) -> None:
-        resp = await resume_client.post(
-            "/api/mark-resume", json={"thread_id": 123456789}
-        )
+        resp = await resume_client.post("/api/mark-resume", json={"thread_id": 123456789})
         assert resp.status == 201
         data = await resp.json()
         assert data["status"] == "marked"
@@ -433,9 +433,7 @@ class TestMarkResume:
             await client.close()
 
     @pytest.mark.asyncio
-    async def test_mark_resume_invalid_json_returns_400(
-        self, resume_client: TestClient
-    ) -> None:
+    async def test_mark_resume_invalid_json_returns_400(self, resume_client: TestClient) -> None:
         resp = await resume_client.post(
             "/api/mark-resume",
             data=b"bad",

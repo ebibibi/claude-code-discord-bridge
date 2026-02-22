@@ -18,6 +18,9 @@ dependencies = [
 [project.optional-dependencies]
 api = ["aiohttp>=3.9"]
 
+[project.scripts]
+ccdb = "claude_discord.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["claude_discord"]
 

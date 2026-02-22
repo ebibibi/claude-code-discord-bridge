@@ -27,9 +27,7 @@ class TestMark:
         assert row_id > 0
 
     @pytest.mark.asyncio
-    async def test_mark_is_idempotent_for_same_thread(
-        self, repo: PendingResumeRepository
-    ) -> None:
+    async def test_mark_is_idempotent_for_same_thread(self, repo: PendingResumeRepository) -> None:
         """Second mark for same thread replaces the first (UNIQUE constraint)."""
         await repo.mark(12345, session_id="old", reason="first")
         await repo.mark(12345, session_id="new", reason="second")
@@ -57,9 +55,7 @@ class TestMark:
 
 class TestGetPending:
     @pytest.mark.asyncio
-    async def test_get_pending_returns_all_within_ttl(
-        self, repo: PendingResumeRepository
-    ) -> None:
+    async def test_get_pending_returns_all_within_ttl(self, repo: PendingResumeRepository) -> None:
         await repo.mark(1)
         await repo.mark(2)
         pending = await repo.get_pending()
@@ -76,9 +72,7 @@ class TestGetPending:
         assert isinstance(pending, list)
 
     @pytest.mark.asyncio
-    async def test_get_pending_returns_empty_when_none(
-        self, repo: PendingResumeRepository
-    ) -> None:
+    async def test_get_pending_returns_empty_when_none(self, repo: PendingResumeRepository) -> None:
         pending = await repo.get_pending()
         assert pending == []
 

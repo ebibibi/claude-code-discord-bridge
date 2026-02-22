@@ -11,70 +11,68 @@
 
 **Ejecuta múltiples sesiones de Claude Code en paralelo — de forma segura — a través de Discord.**
 
-Cada hilo de Discord se convierte en una sesión aislada de Claude Code. Abre tantas como necesites: trabaja en una funcionalidad en un hilo, revisa un PR en otro, ejecuta una tarea programada en un tercero. El bridge gestiona la coordinación automáticamente para que las sesiones simultáneas no interfieran entre sí.
+Cada hilo de Discord se convierte en una sesión aislada de Claude Code. Inicia tantas como necesites: trabaja en una funcionalidad en un hilo, revisa un PR en otro, ejecuta una tarea programada en un tercero. El bridge gestiona la coordinación automáticamente para que las sesiones concurrentes no interfieran entre sí.
 
 **[English](../../README.md)** | **[日本語](../ja/README.md)** | **[简体中文](../zh-CN/README.md)** | **[한국어](../ko/README.md)** | **[Português](../pt-BR/README.md)** | **[Français](../fr/README.md)**
 
-> **Descargo de responsabilidad:** Este proyecto no está afiliado, respaldado ni conectado oficialmente con Anthropic. "Claude" y "Claude Code" son marcas registradas de Anthropic, PBC. Esta es una herramienta de código abierto independiente que interactúa con Claude Code CLI.
+> **Aviso legal:** Este proyecto no está afiliado, respaldado ni conectado oficialmente con Anthropic. "Claude" y "Claude Code" son marcas registradas de Anthropic, PBC. Esta es una herramienta de código abierto independiente que interactúa con Claude Code CLI.
 
-> **Construido completamente por Claude Code.** Arquitectura, implementación, pruebas, documentación — toda esta base de código fue escrita por Claude Code. El autor humano proporcionó los requisitos y la dirección en lenguaje natural. Ver [Cómo se construyó este proyecto](#cómo-se-construyó-este-proyecto) para más detalles.
+> **Construido completamente por Claude Code.** Todo este código base — arquitectura, implementación, pruebas, documentación — fue escrito por Claude Code. El autor humano proporcionó requisitos y dirección en lenguaje natural, pero no leyó ni editó manualmente el código fuente. Ver [Cómo se construyó este proyecto](#cómo-se-construyó-este-proyecto).
 
 ---
 
-## La idea principal: sesiones paralelas sin miedo
+## La Gran Idea: Sesiones Paralelas Sin Miedo
 
-Cuando envías tareas a Claude Code en hilos de Discord separados, el bridge hace cuatro cosas automáticamente:
+Cuando envías tareas a Claude Code en hilos separados de Discord, el bridge hace tres cosas automáticamente:
 
-1. **Inyección automática de instrucciones de concurrencia** — El prompt del sistema de cada sesión incluye instrucciones obligatorias: crear un git worktree, trabajar solo dentro de él, nunca tocar directamente el directorio de trabajo principal.
+1. **Inyección de aviso de concurrencia** — El prompt de sistema de cada sesión incluye instrucciones obligatorias: crea un git worktree, trabaja solo dentro de él, nunca toques el directorio de trabajo principal directamente.
 
-2. **Registro de sesiones activas** — Cada sesión en ejecución conoce a las demás. Si dos sesiones están a punto de tocar el mismo repositorio, pueden coordinarse en lugar de conflictuar.
+2. **Registro de sesiones activas** — Cada sesión en ejecución conoce las demás. Si dos sesiones están a punto de modificar el mismo repositorio, pueden coordinarse en lugar de entrar en conflicto.
 
-3. **Canal de coordinación** — Un canal de Discord compartido donde las sesiones transmiten eventos de inicio/fin. Tanto Claude como los humanos pueden ver de un vistazo qué está pasando en todos los hilos activos.
-
-4. **AI Lounge** — Una "sala de descanso" de sesión a sesión inyectada en cada prompt. Antes de comenzar, cada sesión lee los mensajes recientes del lounge para ver qué están haciendo otras sesiones. Antes de operaciones destructivas (force push, reinicio del bot, eliminación de DB), las sesiones verifican el lounge primero para no pisotear el trabajo de las demás.
+3. **Canal de coordinación** — Un canal de Discord compartido donde las sesiones transmiten eventos de inicio/fin. Tanto Claude como los humanos pueden ver de un vistazo lo que ocurre en todos los hilos activos.
 
 ```
-Hilo A (funcionalidad) ──→  Claude Code (worktree-A)  ─┐
-Hilo B (revisión PR)   ──→  Claude Code (worktree-B)   ├─→  #ai-lounge
-Hilo C (docs)          ──→  Claude Code (worktree-C)  ─┘    "A: refactor auth en progreso"
-           ↓ eventos de ciclo de vida                        "B: revisión PR #42 completada"
-   #canal de coordinación                                    "C: actualizando README"
-   "A: iniciado refactor auth"
+Hilo A (funcionalidad) ──→  Claude Code (worktree-A)
+Hilo B (revisión PR)   ──→  Claude Code (worktree-B)
+Hilo C (docs)          ──→  Claude Code (worktree-C)
+           ↓ eventos de ciclo de vida
+   #canal-coordinación
+   "A: iniciando refactor de autenticación"
    "B: revisando PR #42"
    "C: actualizando README"
 ```
 
-Sin condiciones de carrera. Sin trabajo perdido. Sin sorpresas en el merge.
+Sin condiciones de carrera. Sin trabajo perdido. Sin sorpresas al hacer merge.
 
 ---
 
-## Qué puedes hacer
+## Qué Puedes Hacer
 
-### Chat interactivo (Móvil / Escritorio)
+### Chat Interactivo (Móvil / Escritorio)
 
 Usa Claude Code desde cualquier lugar donde funcione Discord — teléfono, tablet o escritorio. Cada mensaje crea o continúa un hilo, mapeado 1:1 a una sesión persistente de Claude Code.
 
-### Desarrollo paralelo
+### Desarrollo Paralelo
 
 Abre múltiples hilos simultáneamente. Cada uno es una sesión independiente de Claude Code con su propio contexto, directorio de trabajo y git worktree. Patrones útiles:
 
 - **Funcionalidad + revisión en paralelo**: Inicia una funcionalidad en un hilo mientras Claude revisa un PR en otro.
-- **Múltiples contribuidores**: Diferentes miembros del equipo tienen cada uno su propio hilo; las sesiones se mantienen al tanto de las demás a través del canal de coordinación.
-- **Experimentar de forma segura**: Prueba un enfoque en el hilo A mientras mantienes el hilo B en código estable.
+- **Múltiples colaboradores**: Diferentes miembros del equipo tienen su propio hilo; las sesiones se mantienen al tanto entre sí a través del canal de coordinación.
+- **Experimenta con seguridad**: Prueba un enfoque en el hilo A mientras el hilo B se mantiene en código estable.
 
-### Tareas programadas (SchedulerCog)
+### Tareas Programadas (SchedulerCog)
 
-Registra tareas periódicas de Claude Code desde una conversación de Discord o via REST API — sin cambios de código, sin redeploys. Las tareas se almacenan en SQLite y se ejecutan según un horario configurable.
+Registra tareas periódicas de Claude Code desde una conversación de Discord o vía REST API — sin cambios de código, sin redeploys. Las tareas se almacenan en SQLite y se ejecutan según un horario configurable. Claude puede auto-registrar tareas durante una sesión usando `POST /api/tasks`.
 
 ```
-/skill name:goodmorning          → se ejecuta inmediatamente
-Claude llama a POST /api/tasks   → registra una tarea periódica
-SchedulerCog (bucle maestro 30s) → dispara tareas pendientes automáticamente
+/skill name:goodmorning         → se ejecuta inmediatamente
+Claude llama POST /api/tasks   → registra tarea periódica
+SchedulerCog (bucle cada 30s)  → ejecuta tareas cuando toca
 ```
 
 ### Automatización CI/CD
 
-Dispara tareas de Claude Code desde GitHub Actions a través de webhooks de Discord. Claude se ejecuta de forma autónoma — lee código, actualiza documentación, crea PRs, habilita auto-merge.
+Activa tareas de Claude Code desde GitHub Actions vía webhooks de Discord. Claude se ejecuta de forma autónoma — lee código, actualiza docs, crea PRs, activa auto-merge.
 
 ```
 GitHub Actions → Discord Webhook → Bridge → Claude Code CLI
@@ -82,207 +80,142 @@ GitHub Actions → Discord Webhook → Bridge → Claude Code CLI
 GitHub PR ←── git push ←── Claude Code ──────────┘
 ```
 
-**Ejemplo real:** En cada push a `main`, Claude analiza el diff, actualiza documentación en inglés + japonés, crea un PR con resumen bilingüe, y habilita auto-merge. Cero interacción humana.
+**Ejemplo real:** En cada push a `main`, Claude analiza el diff, actualiza documentación en inglés + japonés, crea un PR con resumen bilingüe y activa auto-merge. Cero interacción humana.
 
-### Sincronización de sesiones
+### Sincronización de Sesiones
 
-¿Ya usas Claude Code CLI directamente? Sincroniza tus sesiones de terminal existentes en hilos de Discord con `/sync-sessions`. Rellena los mensajes de conversación recientes para que puedas continuar una sesión CLI desde tu teléfono sin perder contexto.
+¿Ya usas Claude Code CLI directamente? Sincroniza tus sesiones de terminal existentes en hilos de Discord con `/sync-sessions`. Rellena mensajes de conversación recientes para que puedas continuar una sesión CLI desde tu teléfono sin perder contexto.
 
-### AI Lounge
+### Creación Programática de Sesiones
 
-Un canal "sala de descanso" compartido donde todas las sesiones simultáneas se anuncian, leen las actualizaciones de las demás y se coordinan antes de operaciones destructivas.
-
-Cada sesión de Claude recibe automáticamente el contexto del lounge en su prompt del sistema: mensajes recientes de otras sesiones, más la regla de verificación antes de cualquier operación destructiva.
-
-```bash
-# Las sesiones publican sus intenciones antes de comenzar:
-curl -X POST "$CCDB_API_URL/api/lounge" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Iniciando refactor auth en feature/oauth — worktree-A", "label": "dev funcionalidad"}'
-
-# Leer mensajes recientes del lounge (también inyectados automáticamente en cada sesión):
-curl "$CCDB_API_URL/api/lounge"
-```
-
-El canal del lounge también funciona como feed de actividad visible para humanos — ábrelo en Discord para ver de un vistazo qué está haciendo cada sesión activa de Claude.
-
-### Creación programática de sesiones
-
-Crea nuevas sesiones de Claude Code desde scripts, GitHub Actions u otras sesiones de Claude — sin interacción de mensajes de Discord.
+Crea nuevas sesiones de Claude Code desde scripts, GitHub Actions u otras sesiones de Claude — sin interacción con mensajes de Discord.
 
 ```bash
 # Desde otra sesión de Claude o un script CI:
 curl -X POST "$CCDB_API_URL/api/spawn" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Ejecutar escaneo de seguridad en el repositorio", "thread_name": "Escaneo de seguridad"}'
-# Retorna inmediatamente con el ID del hilo; Claude se ejecuta en segundo plano
+  -d '{"prompt": "Ejecutar análisis de seguridad en el repositorio", "thread_name": "Análisis de Seguridad"}'
+# Devuelve inmediatamente con el ID del hilo; Claude corre en segundo plano
 ```
 
-### Reanudación al inicio
+Los subprocesos de Claude reciben `DISCORD_THREAD_ID` como variable de entorno, por lo que una sesión en ejecución puede crear sesiones hijas para paralelizar el trabajo.
 
-Si el bot se reinicia a mitad de sesión, las sesiones interrumpidas de Claude se reanudan automáticamente cuando el bot vuelve a estar en línea. Las sesiones se marcan para reanudar de tres formas:
+### Reanudación al Inicio
 
-- **Automática (reinicio de actualización)** — `AutoUpgradeCog` captura todas las sesiones activas justo antes de un reinicio de actualización de paquete y las marca automáticamente.
-- **Automática (cualquier parada)** — `ClaudeChatCog.cog_unload()` marca todas las sesiones en ejecución cada vez que el bot se detiene a través de cualquier mecanismo (`systemctl stop`, `bot.close()`, SIGTERM, etc.).
-- **Manual** — Cualquier sesión puede llamar directamente a `POST /api/mark-resume`.
+Si el bot se reinicia a mitad de sesión, las sesiones de Claude interrumpidas se reanudan automáticamente cuando el bot vuelve a estar en línea. Las sesiones se marcan para reanudar de tres formas:
+
+- **Automático (reinicio por actualización)** — `AutoUpgradeCog` toma una instantánea de todas las sesiones activas justo antes de un reinicio por actualización de paquete y las marca automáticamente.
+- **Automático (cualquier apagado)** — `ClaudeChatCog.cog_unload()` marca todas las sesiones en ejecución cuando el bot se apaga por cualquier mecanismo (`systemctl stop`, `bot.close()`, SIGTERM, etc.).
+- **Manual** — Cualquier sesión puede llamar a `POST /api/mark-resume` directamente.
 
 ---
 
 ## Características
 
-### Chat interactivo
-- **Thread = Session** — Correspondencia 1:1 entre hilo de Discord y sesión de Claude Code
+### Chat Interactivo
+- **Thread = Session** — Mapeo 1:1 entre hilo de Discord y sesión de Claude Code
 - **Estado en tiempo real** — Reacciones emoji: 🧠 pensando, 🛠️ leyendo archivos, 💻 editando, 🌐 búsqueda web
-- **Texto en streaming** — El texto intermedio del asistente aparece mientras Claude trabaja
-- **Embeds de resultados de herramientas** — Resultados de llamadas de herramientas en vivo con tiempo transcurrido subiendo cada 10s
-- **Pensamiento extendido** — Razonamiento mostrado como embeds con etiquetas spoiler (clic para revelar)
-- **Persistencia de sesión** — Reanudar conversaciones entre mensajes via `--resume`
-- **Ejecución de skills** — Comando `/skill` con autocompletado, argumentos opcionales, reanudación en el hilo
-- **Recarga en caliente** — Nuevos skills añadidos a `~/.claude/skills/` detectados automáticamente (refresco 60s, sin reinicio)
-- **Sesiones simultáneas** — Múltiples sesiones paralelas con límite configurable
-- **Detener sin borrar** — `/stop` detiene una sesión preservándola para reanudar
-- **Soporte de adjuntos** — Archivos de texto adjuntados automáticamente al prompt (hasta 5 × 50 KB)
-- **Notificaciones de timeout** — Embed con tiempo transcurrido y guía de reanudación en timeout
-- **Preguntas interactivas** — `AskUserQuestion` renderizado como Botones de Discord o Menú de selección; la sesión reanuda con tu respuesta; los botones sobreviven a reinicios del bot
-- **Panel de hilos** — Embed anclado en vivo mostrando qué hilos están activos vs esperando; @mención al propietario cuando se necesita entrada
-- **Uso de tokens** — Tasa de aciertos de caché y conteos de tokens mostrados en el embed de sesión completada
+- **Texto en streaming** — El texto intermedio aparece mientras Claude trabaja
+- **Embeds de resultados de herramientas** — Resultados en vivo con tiempo transcurrido que aumenta cada 10s
+- **Pensamiento extendido** — Razonamiento mostrado como embeds con spoiler (clic para revelar)
+- **Persistencia de sesión** — Reanuda conversaciones entre mensajes via `--resume`
+- **Ejecución de skills** — Comando `/skill` con autocompletado, argumentos opcionales, reanudación en hilo
+- **Hot reload** — Los nuevos skills añadidos a `~/.claude/skills/` se detectan automáticamente (refresco cada 60s, sin reinicio)
+- **Sesiones concurrentes** — Múltiples sesiones en paralelo con límite configurable
+- **Parar sin borrar** — `/stop` detiene una sesión preservándola para reanudar
+- **Soporte de adjuntos** — Archivos de texto añadidos automáticamente al prompt (hasta 5 × 50 KB)
+- **Notificaciones de timeout** — Embed con tiempo transcurrido y guía de reanudación al agotar tiempo
+- **Preguntas interactivas** — `AskUserQuestion` se renderiza como Botones de Discord o Menú de Selección; la sesión se reanuda con tu respuesta; los botones sobreviven reinicios del bot
+- **Panel de hilos** — Embed fijo en vivo mostrando qué hilos están activos vs. en espera; el propietario es @mencionado cuando se necesita entrada
+- **Uso de tokens** — Tasa de aciertos de caché y recuento de tokens mostrados en el embed de sesión completada
 
-### Concurrencia y coordinación
-- **Instrucciones de worktree auto-inyectadas** — Cada sesión instruida a usar `git worktree` antes de tocar cualquier archivo
-- **Limpieza automática de worktrees** — Los worktrees de sesión (`wt-{thread_id}`) se eliminan automáticamente al finalizar la sesión y al iniciar el bot; los worktrees sucios nunca se eliminan automáticamente (invariante de seguridad)
+### Concurrencia y Coordinación
+- **Instrucciones de worktree auto-inyectadas** — Cada sesión recibe instrucciones para usar `git worktree` antes de tocar cualquier archivo
+- **Limpieza automática de worktrees** — Los worktrees de sesión (`wt-{thread_id}`) se eliminan automáticamente al terminar la sesión y al iniciar el bot; los worktrees con cambios nunca se eliminan automáticamente (invariante de seguridad)
 - **Registro de sesiones activas** — Registro en memoria; cada sesión ve lo que hacen las demás
-- **AI Lounge** — Canal "sala de descanso" compartido inyectado en cada prompt de sesión; las sesiones publican intenciones, leen el estado de las demás y verifican antes de operaciones destructivas; los humanos lo ven como un feed de actividad en vivo
-- **Canal de coordinación** — Canal compartido opcional para transmisiones de ciclo de vida inter-sesiones
+- **Canal de coordinación** — Canal compartido opcional para transmisiones de ciclo de vida entre sesiones
 - **Scripts de coordinación** — Claude puede llamar a `coord_post.py` / `coord_read.py` desde una sesión para publicar y leer eventos
 
-### Tareas programadas
-- **SchedulerCog** — Ejecutor de tareas periódicas basado en SQLite con un bucle maestro de 30 segundos
+### Tareas Programadas
+- **SchedulerCog** — Ejecutor de tareas periódicas respaldado por SQLite con un bucle maestro de 30 segundos
 - **Auto-registro** — Claude registra tareas via `POST /api/tasks` durante una sesión de chat
 - **Sin cambios de código** — Añade, elimina o modifica tareas en tiempo de ejecución
 - **Activar/desactivar** — Pausa tareas sin eliminarlas (`PATCH /api/tasks/{id}`)
 
 ### Automatización CI/CD
-- **Disparadores webhook** — Dispara tareas de Claude Code desde GitHub Actions o cualquier sistema CI/CD
+- **Disparadores webhook** — Activa tareas de Claude Code desde GitHub Actions o cualquier sistema CI/CD
 - **Auto-actualización** — Actualiza automáticamente el bot cuando se publican paquetes upstream
-- **Reinicio DrainAware** — Espera a que las sesiones activas terminen antes de reiniciar
-- **Marcado auto-reanudación** — Las sesiones activas se marcan automáticamente para reanudación en cualquier parada; reanudan donde lo dejaron después de que el bot vuelve en línea
-- **Aprobación de reinicio** — Puerta opcional para confirmar actualizaciones antes de aplicar
+- **Reinicio con drenaje** — Espera a que las sesiones activas terminen antes de reiniciar
+- **Marcado automático de reanudación** — Las sesiones activas se marcan automáticamente para reanudar en cualquier apagado (reinicio por actualización via `AutoUpgradeCog`, o cualquier otro apagado via `ClaudeChatCog.cog_unload()`); se reanudan donde las dejaron tras el reinicio del bot
+- **Aprobación de reinicio** — Compuerta opcional para confirmar actualizaciones antes de aplicarlas
 
-### Gestión de sesiones
+### Gestión de Sesiones
 - **Sincronización de sesiones** — Importa sesiones CLI como hilos de Discord (`/sync-sessions`)
-- **Lista de sesiones** — `/sessions` con filtrado por origen (Discord / CLI / todos) y ventana de tiempo
-- **Info de reanudación** — `/resume-info` muestra el comando CLI para continuar la sesión actual en un terminal
-- **Reanudación al inicio** — Las sesiones interrumpidas se reinician automáticamente después de cualquier reinicio del bot
-- **Creación programática** — `POST /api/spawn` crea un nuevo hilo de Discord + sesión de Claude desde cualquier script o subproceso de Claude
-- **Inyección de ID de hilo** — La variable de env `DISCORD_THREAD_ID` se pasa a cada subproceso de Claude, permitiendo que las sesiones generen sesiones hijas via `$CCDB_API_URL/api/spawn`
-- **Gestión de worktrees** — `/worktree-list` muestra todos los worktrees de sesión activos con estado clean/dirty; `/worktree-cleanup` elimina worktrees clean huérfanos
+- **Lista de sesiones** — `/sessions` con filtrado por origen (Discord / CLI / todas) y ventana de tiempo
+- **Información de reanudación** — `/resume-info` muestra el comando CLI para continuar la sesión actual en un terminal
+- **Reanudación al inicio** — Las sesiones interrumpidas se reinician automáticamente tras cualquier reinicio del bot; `AutoUpgradeCog` (reinicios por actualización) y `ClaudeChatCog.cog_unload()` (todos los demás apagados) las marcan automáticamente, o usa `POST /api/mark-resume` manualmente
+- **Creación programática** — `POST /api/spawn` crea un nuevo hilo de Discord + sesión de Claude desde cualquier script o subproceso de Claude; devuelve un 201 no bloqueante inmediatamente tras la creación del hilo
+- **Inyección de ID de hilo** — La variable de entorno `DISCORD_THREAD_ID` se pasa a cada subproceso de Claude, permitiendo que las sesiones creen sesiones hijas via `$CCDB_API_URL/api/spawn`
+- **Gestión de worktrees** — `/worktree-list` muestra todos los worktrees de sesión activos con estado limpio/sucio; `/worktree-cleanup` elimina worktrees limpios huérfanos (admite vista previa con `dry_run`)
 
 ### Seguridad
 - **Sin inyección de shell** — Solo `asyncio.create_subprocess_exec`, nunca `shell=True`
-- **Validación de ID de sesión** — Regex estricta antes de pasar a `--resume`
+- **Validación de ID de sesión** — Regex estricto antes de pasar a `--resume`
 - **Prevención de inyección de flags** — Separador `--` antes de todos los prompts
-- **Aislamiento de secretos** — Token del bot eliminado del entorno del subproceso
+- **Aislamiento de secretos** — El token del bot se elimina del entorno del subproceso
 - **Autorización de usuario** — `allowed_user_ids` restringe quién puede invocar a Claude
 
 ---
 
-## Inicio rápido — Claude en Discord en 5 minutos
+## Inicio Rápido
 
-### Paso 1 — Prerrequisitos
+### Requisitos
 
-- **Python 3.10+** y **[uv](https://docs.astral.sh/uv/)** instalados
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** instalado y autenticado (`claude --version` debe funcionar)
-- Un **servidor de Discord** donde tienes acceso de administrador
+- Python 3.10+
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) instalado y autenticado
+- Token de bot Discord con Message Content intent habilitado
+- [uv](https://docs.astral.sh/uv/) (recomendado) o pip
 
-### Paso 2 — Crear un bot de Discord
-
-1. Ve a [discord.com/developers/applications](https://discord.com/developers/applications) y haz clic en **New Application**
-2. Navega a **Bot** → haz clic en **Add Bot**
-3. En **Privileged Gateway Intents**, habilita **Message Content Intent**
-4. Copia el **Token** del bot (lo necesitarás pronto)
-5. Ve a **OAuth2 → URL Generator**:
-   - Scopes: `bot`, `applications.commands`
-   - Bot Permissions: `Send Messages`, `Create Public Threads`, `Send Messages in Threads`, `Add Reactions`, `Manage Messages`, `Read Message History`
-6. Abre la URL generada en tu navegador e invita al bot a tu servidor
-
-### Paso 3 — Obtener tus IDs de Discord
-
-Habilita el **Modo desarrollador** en Discord (Configuración → Avanzado → Modo desarrollador), luego:
-
-- **ID de canal**: Clic derecho en el canal donde Claude debe escuchar → **Copiar ID del canal**
-- **Tu ID de usuario**: Clic derecho en tu nombre de usuario → **Copiar ID de usuario**
-
-### Paso 4 — Ejecutarlo
+### Ejecución autónoma
 
 ```bash
 git clone https://github.com/ebibibi/claude-code-discord-bridge.git
 cd claude-code-discord-bridge
+
 cp .env.example .env
-```
+# Edita .env con tu token de bot y ID de canal
 
-Edita `.env`:
-
-```env
-DISCORD_BOT_TOKEN=your-bot-token-here
-DISCORD_CHANNEL_ID=123456789012345678    # el canal copiado arriba
-DISCORD_OWNER_ID=987654321098765432      # tu ID de usuario (para @-menciones)
-CLAUDE_WORKING_DIR=/path/to/your/project
-```
-
-Luego inicia el bot:
-
-```bash
 uv run python -m claude_discord.main
 ```
 
-Envía un mensaje en el canal configurado — Claude responderá en un nuevo hilo.
+### Instalar como paquete
 
----
-
-### Bot mínimo (instalar como paquete)
-
-Si ya tienes un bot discord.py, añade ccdb como paquete en su lugar:
+Si ya tienes un bot discord.py en ejecución (Discord solo permite una conexión Gateway por token):
 
 ```bash
 uv add git+https://github.com/ebibibi/claude-code-discord-bridge.git
 ```
 
-Crea un `bot.py`:
-
 ```python
-import asyncio
-import os
-from dotenv import load_dotenv
-import discord
 from discord.ext import commands
 from claude_discord import ClaudeRunner, setup_bridge
 
-load_dotenv()
-
-intents = discord.Intents.default()
-intents.message_content = True
-
-bot = commands.Bot(command_prefix="!", intents=intents)
-runner = ClaudeRunner(
-    command="claude",
-    model="sonnet",
-    working_dir="/path/to/your/project",
-)
+bot = commands.Bot(...)
+runner = ClaudeRunner(command="claude", model="sonnet")
 
 @bot.event
 async def on_ready():
-    print(f"Conectado como {bot.user}")
     await setup_bridge(
         bot,
         runner,
-        claude_channel_id=int(os.environ["DISCORD_CHANNEL_ID"]),
-        allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+        claude_channel_id=YOUR_CHANNEL_ID,
+        allowed_user_ids={YOUR_USER_ID},
     )
-
-asyncio.run(bot.start(os.environ["DISCORD_BOT_TOKEN"]))
 ```
 
-`setup_bridge()` conecta todos los Cogs automáticamente. Actualizar a la última versión:
+`setup_bridge()` conecta todos los Cogs automáticamente. Los nuevos Cogs añadidos a ccdb se incluyen sin cambios en el código del consumidor.
+
+Actualizar a la última versión:
 
 ```bash
 uv lock --upgrade-package claude-code-discord-bridge && uv sync
@@ -292,26 +225,186 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 
 ## Configuración
 
-| Variable | Descripción | Predeterminado |
-|----------|-------------|----------------|
-| `DISCORD_BOT_TOKEN` | Tu token de bot de Discord | (requerido) |
-| `DISCORD_CHANNEL_ID` | ID de canal para el chat de Claude | (requerido) |
-| `CLAUDE_COMMAND` | Ruta a Claude Code CLI | `claude` |
+| Variable | Descripción | Por defecto |
+|----------|-------------|-------------|
+| `DISCORD_BOT_TOKEN` | Tu token de bot Discord | (requerido) |
+| `DISCORD_CHANNEL_ID` | ID del canal para el chat de Claude | (requerido) |
+| `CLAUDE_COMMAND` | Ruta al Claude Code CLI | `claude` |
 | `CLAUDE_MODEL` | Modelo a usar | `sonnet` |
-| `CLAUDE_PERMISSION_MODE` | Modo de permisos para CLI | `acceptEdits` |
+| `CLAUDE_PERMISSION_MODE` | Modo de permisos del CLI | `acceptEdits` |
 | `CLAUDE_WORKING_DIR` | Directorio de trabajo para Claude | directorio actual |
-| `MAX_CONCURRENT_SESSIONS` | Máx sesiones paralelas | `3` |
+| `MAX_CONCURRENT_SESSIONS` | Máximo de sesiones paralelas | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Timeout de inactividad de sesión | `300` |
-| `DISCORD_OWNER_ID` | ID de usuario para @-mencionar cuando Claude necesita entrada | (opcional) |
-| `COORDINATION_CHANNEL_ID` | ID de canal para transmisiones de eventos inter-sesiones | (opcional) |
-| `CCDB_COORDINATION_CHANNEL_NAME` | Crear canal de coordinación automáticamente por nombre | (opcional) |
+| `DISCORD_OWNER_ID` | ID de usuario para @mencionar cuando Claude necesita entrada | (opcional) |
+| `COORDINATION_CHANNEL_ID` | ID del canal para transmisiones de eventos entre sesiones | (opcional) |
+| `CCDB_COORDINATION_CHANNEL_NAME` | Crear automáticamente canal de coordinación por nombre | (opcional) |
 | `WORKTREE_BASE_DIR` | Directorio base para escanear worktrees de sesión (activa limpieza automática) | (opcional) |
+
+---
+
+## Configuración del Bot de Discord
+
+1. Crea una nueva aplicación en el [Portal de Desarrolladores de Discord](https://discord.com/developers/applications)
+2. Crea un bot y copia el token
+3. Activa **Message Content Intent** en Privileged Gateway Intents
+4. Invita al bot con estos permisos:
+   - Send Messages
+   - Create Public Threads
+   - Send Messages in Threads
+   - Add Reactions
+   - Manage Messages (para limpiar reacciones)
+   - Read Message History
+
+---
+
+## GitHub + Automatización con Claude Code
+
+### Ejemplo: Sincronización Automática de Documentación
+
+En cada push a `main`, Claude Code:
+1. Obtiene los últimos cambios y analiza el diff
+2. Actualiza la documentación en inglés
+3. Traduce al japonés (o cualquier idioma objetivo)
+4. Crea un PR con resumen bilingüe
+5. Activa auto-merge — se fusiona automáticamente cuando CI pasa
+
+**GitHub Actions:**
+
+```yaml
+# .github/workflows/docs-sync.yml
+name: Documentation Sync
+on:
+  push:
+    branches: [main]
+jobs:
+  trigger:
+    if: "!contains(github.event.head_commit.message, '[docs-sync]')"
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{"content": "🔄 docs-sync"}'
+```
+
+**Configuración del bot:**
+
+```python
+from claude_discord import WebhookTriggerCog, WebhookTrigger, ClaudeRunner
+
+runner = ClaudeRunner(command="claude", model="sonnet")
+
+triggers = {
+    "🔄 docs-sync": WebhookTrigger(
+        prompt="Analiza cambios, actualiza docs, crea un PR con resumen bilingüe, activa auto-merge.",
+        working_dir="/home/user/my-project",
+        timeout=600,
+    ),
+}
+
+await bot.add_cog(WebhookTriggerCog(
+    bot=bot,
+    runner=runner,
+    triggers=triggers,
+    channel_ids={YOUR_CHANNEL_ID},
+))
+```
+
+**Seguridad:** Los prompts se definen en el lado del servidor. Los webhooks solo seleccionan qué disparador activar — sin inyección arbitraria de prompts.
+
+### Ejemplo: Auto-aprobación de PRs del propietario
+
+```yaml
+# .github/workflows/auto-approve.yml
+name: Auto Approve Owner PRs
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+jobs:
+  auto-approve:
+    if: github.event.pull_request.user.login == 'your-username'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr review "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --approve
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --squash
+```
+
+---
+
+## Tareas Programadas
+
+Registra tareas periódicas de Claude Code en tiempo de ejecución — sin cambios de código, sin redeploys.
+
+Desde una sesión de Discord, Claude puede registrar una tarea:
+
+```bash
+# Claude llama esto dentro de una sesión:
+curl -X POST "$CCDB_API_URL/api/tasks" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Verificar dependencias desactualizadas y abrir un issue si se encuentran", "interval_seconds": 604800}'
+```
+
+O registra desde tus propios scripts:
+
+```bash
+curl -X POST http://localhost:8080/api/tasks \
+  -H "Authorization: Bearer your-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Análisis de seguridad semanal", "interval_seconds": 604800}'
+```
+
+El bucle maestro de 30 segundos detecta las tareas pendientes y crea sesiones de Claude Code automáticamente.
+
+---
+
+## Auto-actualización
+
+Actualiza automáticamente el bot cuando se publica una nueva versión:
+
+```python
+from claude_discord import AutoUpgradeCog, UpgradeConfig
+
+config = UpgradeConfig(
+    package_name="claude-code-discord-bridge",
+    trigger_prefix="🔄 bot-upgrade",
+    working_dir="/home/user/my-bot",
+    restart_command=["sudo", "systemctl", "restart", "my-bot.service"],
+    restart_approval=True,  # Reacciona con ✅ para confirmar el reinicio
+)
+
+await bot.add_cog(AutoUpgradeCog(bot, config))
+```
+
+Antes de reiniciar, `AutoUpgradeCog`:
+
+1. **Toma instantánea de sesiones activas** — Recopila todos los hilos con sesiones de Claude en ejecución (duck typing: cualquier Cog con dict `_active_runners` se descubre automáticamente).
+2. **Drena** — Espera a que las sesiones activas terminen naturalmente.
+3. **Marca para reanudar** — Guarda los IDs de hilos activos en la tabla de reanudaciones pendientes. En el próximo inicio, esas sesiones se reanudan automáticamente con un prompt "bot reiniciado, por favor continúa".
+4. **Reinicia** — Ejecuta el comando de reinicio configurado.
+
+Cualquier Cog con una propiedad `active_count` se descubre automáticamente y se drena:
+
+```python
+class MyCog(commands.Cog):
+    @property
+    def active_count(self) -> int:
+        return len(self._running_tasks)
+```
+
+> **Cobertura:** `AutoUpgradeCog` cubre los reinicios por actualización. Para *todos los demás* apagados (`systemctl stop`, `bot.close()`, SIGTERM), `ClaudeChatCog.cog_unload()` proporciona una segunda red de seguridad automática.
 
 ---
 
 ## REST API
 
-API REST opcional para notificaciones y gestión de tareas. Requiere aiohttp:
+REST API opcional para notificaciones y gestión de tareas. Requiere aiohttp:
 
 ```bash
 uv add "claude-code-discord-bridge[api]"
@@ -321,7 +414,7 @@ uv add "claude-code-discord-bridge[api]"
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| GET | `/api/health` | Verificación de salud |
+| GET | `/api/health` | Comprobación de estado |
 | POST | `/api/notify` | Enviar notificación inmediata |
 | POST | `/api/schedule` | Programar una notificación |
 | GET | `/api/scheduled` | Listar notificaciones pendientes |
@@ -330,10 +423,82 @@ uv add "claude-code-discord-bridge[api]"
 | GET | `/api/tasks` | Listar tareas registradas |
 | DELETE | `/api/tasks/{id}` | Eliminar una tarea |
 | PATCH | `/api/tasks/{id}` | Actualizar una tarea (activar/desactivar, cambiar horario) |
-| POST | `/api/spawn` | Crear nuevo hilo de Discord e iniciar sesión de Claude Code (no bloqueante) |
-| POST | `/api/mark-resume` | Marcar un hilo para reanudación automática al siguiente inicio del bot |
-| GET | `/api/lounge` | Leer mensajes recientes del AI Lounge |
-| POST | `/api/lounge` | Publicar un mensaje en el AI Lounge (con `label` opcional) |
+| POST | `/api/spawn` | Crear un nuevo hilo de Discord e iniciar una sesión de Claude Code (no bloqueante) |
+| POST | `/api/mark-resume` | Marcar un hilo para reanudación automática en el próximo inicio del bot |
+
+```bash
+# Enviar notificación
+curl -X POST http://localhost:8080/api/notify \
+  -H "Authorization: Bearer your-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "¡Build exitoso!", "title": "CI/CD"}'
+
+# Registrar tarea recurrente
+curl -X POST http://localhost:8080/api/tasks \
+  -H "Authorization: Bearer your-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Resumen diario de standup", "interval_seconds": 86400}'
+```
+
+---
+
+## Arquitectura
+
+```
+claude_discord/
+  main.py                  # Punto de entrada autónomo
+  setup.py                 # setup_bridge() — conexión de Cogs con una sola llamada
+  bot.py                   # Clase Discord Bot
+  concurrency.py           # Instrucciones de worktree + registro de sesiones activas
+  cogs/
+    claude_chat.py         # Chat interactivo (creación de hilos, manejo de mensajes)
+    skill_command.py       # Comando slash /skill con autocompletado
+    session_manage.py      # /sessions, /sync-sessions, /resume-info
+    scheduler.py           # Ejecutor de tareas periódicas de Claude Code
+    webhook_trigger.py     # Webhook → tarea de Claude Code (CI/CD)
+    auto_upgrade.py        # Webhook → actualización de paquete + reinicio con drenaje
+    event_processor.py     # EventProcessor — máquina de estados para eventos stream-json
+    run_config.py          # RunConfig dataclass — agrupa todos los parámetros de ejecución CLI
+    _run_helper.py         # Capa de orquestación delgada
+  claude/
+    runner.py              # Gestor de subprocesos Claude CLI
+    parser.py              # Parser de eventos stream-json
+    types.py               # Definiciones de tipos para mensajes SDK
+  coordination/
+    service.py             # Publica eventos de ciclo de vida de sesión en canal compartido
+  database/
+    models.py              # Esquema SQLite
+    repository.py          # CRUD de sesiones
+    task_repo.py           # CRUD de tareas programadas
+    ask_repo.py            # CRUD de AskUserQuestion pendientes
+    notification_repo.py   # CRUD de notificaciones programadas
+    resume_repo.py         # CRUD de reanudación al inicio
+    settings_repo.py       # Configuración por servidor
+  discord_ui/
+    status.py              # Gestor de reacciones emoji (con debounce)
+    chunker.py             # División de mensajes con conocimiento de bloques y tablas
+    embeds.py              # Constructores de embeds de Discord
+    ask_view.py            # Botones/Menús de Selección para AskUserQuestion
+    ask_handler.py         # collect_ask_answers() — UI + ciclo de vida DB de AskUserQuestion
+    streaming_manager.py   # StreamingMessageManager — ediciones de mensaje en sitio con debounce
+    tool_timer.py          # LiveToolTimer — contador de tiempo transcurrido para herramientas largas
+    thread_dashboard.py    # Embed fijo en vivo mostrando estados de sesión
+  session_sync.py          # Descubrimiento e importación de sesiones CLI
+  worktree.py              # WorktreeManager — ciclo de vida seguro de git worktree
+  ext/
+    api_server.py          # REST API (opcional, requiere aiohttp)
+  utils/
+    logger.py              # Configuración de logging
+```
+
+### Filosofía de Diseño
+
+- **Invocación CLI, no API** — Invoca `claude -p --output-format stream-json`, dando características completas de Claude Code (CLAUDE.md, skills, herramientas, memoria) sin reimplementarlas
+- **Concurrencia primero** — Múltiples sesiones simultáneas son el caso esperado, no un caso límite; cada sesión recibe instrucciones de worktree, el registro y el canal de coordinación manejan el resto
+- **Discord como pegamento** — Discord proporciona UI, hilos, reacciones, webhooks y notificaciones persistentes; sin frontend personalizado necesario
+- **Framework, no aplicación** — Instala como paquete, añade Cogs a tu bot existente, configura via código
+- **Extensibilidad sin código** — Añade tareas programadas y disparadores webhook sin tocar el código fuente
+- **Seguridad por simplicidad** — ~3000 líneas de Python auditables; solo subprocess exec, sin expansión de shell
 
 ---
 
@@ -343,28 +508,37 @@ uv add "claude-code-discord-bridge[api]"
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-610+ pruebas cubriendo parser, chunker, repositorio, runner, streaming, disparadores webhook, auto-actualización, API REST, UI AskUserQuestion, panel de hilos, tareas programadas, sincronización de sesiones, AI Lounge y reanudación al inicio.
+470+ pruebas cubriendo parser, chunker, repositorio, runner, streaming, disparadores webhook, auto-actualización, REST API, UI de AskUserQuestion, panel de hilos, tareas programadas y sincronización de sesiones.
 
 ---
 
-## Cómo se construyó este proyecto
+## Cómo Se Construyó Este Proyecto
 
-**Esta base de código es desarrollada por [Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — el agente de codificación IA de Anthropic — bajo la dirección de [@ebibibi](https://github.com/ebibibi). El autor humano define los requisitos, revisa los pull requests y aprueba todos los cambios — Claude Code hace la implementación.
+**Todo este código base fue escrito por [Claude Code](https://docs.anthropic.com/en/docs/claude-code)**, el agente de codificación con IA de Anthropic. El autor humano ([@ebibibi](https://github.com/ebibibi)) proporcionó requisitos y dirección en lenguaje natural, pero no leyó ni editó manualmente el código fuente.
 
 Esto significa:
 
-- **La implementación es generada por IA** — arquitectura, código, pruebas, documentación
-- **La revisión humana se aplica a nivel de PR** — cada cambio pasa por pull requests de GitHub y CI antes de hacer merge
-- **Los reportes de bugs y PRs son bienvenidos** — Claude Code será utilizado para abordarlos
-- **Este es un ejemplo del mundo real de software open source dirigido por humanos e implementado por IA**
+- **Todo el código fue generado por IA** — arquitectura, implementación, pruebas, documentación
+- **El autor humano no puede garantizar la corrección a nivel de código** — revisa el código fuente si necesitas certeza
+- **Los reportes de bugs y PRs son bienvenidos** — Claude Code será usado para abordarlos
+- **Este es un ejemplo real de software open source escrito por IA**
 
 El proyecto comenzó el 2026-02-18 y continúa evolucionando a través de conversaciones iterativas con Claude Code.
 
 ---
 
-## Ejemplo del mundo real
+## Ejemplo Real
 
-**[EbiBot](https://github.com/ebibibi/discord-bot)** — Un bot personal de Discord construido sobre este framework. Incluye sincronización automática de documentación (inglés + japonés), notificaciones push, vigilancia de Todoist, verificaciones de salud programadas y CI/CD con GitHub Actions. Úsalo como referencia para construir tu propio bot.
+**[EbiBot](https://github.com/ebibibi/discord-bot)** — Un bot personal de Discord construido sobre este framework. Incluye sincronización automática de documentación (inglés + japonés), notificaciones push, watchdog de Todoist, comprobaciones de salud programadas y CI/CD con GitHub Actions. Úsalo como referencia para construir tu propio bot.
+
+---
+
+## Inspirado en
+
+- [OpenClaw](https://github.com/openclaw/openclaw) — Reacciones emoji de estado, debounce de mensajes, división con conocimiento de bloques
+- [claude-code-discord-bot](https://github.com/timoconnellaus/claude-code-discord-bot) — Enfoque de invocación CLI + stream-json
+- [claude-code-discord](https://github.com/zebbern/claude-code-discord) — Patrones de control de permisos
+- [claude-sandbox-bot](https://github.com/RhysSullivan/claude-sandbox-bot) — Modelo de hilo por conversación
 
 ---
 

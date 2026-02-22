@@ -54,6 +54,15 @@ _DEFAULT_SINCE_HOURS = 24
 SETTING_SYNC_MIN_RESULTS = "sync_min_results"
 _DEFAULT_MIN_RESULTS = 10
 
+# Model management
+SETTING_CLAUDE_MODEL = "claude_model"
+_VALID_MODELS = {"haiku", "sonnet", "opus"}
+_MODEL_CHOICES = [
+    app_commands.Choice(name="Haiku 4.5 (fast, cost-effective)", value="haiku"),
+    app_commands.Choice(name="Sonnet 4.6 (balanced, default)", value="sonnet"),
+    app_commands.Choice(name="Opus 4.6 (powerful, deep reasoning)", value="opus"),
+]
+
 
 class SessionManageCog(commands.Cog):
     """Cog for session listing, resume info, and CLI sync commands."""
@@ -64,11 +73,15 @@ class SessionManageCog(commands.Cog):
         repo: SessionRepository,
         cli_sessions_path: str | None = None,
         settings_repo: SettingsRepository | None = None,
+        runner: object | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
         self.cli_sessions_path = cli_sessions_path
         self.settings_repo = settings_repo
+        # Optional ClaudeRunner reference for reading the default model.
+        # Resolved lazily from ClaudeChatCog if not provided directly.
+        self._runner = runner
 
     async def _get_thread_style(self) -> str:
         """Get the configured thread style, defaulting to 'channel'."""
@@ -96,6 +109,95 @@ class SessionManageCog(commands.Cog):
         if raw is not None and raw.isdigit():
             return int(raw)
         return _DEFAULT_MIN_RESULTS
+
+    def _get_runner(self) -> object | None:
+        """Return the runner, resolving it from ClaudeChatCog if not set directly."""
+        if self._runner is not None:
+            return self._runner
+        chat_cog = self.bot.get_cog("ClaudeChatCog")
+        if chat_cog is not None:
+            return getattr(chat_cog, "runner", None)
+        return None
+
+    async def _get_effective_model(self) -> str:
+        """Return the effective model: settings_repo override or runner default."""
+        if self.settings_repo is not None:
+            stored = await self.settings_repo.get(SETTING_CLAUDE_MODEL)
+            if stored:
+                return stored
+        runner = self._get_runner()
+        if runner is not None and hasattr(runner, "model"):
+            return runner.model  # type: ignore[return-value]
+        return "sonnet"
+
+    # ── Model commands ────────────────────────────────────────────────────────
+
+    @app_commands.command(name="model-show", description="Show the current Claude model")
+    async def model_show(self, interaction: discord.Interaction) -> None:
+        """Display the current global model and, if in a thread, the per-session model."""
+        effective_model = await self._get_effective_model()
+
+        embed = discord.Embed(
+            title="🤖 Current Claude Model",
+            color=COLOR_INFO,
+        )
+
+        # Global / default model field
+        stored = await self.settings_repo.get(SETTING_CLAUDE_MODEL) if self.settings_repo else None
+        runner = self._get_runner()
+        runner_model = getattr(runner, "model", "sonnet") if runner else "sonnet"
+        if stored:
+            embed.description = (
+                f"**Global override:** `{stored}`\n*(runner default: `{runner_model}`)*"
+            )
+        else:
+            embed.description = (
+                f"**Default model:** `{runner_model}`\n"
+                "*(no override set — use `/model-set` to change)*"
+            )
+
+        # Per-thread session model (if inside a thread)
+        if isinstance(interaction.channel, discord.Thread):
+            record = await self.repo.get(interaction.channel.id)
+            if record and record.model:
+                embed.add_field(
+                    name="This thread's last session",
+                    value=f"`{record.model}`",
+                    inline=False,
+                )
+
+        embed.set_footer(text=f"Effective model for new sessions: {effective_model}")
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="model-set", description="Change the global Claude model for new sessions"
+    )  # noqa: E501
+    @app_commands.describe(model="Model to use for all new Claude sessions")
+    @app_commands.choices(model=_MODEL_CHOICES)
+    async def model_set(self, interaction: discord.Interaction, model: str) -> None:
+        """Set the global default model stored in settings_repo."""
+        if model not in _VALID_MODELS:
+            await interaction.response.send_message(
+                f"❌ Unknown model `{model}`. Valid choices: {', '.join(sorted(_VALID_MODELS))}",
+                ephemeral=True,
+            )
+            return
+
+        if self.settings_repo is None:
+            await interaction.response.send_message(
+                "❌ Settings repository is unavailable — model cannot be persisted.",
+                ephemeral=True,
+            )
+            return
+
+        await self.settings_repo.set(SETTING_CLAUDE_MODEL, model)
+
+        embed = discord.Embed(
+            title="✅ Model Updated",
+            description=f"Global model set to **`{model}`**.\nAll new sessions will use this model.",  # noqa: E501
+            color=COLOR_SUCCESS,
+        )
+        await interaction.response.send_message(embed=embed)
 
     @app_commands.command(
         name="sync-settings",

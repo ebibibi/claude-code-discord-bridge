@@ -11,6 +11,7 @@ Handles the core message flow:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from typing import TYPE_CHECKING
@@ -26,6 +27,7 @@ from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..database.resume_repo import PendingResumeRepository
+from ..database.settings_repo import SettingsRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
@@ -65,6 +67,7 @@ class ClaudeChatCog(commands.Cog):
         ask_repo: PendingAskRepository | None = None,
         lounge_repo: LoungeRepository | None = None,
         resume_repo: PendingResumeRepository | None = None,
+        settings_repo: SettingsRepository | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -74,6 +77,10 @@ class ClaudeChatCog(commands.Cog):
         self._registry = registry or getattr(bot, "session_registry", None)
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, ClaudeRunner] = {}
+        # Tracks the asyncio.Task running _run_claude for each thread.
+        # Used by _handle_thread_reply to wait for an interrupted session
+        # to fully clean up before starting the replacement session.
+        self._active_tasks: dict[int, asyncio.Task] = {}
         # Dashboard may be None until bot is ready; resolved lazily in _get_dashboard()
         self._dashboard = dashboard
         # Coordination service resolved lazily from bot if not supplied directly
@@ -84,6 +91,8 @@ class ClaudeChatCog(commands.Cog):
         self._lounge_repo = lounge_repo or getattr(bot, "lounge_repo", None)
         # Pending resume repo (optional — startup resume disabled when None)
         self._resume_repo = resume_repo or getattr(bot, "resume_repo", None)
+        # Settings repo for dynamic model lookup (optional — falls back to runner.model)
+        self._settings_repo = settings_repo or getattr(bot, "settings_repo", None)
 
     @property
     def active_session_count(self) -> int:
@@ -100,6 +109,19 @@ class ClaudeChatCog(commands.Cog):
         if self._dashboard is None:
             self._dashboard = getattr(self.bot, "thread_dashboard", None)
         return self._dashboard
+
+    async def _get_current_model(self) -> str | None:
+        """Return the model override from settings_repo, or None to use runner default.
+
+        When /model set has been used to change the global model, this returns
+        the stored value. Returns None if no override is set or settings_repo
+        is unavailable.
+        """
+        if self._settings_repo is None:
+            return None
+        from .session_manage import SETTING_CLAUDE_MODEL
+
+        return await self._settings_repo.get(SETTING_CLAUDE_MODEL)
 
     def _get_coordination(self) -> CoordinationService:
         """Return the coordination service (zero-config: auto-creates from env if needed).
@@ -369,13 +391,32 @@ class ClaudeChatCog(commands.Cog):
                 logger.error("Failed to resume session in thread %d", thread_id, exc_info=True)
 
     async def _handle_thread_reply(self, message: discord.Message) -> None:
-        """Continue a Claude Code session in an existing thread."""
+        """Continue a Claude Code session in an existing thread.
+
+        If Claude is already running in this thread, sends SIGINT to the active
+        session (graceful interrupt, like pressing Escape) and waits for it to
+        finish cleaning up before starting the new session.  This prevents two
+        Claude processes from running in parallel in the same thread.
+        """
         thread = message.channel
         assert isinstance(thread, discord.Thread)
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
         prompt = await self._build_prompt(message)
+
+        # Interrupt any active session in this thread before starting a new one.
+        existing_runner = self._active_runners.get(thread.id)
+        existing_task = self._active_tasks.get(thread.id)
+        if existing_runner is not None:
+            await thread.send("-# ⚡ Interrupted. Starting with new instruction...")
+            await existing_runner.interrupt()
+            # Wait for the interrupted _run_claude to finish its finally block
+            # (which releases the semaphore and removes entries from dicts).
+            if existing_task is not None and not existing_task.done():
+                with contextlib.suppress(Exception):
+                    await existing_task
+
         await self._run_claude(message, thread, prompt, session_id=session_id)
 
     async def _build_prompt(self, message: discord.Message) -> str:
@@ -440,6 +481,12 @@ class ClaudeChatCog(commands.Cog):
             coordination = self._get_coordination()
             description = prompt[:100].replace("\n", " ")
 
+            # Register the current asyncio Task so _handle_thread_reply can
+            # await it after sending SIGINT to the runner.
+            current_task = asyncio.current_task()
+            if current_task is not None:
+                self._active_tasks[thread.id] = current_task
+
             # Mark thread as PROCESSING when Claude starts
             if dashboard is not None:
                 await dashboard.set_state(
@@ -449,10 +496,17 @@ class ClaudeChatCog(commands.Cog):
                     thread=thread,
                 )
 
-            status = StatusManager(user_message)
+            async def _notify_stall() -> None:
+                await thread.send(
+                    "-# \u26a0\ufe0f No activity for 30s — could be extended thinking "
+                    "or context compression. Will resume automatically."
+                )
+
+            status = StatusManager(user_message, on_hard_stall=_notify_stall)
             await status.set_thinking()
 
-            runner = self.runner.clone(thread_id=thread.id)
+            model_override = await self._get_current_model()
+            runner = self.runner.clone(thread_id=thread.id, model=model_override)
             self._active_runners[thread.id] = runner
 
             stop_view = StopView(runner)
@@ -478,6 +532,7 @@ class ClaudeChatCog(commands.Cog):
             finally:
                 await stop_view.disable()
                 self._active_runners.pop(thread.id, None)
+                self._active_tasks.pop(thread.id, None)
 
                 # Announce session end to coordination channel (no-op if unconfigured)
                 await coordination.post_session_end(thread)

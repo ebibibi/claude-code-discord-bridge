@@ -185,51 +185,68 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 
 ## Quick Start — Claude in Discord in 5 Minutes
 
-### Step 1 — Prerequisites
+### Step 1 — Create a Discord Bot (one-time, ~2 minutes)
 
-- **Python 3.10+** and **[uv](https://docs.astral.sh/uv/)** installed
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** installed and authenticated (`claude --version` should work)
-- A **Discord server** where you have admin access
+1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application**
+2. Navigate to **Bot** → enable **Message Content Intent** under Privileged Gateway Intents
+3. Copy the bot **Token**
+4. Go to **OAuth2 → URL Generator**: Scopes `bot` + `applications.commands`, Permissions: Send Messages, Create Public Threads, Send Messages in Threads, Add Reactions, Manage Messages, Read Message History
+5. Open the generated URL → invite the bot to your server
 
-### Step 2 — Create a Discord Bot
+### Step 2 — Run the Setup Wizard
 
-1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) and click **New Application**
-2. Navigate to **Bot** → click **Add Bot**
-3. Under **Privileged Gateway Intents**, enable **Message Content Intent**
-4. Copy the bot **Token** (you'll need this shortly)
-5. Go to **OAuth2 → URL Generator**:
-   - Scopes: `bot`, `applications.commands`
-   - Bot Permissions: `Send Messages`, `Create Public Threads`, `Send Messages in Threads`, `Add Reactions`, `Manage Messages`, `Read Message History`
-6. Open the generated URL in your browser and invite the bot to your server
-
-### Step 3 — Get Your Discord IDs
-
-Enable **Developer Mode** in Discord (Settings → Advanced → Developer Mode), then:
-
-- **Channel ID**: Right-click the channel where Claude should listen → **Copy Channel ID**
-- **Your User ID**: Right-click your own username → **Copy User ID**
-
-### Step 4 — Run It
+No cloning or `.env` editing required — the wizard does it for you:
 
 ```bash
+# With uvx (no install needed):
+uvx --from "git+https://github.com/ebibibi/claude-code-discord-bridge.git" ccdb setup
+
+# Or after cloning:
 git clone https://github.com/ebibibi/claude-code-discord-bridge.git
 cd claude-code-discord-bridge
-cp .env.example .env
+uv run ccdb setup
 ```
 
-Edit `.env`:
+The wizard will:
+1. Validate your bot token against the Discord API
+2. **Automatically list available channels** — just pick a number (no ID copying)
+3. Ask for your working directory and model preference
+4. Write `.env` and offer to start the bot immediately
 
-```env
-DISCORD_BOT_TOKEN=your-bot-token-here
-DISCORD_CHANNEL_ID=123456789012345678    # the channel you copied above
-DISCORD_OWNER_ID=987654321098765432      # your user ID (for @-mentions)
-CLAUDE_WORKING_DIR=/path/to/your/project
+```
+╔══════════════════════════════════════════════════════╗
+║          ccdb setup — interactive wizard             ║
+╚══════════════════════════════════════════════════════╝
+
+Step 1 — Claude Code CLI
+  ✅  claude found
+
+Step 2 — Discord Bot Token
+  Bot Token: [paste here]
+  Validating token… ✅  Logged in as MyBot#1234
+
+Step 3 — Discord Channel ID
+  Fetching channels via Discord API… ✅  Found 5 text channel(s)
+
+   1. #general        (My Server)
+   2. #claude-code    (My Server)
+   3. #dev            (My Server)
+   ...
+
+  Select channel [1-5]: 2
+  ✅  #claude-code (123456789012345678)
+
+  ...
+
+  ✅  Written: .env
+  Start the bot now? [Y/n]: y
 ```
 
-Then start the bot:
+### Start / Stop
 
 ```bash
-uv run python -m claude_discord.main
+ccdb start    # start the bot (reads .env in current dir)
+ccdb start --env /path/to/.env   # custom .env location
 ```
 
 Send a message in the configured channel — Claude will reply in a new thread.

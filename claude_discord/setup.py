@@ -161,6 +161,7 @@ async def setup_bridge(
         ask_repo=ask_repo,
         lounge_repo=lounge_repo,
         resume_repo=resume_repo,
+        settings_repo=settings_repo,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")

@@ -98,16 +98,19 @@ class ClaudeRunner:
         finally:
             await self._cleanup()
 
-    def clone(self, thread_id: int | None = None) -> ClaudeRunner:
+    def clone(self, thread_id: int | None = None, model: str | None = None) -> ClaudeRunner:
         """Create a fresh runner with the same configuration but no active process.
 
         Args:
             thread_id: Discord thread ID to inject as DISCORD_THREAD_ID env var.
                        Overrides the instance-level thread_id if provided.
+            model: Optional model override for this clone. When provided, the clone
+                   uses this model instead of self.model. Useful for per-session
+                   model switching without mutating the shared base runner.
         """
         return ClaudeRunner(
             command=self.command,
-            model=self.model,
+            model=model if model is not None else self.model,
             permission_mode=self.permission_mode,
             working_dir=self.working_dir,
             timeout_seconds=self.timeout_seconds,
