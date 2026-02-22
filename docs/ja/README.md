@@ -141,9 +141,13 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **ホットリロード** — `~/.claude/skills/` に追加した新スキルを自動検出（60 秒更新、再起動不要）
 - **並行セッション** — 設定可能な上限での複数並行セッション
 - **削除せず停止** — `/stop` でセッションを保持したまま停止し、リジューム可能
-- **添付ファイル対応** — テキストファイルをプロンプトに自動追加（最大 5 ファイル × 50 KB）
+- **添付ファイル対応** — テキストファイルをプロンプトに自動追加（最大 5 ファイル × 50 KB）；画像は `--image` フラグ経由で渡す（最大 4 枚 × 5 MB）
 - **タイムアウト通知** — 経過時間とリジューム手順付きの embed 表示
 - **インタラクティブな質問** — `AskUserQuestion` を Discord ボタンまたは Select Menu でレンダリング。回答でセッション再開。ボタンは Bot 再起動後も有効
+- **Plan Mode** — Claude が `ExitPlanMode` を呼び出すと、プラン全文と Approve/Cancel ボタンを含む Discord embed を表示；承認後にのみ実行を開始；5 分でタイムアウト（自動キャンセル）
+- **ツール実行許可リクエスト** — Claude がツールを実行するために許可が必要な場合、ツール名と入力内容を示した Allow/Deny ボタンを Discord に表示；2 分間応答なしで自動拒否
+- **MCP Elicitation** — MCP サーバーが Discord 経由でユーザー入力を要求（form-mode: JSON スキーマから最大 5 フィールドの Modal；url-mode: URL ボタン + Done 確認）；5 分でタイムアウト
+- **TodoWrite ライブ進捗** — Claude が `TodoWrite` を呼び出すと Discord embed を一度投稿し、以降の更新はその embed をインプレースで編集；✅ 完了、🔄 実行中（`activeForm` ラベル付き）、⬜ 保留中の各状態を表示
 - **スレッドダッシュボード** — アクティブ/待機スレッドを表示するライブピン embed。入力が必要なときはオーナーを @mention
 - **トークン使用量** — セッション完了 embed にキャッシュヒット率とトークン数を表示
 - **コンテキスト使用率** — セッション完了 embed にコンテキストウィンドウの使用率（入力＋キャッシュトークン。出力トークンは除外）と自動コンパクトまでの残容量を表示。83.5% 以上で ⚠️ 警告
@@ -517,6 +521,9 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — デバウンス付きインプレース編集
     tool_timer.py          # LiveToolTimer — 長時間ツール実行の経過時間カウンター
     thread_dashboard.py    # スレッドのセッション状態を表示する live ピン embed
+    plan_view.py           # Plan Mode 承認ボタン（Approve/Cancel）
+    permission_view.py     # ツール実行許可ボタン（Allow/Deny）
+    elicitation_view.py    # MCP Elicitation 用 Discord UI（Modal フォームまたは URL ボタン）
   session_sync.py          # CLI セッションの検出とインポート
   worktree.py              # WorktreeManager — git worktree の安全なライフサイクル管理（セッション終了・起動時のクリーンアップ）
   ext/
@@ -542,7 +549,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-685 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード（`/upgrade` スラッシュコマンド、スレッド内実行、承認ボタン含む）、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジューム、モデル切り替え、コンパクト検出をカバーしています。
+700 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード（`/upgrade` スラッシュコマンド、スレッド内実行、承認ボタン含む）、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジューム、モデル切り替え、コンパクト検出、TodoWrite 進捗 embed、許可／Elicitation／Plan Mode イベントパースをカバーしています。
 
 ---
 
