@@ -43,7 +43,13 @@ main（常にリリース可能）
 git clone https://github.com/ebibibi/claude-code-discord-bridge.git
 cd claude-code-discord-bridge
 uv sync --dev
+make setup   # git hooks を登録（クローン後に一度だけ実行）
 ```
+
+> **`make setup` は必須です** — 新しくクローンするたびに実行してください。`.githooks/` の pre-commit hook を有効化し、ステージされた Python ファイルの自動フォーマットと lint を行います。
+> 実行しないと hook が動作せず、不正なコードがローカルで通過してしまいます（CI では検出されますが、予期せぬビルド失敗に驚くことになります）。
+>
+> `make check-setup` をいつでも実行して、環境が正常かどうか確認できます。
 
 ## テストの実行
 
