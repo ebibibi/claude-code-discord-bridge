@@ -77,21 +77,24 @@ class ClaudeRunner:
         env = self._build_env()
         cwd = self.working_dir or os.getcwd()
 
-        logger.info("Starting Claude CLI: %s", " ".join(args[:6]) + " ...")
+        logger.info(
+            "Starting Claude CLI: %s (cwd=%s, pid will follow)", " ".join(args[:6]) + " ...", cwd
+        )
 
-        # stdin=PIPE enables bidirectional communication: we can send
-        # tool results / permission responses back to the Claude process
-        # while it is still running. This is required for Plan Mode (#44),
-        # Permission requests (#47), and MCP elicitation (#48).
+        # Claude CLI >=2.1.50 blocks on startup when stdin is an open pipe,
+        # even in non-interactive (-p) mode.  Use DEVNULL to avoid the hang.
+        # inject_tool_result() will log a warning if called without stdin.
         self._process = await asyncio.create_subprocess_exec(
             *args,
-            stdin=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
             env=env,
             limit=10 * 1024 * 1024,  # 10MB — stream-json lines can be large
         )
+
+        logger.info("Claude CLI started: pid=%s", self._process.pid)
 
         try:
             async for event in self._read_stream():
@@ -274,11 +277,16 @@ class ClaudeRunner:
         if self._process is None or self._process.stdout is None:
             raise RuntimeError("Process not started")
 
+        line_count = 0
         while True:
             line = await self._process.stdout.readline()
             if not line:
+                logger.info("Claude CLI stdout EOF after %d lines", line_count)
                 break
+            line_count += 1
             decoded = line.decode("utf-8", errors="replace")
+            if line_count <= 3:
+                logger.info("Claude CLI stdout line %d: %.100s", line_count, decoded.strip())
             event = parse_line(decoded)
             if event:
                 yield event
