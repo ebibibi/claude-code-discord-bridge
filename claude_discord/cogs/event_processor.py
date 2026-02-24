@@ -388,23 +388,24 @@ class EventProcessor:
         )
 
     async def _handle_todo_write(self, event: StreamEvent) -> None:
-        """Post or edit the live todo progress embed.
+        """Always repost the todo embed at the bottom of the thread.
 
-        On the first TodoWrite call the embed is posted as a new message.
-        On subsequent calls (Claude updating the list) the same message is
-        edited in-place so the user sees a single, live progress view.
+        Each TodoWrite call deletes the previous embed (if any) and posts a
+        fresh message so the task list stays visible as the conversation grows.
         """
         assert event.todo_list is not None
 
         embed = todo_embed(event.todo_list)
-        if self._state.todo_message is None:
-            # First time: post a new embed and store the reference.
+
+        # Delete the previous todo message so we can repost at the bottom.
+        if self._state.todo_message is not None:
             with contextlib.suppress(Exception):
-                self._state.todo_message = await self._config.thread.send(embed=embed)
-        else:
-            # Subsequent updates: edit in-place.
-            with contextlib.suppress(Exception):
-                await self._state.todo_message.edit(embed=embed)
+                await self._state.todo_message.delete()
+            self._state.todo_message = None
+
+        # Post a fresh message at the bottom of the thread.
+        with contextlib.suppress(Exception):
+            self._state.todo_message = await self._config.thread.send(embed=embed)
 
     async def _bump_stop(self) -> None:
         """Move the Stop button to the bottom of the thread if configured."""

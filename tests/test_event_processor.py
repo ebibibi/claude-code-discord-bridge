@@ -21,6 +21,7 @@ from claude_discord.claude.types import (
     AskQuestion,
     MessageType,
     StreamEvent,
+    TodoItem,
     ToolCategory,
     ToolUseEvent,
 )
@@ -520,3 +521,80 @@ class TestCompactHandling:
         await processor.process(event)
 
         status._reset_stall_timer.assert_called_once()
+
+
+class TestTodoWrite:
+    """TodoWrite event handling.
+
+    Each update deletes the previous embed and reposts at the bottom of the
+    thread so the task list is always visible as the conversation progresses.
+    """
+
+    def _make_todo_event(self) -> StreamEvent:
+        return StreamEvent(
+            message_type=MessageType.ASSISTANT,
+            todo_list=[
+                TodoItem(content="Task 1", status="in_progress", active_form="Doing task 1")
+            ],
+        )
+
+    @pytest.mark.asyncio
+    async def test_first_todo_posts_new_message(self, thread: MagicMock, runner: MagicMock) -> None:
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(self._make_todo_event())
+
+        embed_sends = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert len(embed_sends) == 1
+
+    @pytest.mark.asyncio
+    async def test_second_todo_deletes_old_and_reposts(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """On the second TodoWrite, the previous message must be deleted and a new one posted."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        # First post — let the real flow run so todo_message is set.
+        await p.process(self._make_todo_event())
+
+        # Replace the stored reference with a spy so we can assert on delete().
+        old_msg = MagicMock(spec=discord.Message)
+        old_msg.delete = AsyncMock()
+        p._state.todo_message = old_msg
+
+        # Second update
+        await p.process(self._make_todo_event())
+
+        old_msg.delete.assert_called_once()
+        embed_sends = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert len(embed_sends) == 2  # initial post + repost
+
+    @pytest.mark.asyncio
+    async def test_todo_delete_failure_does_not_raise(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Delete failures (e.g. message already gone) must not crash the session."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        old_msg = MagicMock(spec=discord.Message)
+        old_msg.delete = AsyncMock(side_effect=Exception("Unknown Message"))
+        p._state.todo_message = old_msg
+
+        # Must not raise — failure is suppressed.
+        await p.process(self._make_todo_event())
+
+    @pytest.mark.asyncio
+    async def test_todo_message_none_after_send_failure(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """If the repost send() fails, todo_message must be None (no stale reference)."""
+        thread.send.side_effect = Exception("Server disconnected")
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(self._make_todo_event())
+
+        assert p._state.todo_message is None
