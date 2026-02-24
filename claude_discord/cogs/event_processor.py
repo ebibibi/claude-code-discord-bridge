@@ -25,6 +25,7 @@ from ..discord_ui.embeds import (
     thinking_embed,
     todo_embed,
     tool_result_embed,
+    tool_result_preview_embed,
     tool_use_embed,
 )
 from ..discord_ui.permission_view import PermissionView
@@ -39,6 +40,8 @@ logger = logging.getLogger(__name__)
 # Sized to show ~30 lines of typical output (100 chars/line × 30 = 3000).
 # The embed description limit is 4096, so this leaves room for code block markers.
 _TOOL_RESULT_MAX_CHARS = 3000
+# Lines of output shown before the "展開 ▼" button appears.
+_COLLAPSED_LINES = 3
 
 
 def _truncate_result(content: str) -> str:
@@ -229,13 +232,17 @@ class EventProcessor:
         tool_msg = self._state.active_tools.get(event.tool_result_id)
         if tool_msg and event.tool_result_content:
             truncated = _truncate_result(event.tool_result_content)
-            with contextlib.suppress(Exception):
-                await tool_msg.edit(
-                    embed=tool_result_embed(
-                        tool_msg.embeds[0].title or "",
-                        truncated,
-                    )
-                )
+            title = tool_msg.embeds[0].title or ""
+            if len(truncated.split("\n")) > _COLLAPSED_LINES:
+                from ..discord_ui.views import ToolResultView
+
+                embed = tool_result_preview_embed(title, truncated)
+                view = ToolResultView(title, truncated)
+                with contextlib.suppress(Exception):
+                    await tool_msg.edit(embed=embed, view=view)
+            else:
+                with contextlib.suppress(Exception):
+                    await tool_msg.edit(embed=tool_result_embed(title, truncated))
 
     async def _on_progress(self, event: StreamEvent) -> None:
         """Handle PROGRESS events — reset stall timer (compact in progress)."""

@@ -8,7 +8,7 @@ import logging
 import discord
 
 from ..claude.runner import ClaudeRunner
-from .embeds import stopped_embed
+from .embeds import stopped_embed, tool_result_embed, tool_result_preview_embed
 
 logger = logging.getLogger(__name__)
 
@@ -93,3 +93,29 @@ class StopView(discord.ui.View):
         if target:
             with contextlib.suppress(discord.HTTPException):
                 await target.edit(view=self)
+
+
+class ToolResultView(discord.ui.View):
+    """▼/▲ toggle button that collapses or expands a tool result embed.
+
+    Posted alongside the tool result when the output exceeds the preview
+    threshold, so the thread stays compact by default.
+    """
+
+    def __init__(self, tool_title: str, full_content: str) -> None:
+        super().__init__(timeout=3600)
+        self._tool_title = tool_title
+        self._full_content = full_content
+        self._expanded = False
+
+    @discord.ui.button(label="展開 ▼", style=discord.ButtonStyle.secondary)
+    async def toggle(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        """Toggle between collapsed (preview) and expanded (full) output."""
+        self._expanded = not self._expanded
+        if self._expanded:
+            button.label = "折りたたむ ▲"
+            embed = tool_result_embed(self._tool_title, self._full_content)
+        else:
+            button.label = "展開 ▼"
+            embed = tool_result_preview_embed(self._tool_title, self._full_content)
+        await interaction.response.edit_message(embed=embed, view=self)
