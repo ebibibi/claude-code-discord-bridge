@@ -355,3 +355,54 @@ class TestTodoEmbed:
         embed = todo_embed([])
         assert embed.description is not None
         assert "no tasks" in embed.description
+
+
+class TestToolResultPreviewEmbed:
+    """tool_result_preview_embed — collapsed view showing first 3 lines."""
+
+    def test_first_3_lines_visible(self) -> None:
+        from claude_discord.discord_ui.embeds import tool_result_preview_embed
+
+        content = "\n".join(f"line{i}" for i in range(10))
+        embed = tool_result_preview_embed("🔧 Running: cat", content)
+
+        assert embed.description is not None
+        assert "line0" in embed.description
+        assert "line1" in embed.description
+        assert "line2" in embed.description
+
+    def test_remaining_lines_hidden(self) -> None:
+        from claude_discord.discord_ui.embeds import tool_result_preview_embed
+
+        content = "\n".join(f"line{i}" for i in range(10))
+        embed = tool_result_preview_embed("🔧 Running: cat", content)
+
+        assert "line3" not in embed.description
+
+    def test_hidden_line_count_shown(self) -> None:
+        from claude_discord.discord_ui.embeds import tool_result_preview_embed
+
+        content = "\n".join(f"line{i}" for i in range(10))
+        embed = tool_result_preview_embed("🔧 Running: cat", content)
+
+        # 10 lines total, 3 shown → 7 hidden
+        assert "+7" in embed.description
+
+    def test_short_content_shows_all(self) -> None:
+        """3 lines or fewer — no hidden-line hint needed."""
+        from claude_discord.discord_ui.embeds import tool_result_preview_embed
+
+        content = "line1\nline2\nline3"
+        embed = tool_result_preview_embed("🔧 Running: cat", content)
+
+        assert "line1" in embed.description
+        assert "line2" in embed.description
+        assert "line3" in embed.description
+        assert "lines" not in embed.description  # No hidden-line hint
+
+    def test_title_strips_trailing_dots(self) -> None:
+        from claude_discord.discord_ui.embeds import tool_result_preview_embed
+
+        embed = tool_result_preview_embed("🔧 Running: cat...", "output")
+        assert embed.title is not None
+        assert not embed.title.endswith(".")

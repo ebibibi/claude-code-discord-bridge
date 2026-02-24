@@ -304,6 +304,76 @@ class TestOnToolResult:
         fake_msg.edit.assert_called_once()
 
 
+class TestToolResultCollapse:
+    """Tool results with >3 lines are shown collapsed with an expand button."""
+
+    def _plant_tool_msg(self, p: EventProcessor, tool_id: str) -> MagicMock:
+        fake_embed = MagicMock(spec=discord.Embed)
+        fake_embed.title = "🔧 Running: cat file..."
+        fake_msg = MagicMock(spec=discord.Message)
+        fake_msg.embeds = [fake_embed]
+        fake_msg.edit = AsyncMock()
+        p._state.active_tools[tool_id] = fake_msg
+        return fake_msg
+
+    def _make_result_event(self, tool_id: str, content: str) -> StreamEvent:
+        return StreamEvent(
+            message_type=MessageType.USER,
+            tool_result_id=tool_id,
+            tool_result_content=content,
+        )
+
+    @pytest.mark.asyncio
+    async def test_short_result_no_expand_button(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """3 lines or fewer → full embed shown, no expand button."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        fake_msg = self._plant_tool_msg(p, "t1")
+
+        await p.process(self._make_result_event("t1", "line1\nline2\nline3"))
+
+        call_kwargs = fake_msg.edit.call_args.kwargs
+        assert "view" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_long_result_adds_expand_button(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """More than 3 lines → ToolResultView attached to the message."""
+        from claude_discord.discord_ui.views import ToolResultView
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        fake_msg = self._plant_tool_msg(p, "t1")
+
+        content = "\n".join(f"line{i}" for i in range(10))
+        await p.process(self._make_result_event("t1", content))
+
+        call_kwargs = fake_msg.edit.call_args.kwargs
+        assert "view" in call_kwargs
+        assert isinstance(call_kwargs["view"], ToolResultView)
+
+    @pytest.mark.asyncio
+    async def test_long_result_embed_shows_only_preview(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """The collapsed embed description has first 3 lines but not line4+."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        fake_msg = self._plant_tool_msg(p, "t1")
+
+        content = "\n".join(f"line{i}" for i in range(10))
+        await p.process(self._make_result_event("t1", content))
+
+        embed = fake_msg.edit.call_args.kwargs["embed"]
+        assert "line0" in embed.description
+        assert "line2" in embed.description
+        assert "line3" not in embed.description
+        assert "+7" in embed.description  # 10 total - 3 shown = 7 hidden
+
+
 class TestAskUserQuestion:
     """AskUserQuestion detection."""
 

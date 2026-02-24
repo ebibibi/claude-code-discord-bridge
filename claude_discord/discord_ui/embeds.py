@@ -128,6 +128,26 @@ def session_complete_embed(
     return embed
 
 
+_PREVIEW_LINES = 3
+
+
+def tool_result_preview_embed(tool_title: str, full_content: str) -> discord.Embed:
+    """Collapsed embed showing the first _PREVIEW_LINES lines and a hidden-count hint.
+
+    Paired with ToolResultView so the user can expand on demand.
+    """
+    title = tool_title.rstrip(".")
+    embed = discord.Embed(title=title[:256], color=COLOR_INFO)
+    if full_content:
+        lines = full_content.split("\n")
+        preview = "\n".join(lines[:_PREVIEW_LINES])
+        hidden = len(lines) - _PREVIEW_LINES
+        if hidden > 0:
+            preview += f"\n... +{hidden} lines"
+        embed.description = f"```\n{preview}\n```"
+    return embed
+
+
 def tool_result_embed(tool_title: str, result_content: str) -> discord.Embed:
     """Create an embed for a completed tool with its result.
 
