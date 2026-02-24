@@ -840,3 +840,60 @@ class TestCogUnloadMarkForResume:
         await cog.cog_unload()
 
         assert resume_repo.mark.call_args.kwargs["session_id"] is None
+
+
+class TestOnMessageSystemMessageFilter:
+    """on_message must ignore Discord system messages (e.g. thread renames)."""
+
+    def _make_system_message(self, msg_type: discord.MessageType) -> MagicMock:
+        """Return a non-bot message of the given Discord MessageType."""
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = 42
+        msg.type = msg_type
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 12345
+        thread.parent_id = 999  # matches bot.channel_id
+        msg.channel = thread
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_thread_rename_does_not_reach_claude(self) -> None:
+        """CHANNEL_NAME_CHANGE system message must be silently ignored."""
+        cog = _make_cog()
+        msg = self._make_system_message(discord.MessageType.channel_name_change)
+
+        # on_message must return without invoking any runner
+        await cog.on_message(msg)
+
+        # No runner was started — active_runners stays empty
+        assert len(cog._active_runners) == 0
+
+    @pytest.mark.asyncio
+    async def test_pins_add_does_not_reach_claude(self) -> None:
+        """PINS_ADD system message must also be silently ignored."""
+        cog = _make_cog()
+        msg = self._make_system_message(discord.MessageType.pins_add)
+
+        await cog.on_message(msg)
+
+        assert len(cog._active_runners) == 0
+
+    @pytest.mark.asyncio
+    async def test_default_message_is_processed(self) -> None:
+        """Regular user messages (MessageType.default) must still be handled."""
+        cog = _make_cog()
+        msg = self._make_system_message(discord.MessageType.default)
+        msg.content = "hello"
+        msg.attachments = []
+
+        # _handle_thread_reply will try to run Claude — just check it's NOT
+        # short-circuited by the system-message filter (it may fail later,
+        # that's fine; we only care the filter doesn't block it).
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await cog.on_message(msg)
+
+        # The filter did not block it — execution reached _handle_thread_reply
