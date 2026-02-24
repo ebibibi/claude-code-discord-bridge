@@ -93,11 +93,14 @@ gh release view v1.4.0 --repo ebibibi/claude-code-discord-bridge
 PR マージ（auto-approve.yml）
   └── repository_dispatch: pr-merged
         └── auto-version-bump.yml
-              ├── PR タイトルに [release] あり → 現在バージョンでタグ & Release（バンプなし）
-              └── [release] なし → patch++ してコミット → タグ & Release
+              ├── [release] あり → 現在バージョンでタグ & Release（バンプなし）
+              ├── [skip-bump] あり → タグ & Release のみ（bump PR のマージ後）
+              └── どちらもなし → bump PR を作成（auto/bump-vX.Y.Z ブランチ）
+                    └── auto-approve → マージ → dispatch [skip-bump] → タグ & Release
 ```
 
-docs-sync PR（翻訳・ドキュメント更新）はバンプも Release も発生しない。
+- docs-sync PR（翻訳・ドキュメント更新）はバンプも Release も発生しない
+- patch-bump は PR 経由で行う（ブランチ保護ルールを尊重）
 
 ---
 
