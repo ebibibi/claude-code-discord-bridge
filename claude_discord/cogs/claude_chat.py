@@ -151,6 +151,11 @@ class ClaudeChatCog(commands.Cog):
         if message.author.bot:
             return
 
+        # Ignore Discord system messages (thread renames, pins, call events, etc.)
+        # Only MessageType.default and MessageType.reply are genuine user text.
+        if message.type not in (discord.MessageType.default, discord.MessageType.reply):
+            return
+
         # Authorization check — if allowed_user_ids is set, only those users
         # can invoke Claude.  When unset, channel-level Discord permissions
         # are the only gate (suitable for private servers).
