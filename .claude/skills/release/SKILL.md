@@ -94,13 +94,12 @@ PR マージ（auto-approve.yml）
   └── repository_dispatch: pr-merged
         └── auto-version-bump.yml
               ├── [release] あり → 現在バージョンでタグ & Release（バンプなし）
-              ├── [skip-bump] あり → タグ & Release のみ（bump PR のマージ後）
-              └── どちらもなし → bump PR を作成（auto/bump-vX.Y.Z ブランチ）
-                    └── auto-approve → マージ → dispatch [skip-bump] → タグ & Release
+              └── [release] なし → patch++ を main に直接コミット → タグ & Release
 ```
 
 - docs-sync PR（翻訳・ドキュメント更新）はバンプも Release も発生しない
-- patch-bump は PR 経由で行う（ブランチ保護ルールを尊重）
+- patch-bump は main への直接コミット（`enforce_admins=false` で許可）
+- リリース時にはえびログ（Discord）に自動通知
 
 ---
 

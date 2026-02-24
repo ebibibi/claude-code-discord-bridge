@@ -6,9 +6,10 @@ name: Auto Patch Version Bump
 # by GitHub, but repository_dispatch is explicitly sent so it always fires).
 #
 # Two modes, determined by PR title:
-#   [release] in title → tag & release the current version as-is (no bump, no commit)
-#   [skip-bump]        → do nothing (prevents infinite loop from bump PRs)
-#   anything else      → bump patch (1.3.0 → 1.3.1) via PR, tag after merge
+#   [release] in title → tag & release the current version as-is (no bump)
+#   anything else      → bump patch (1.3.0 → 1.3.1), commit to main, tag, release
+#
+# Branch protection has enforce_admins=false so GITHUB_TOKEN can push to main.
 on:
   repository_dispatch:
     types: [pr-merged]
@@ -18,7 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
 
     steps:
       - name: Checkout repository
@@ -31,20 +31,16 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.client_payload.pr_title }}
         run: |
-          if [[ "$PR_TITLE" == *"[skip-bump]"* ]]; then
-            echo "mode=skip" >> "$GITHUB_OUTPUT"
-            echo "Mode: skip (bump PR merged, creating tag & release)"
-          elif [[ "$PR_TITLE" == *"[release]"* ]]; then
+          if [[ "$PR_TITLE" == *"[release]"* ]]; then
             echo "mode=release" >> "$GITHUB_OUTPUT"
             echo "Mode: release (tag current version as-is)"
           else
             echo "mode=patch-bump" >> "$GITHUB_OUTPUT"
-            echo "Mode: patch-bump (increment patch version via PR)"
+            echo "Mode: patch-bump (increment patch version)"
           fi
 
-      - name: Read current version from pyproject.toml
+      - name: Read current version
         id: read
-        if: steps.mode.outputs.mode != 'skip'
         run: |
           CURRENT=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           MODE="${{ steps.mode.outputs.mode }}"
@@ -65,52 +61,41 @@ jobs:
           echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
           echo "release_tag=v$RELEASE_VERSION"    >> "$GITHUB_OUTPUT"
 
-      - name: Read version for skip-bump (tag the just-merged bump)
-        id: read-skip
-        if: steps.mode.outputs.mode == 'skip'
-        run: |
-          CURRENT=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "release_version=$CURRENT"      >> "$GITHUB_OUTPUT"
-          echo "release_tag=v$CURRENT"         >> "$GITHUB_OUTPUT"
-          echo "Tagging bump result: v$CURRENT"
-
-      - name: Create version bump PR (patch-bump mode)
+      - name: Commit version bump to main (patch-bump mode)
+        id: commit
         if: steps.mode.outputs.mode == 'patch-bump'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CURRENT: ${{ steps.read.outputs.current }}
           RELEASE_VERSION: ${{ steps.read.outputs.release_version }}
         run: |
-          BRANCH="auto/bump-v$RELEASE_VERSION"
-          git checkout -b "$BRANCH"
-
           sed -i "s/^version = \"$CURRENT\"/version = \"$RELEASE_VERSION\"/" pyproject.toml
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pyproject.toml
-          git commit -m "chore: bump version to $RELEASE_VERSION"
-          git push origin "$BRANCH"
+          git commit -m "chore: bump version to $RELEASE_VERSION [skip ci]"
+          git push origin main
 
-          # auto-approve.yml will approve & merge this PR, then dispatch
-          # pr-merged with [skip-bump] in title to trigger tag creation
-          gh pr create \
-            --title "chore: bump version to $RELEASE_VERSION [skip-bump]" \
-            --body "Automated patch version bump: $CURRENT → $RELEASE_VERSION"
-
-          echo "Created bump PR on branch $BRANCH"
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Committed version bump to main"
 
       - name: Create tag and GitHub Release
-        if: steps.mode.outputs.mode == 'release' || steps.mode.outputs.mode == 'skip'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.mode.outputs.mode == 'skip' && steps.read-skip.outputs.release_tag || steps.read.outputs.release_tag }}
+          MODE: ${{ steps.mode.outputs.mode }}
+          RELEASE_TAG: ${{ steps.read.outputs.release_tag }}
+          BUMP_COMMIT_SHA: ${{ steps.commit.outputs.commit_sha }}
         run: |
-          # Check if tag already exists (idempotent)
-          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Tag $RELEASE_TAG already exists, skipping tag creation"
-          else
+          if [ "$MODE" = "release" ]; then
             TAG_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/heads/main" --jq '.object.sha')
+          else
+            TAG_SHA="$BUMP_COMMIT_SHA"
+          fi
+
+          # Create tag (idempotent)
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Tag $RELEASE_TAG already exists, skipping"
+          else
             jq -c -n \
               --arg ref "refs/tags/$RELEASE_TAG" \
               --arg sha "$TAG_SHA" \
@@ -121,7 +106,7 @@ jobs:
             echo "Created tag $RELEASE_TAG -> $TAG_SHA"
           fi
 
-          # Check if release already exists (idempotent)
+          # Create release (idempotent)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             echo "Release $RELEASE_TAG already exists, skipping"
           else
@@ -131,3 +116,20 @@ jobs:
               --latest
             echo "Released $RELEASE_TAG"
           fi
+
+      - name: Notify えびログ (Discord)
+        env:
+          EBILOG_WEBHOOK_URL: ${{ secrets.EBILOG_WEBHOOK_URL }}
+          RELEASE_TAG: ${{ steps.read.outputs.release_tag }}
+        run: |
+          if [ -z "$EBILOG_WEBHOOK_URL" ]; then
+            echo "EBILOG_WEBHOOK_URL not set, skipping notification"
+            exit 0
+          fi
+          RELEASE_URL="https://github.com/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+          MESSAGE="🚀 **claude-code-discord-bridge $RELEASE_TAG** リリースしました！\n$RELEASE_URL"
+          curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\":\"$MESSAGE\"}" \
+            "$EBILOG_WEBHOOK_URL"
+          echo "Notified えびログ"
