@@ -45,9 +45,8 @@ jobs:
                 -d '{"content":"🔄 ebibot-upgrade"}' \
                 "$WEBHOOK_URL"
 
-              # Send docs-sync webhook unless this is a docs-sync PR (prevent infinite loop).
-              # HEAD_REF and PR_TITLE are passed via env: (safe — no direct interpolation in run:).
-              if [[ "$HEAD_REF" != docs-sync/* ]] && [[ "$PR_TITLE" != '[docs-sync]'* ]]; then
+              # --- Docs-sync webhook (skip for docs-sync and auto-bump PRs) ---
+              if [[ "$HEAD_REF" != docs-sync/* ]] && [[ "$PR_TITLE" != '[docs-sync]'* ]] && [[ "$HEAD_REF" != auto/bump-* ]]; then
                 OPEN_PR=$(gh pr list \
                   --repo "$GITHUB_REPOSITORY" \
                   --state open \
@@ -63,11 +62,13 @@ jobs:
                 else
                   echo "Skipping docs-sync: docs-sync PR already open"
                 fi
+              else
+                echo "Skipping docs-sync: excluded branch ($HEAD_REF)"
+              fi
 
-                # Trigger auto patch version bump (skip docs-sync PRs).
-                # repository_dispatch fires even when triggered by GITHUB_TOKEN,
-                # unlike push/pull_request events which are suppressed.
-                # jq --arg safely escapes PR_TITLE (prevents JSON injection).
+              # --- Version bump dispatch (skip only for docs-sync PRs) ---
+              # auto/bump-* PRs DO trigger dispatch (with [skip-bump] title → tag & release).
+              if [[ "$HEAD_REF" != docs-sync/* ]] && [[ "$PR_TITLE" != '[docs-sync]'* ]]; then
                 echo "Dispatching pr-merged event for version bump..."
                 DISPATCH_PAYLOAD=$(jq -c -n \
                   --arg event_type "pr-merged" \
@@ -78,7 +79,7 @@ jobs:
                   --method POST \
                   --input -
               else
-                echo "Skipping docs-sync: this is a docs-sync PR ($HEAD_REF)"
+                echo "Skipping version bump: docs-sync PR ($HEAD_REF)"
               fi
 
               exit 0
