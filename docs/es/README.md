@@ -113,29 +113,39 @@ Si el bot se reinicia a mitad de sesión, las sesiones de Claude interrumpidas s
 ## Características
 
 ### Chat Interactivo
+
+#### 🔗 Sesión Básica
 - **Thread = Session** — Mapeo 1:1 entre hilo de Discord y sesión de Claude Code
+- **Persistencia de sesión** — Reanuda conversaciones entre mensajes via `--resume`
+- **Sesiones concurrentes** — Múltiples sesiones en paralelo con límite configurable
+- **Parar sin borrar** — `/stop` detiene una sesión preservándola para reanudar
+- **Interrupción de sesión** — Enviar un nuevo mensaje a un hilo activo envía SIGINT a la sesión en ejecución y comienza de nuevo con la nueva instrucción; no se necesita `/stop` manual
+
+#### 📡 Retroalimentación en Tiempo Real
 - **Estado en tiempo real** — Reacciones emoji: 🧠 pensando, 🛠️ leyendo archivos, 💻 editando, 🌐 búsqueda web
 - **Texto en streaming** — El texto intermedio aparece mientras Claude trabaja
 - **Embeds de resultados de herramientas** — Resultados en vivo con tiempo transcurrido que aumenta cada 10s
 - **Pensamiento extendido** — Razonamiento mostrado como embeds con spoiler (clic para revelar)
-- **Persistencia de sesión** — Reanuda conversaciones entre mensajes via `--resume`
-- **Ejecución de skills** — Comando `/skill` con autocompletado, argumentos opcionales, reanudación en hilo
-- **Hot reload** — Los nuevos skills añadidos a `~/.claude/skills/` se detectan automáticamente (refresco cada 60s, sin reinicio)
-- **Sesiones concurrentes** — Múltiples sesiones en paralelo con límite configurable
-- **Parar sin borrar** — `/stop` detiene una sesión preservándola para reanudar
-- **Soporte de adjuntos** — Archivos de texto añadidos automáticamente al prompt (hasta 5 × 50 KB); imágenes descargadas y pasadas via `--image` (hasta 4 × 5 MB)
-- **Notificaciones de timeout** — Embed con tiempo transcurrido y guía de reanudación al agotar tiempo
+- **Panel de hilos** — Embed fijo en vivo mostrando qué hilos están activos vs. en espera; el propietario es @mencionado cuando se necesita entrada
+
+#### 🤝 Colaboración Humano-IA
 - **Preguntas interactivas** — `AskUserQuestion` se renderiza como Botones de Discord o Menú de Selección; la sesión se reanuda con tu respuesta; los botones sobreviven reinicios del bot
 - **Plan Mode** — Cuando Claude llama a `ExitPlanMode`, se muestra un embed de Discord con el plan completo y botones Aprobar/Cancelar; Claude solo continúa tras la aprobación; cancelación automática tras 5 minutos
 - **Solicitudes de permiso de herramientas** — Cuando Claude necesita permiso para ejecutar una herramienta, Discord muestra botones Permitir/Denegar con el nombre y la entrada de la herramienta; denegación automática tras 2 minutos
 - **MCP Elicitation** — Los servidores MCP pueden solicitar entrada del usuario via Discord (modo formulario: hasta 5 campos Modal del esquema JSON; modo URL: botón URL + confirmación); 5 minutos de tiempo de espera
 - **Progreso en vivo de TodoWrite** — Cuando Claude llama a `TodoWrite`, se publica un único embed de Discord que se edita in situ en cada actualización; muestra ✅ completado, 🔄 activo (con etiqueta `activeForm`), ⬜ pendiente
-- **Panel de hilos** — Embed fijo en vivo mostrando qué hilos están activos vs. en espera; el propietario es @mencionado cuando se necesita entrada
+
+#### 📊 Observabilidad
 - **Uso de tokens** — Tasa de aciertos de caché y recuento de tokens mostrados en el embed de sesión completada
 - **Uso de contexto** — Porcentaje de la ventana de contexto (tokens de entrada + caché, excluyendo salida) y capacidad restante hasta el auto-compactado mostrados en el embed de sesión completada; ⚠️ advertencia cuando supera el 83,5%
 - **Detección de compactado** — Notifica en el hilo cuando ocurre la compactación de contexto (tipo de desencadenante + recuento de tokens antes del compactado)
-- **Interrupción de sesión** — Enviar un nuevo mensaje a un hilo activo envía SIGINT a la sesión en ejecución y comienza de nuevo con la nueva instrucción; no se necesita `/stop` manual
 - **Notificación de estancamiento** — Mensaje en el hilo tras 30 s sin actividad (pensamiento extendido o compresión de contexto); se reinicia automáticamente cuando Claude reanuda
+- **Notificaciones de timeout** — Embed con tiempo transcurrido y guía de reanudación al agotar tiempo
+
+#### 🔌 Entrada y Skills
+- **Soporte de adjuntos** — Archivos de texto añadidos automáticamente al prompt (hasta 5 × 50 KB); imágenes descargadas y pasadas via `--image` (hasta 4 × 5 MB)
+- **Ejecución de skills** — Comando `/skill` con autocompletado, argumentos opcionales, reanudación en hilo
+- **Hot reload** — Los nuevos skills añadidos a `~/.claude/skills/` se detectan automáticamente (refresco cada 60s, sin reinicio)
 
 ### Concurrencia y Coordinación
 - **Instrucciones de worktree auto-inyectadas** — Cada sesión recibe instrucciones para usar `git worktree` antes de tocar cualquier archivo

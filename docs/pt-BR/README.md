@@ -113,29 +113,39 @@ Se o bot reiniciar no meio de uma sessão, as sessões do Claude interrompidas s
 ## Funcionalidades
 
 ### Chat Interativo
+
+#### 🔗 Sessão Básica
 - **Thread = Session** — Mapeamento 1:1 entre thread do Discord e sessão do Claude Code
+- **Persistência de sessão** — Retoma conversas entre mensagens via `--resume`
+- **Sessões concorrentes** — Múltiplas sessões paralelas com limite configurável
+- **Parar sem limpar** — `/stop` para uma sessão preservando-a para retomada
+- **Interrupção de sessão** — Enviar uma nova mensagem a uma thread ativa envia SIGINT à sessão em execução e reinicia com a nova instrução; sem necessidade de `/stop` manual
+
+#### 📡 Feedback em Tempo Real
 - **Status em tempo real** — Reações emoji: 🧠 pensando, 🛠️ lendo arquivos, 💻 editando, 🌐 pesquisa web
 - **Texto em streaming** — Texto intermediário do assistente aparece enquanto o Claude trabalha
 - **Embeds de resultados de ferramentas** — Resultados ao vivo com tempo decorrido aumentando a cada 10s
 - **Pensamento estendido** — Raciocínio exibido como embeds com spoiler (clique para revelar)
-- **Persistência de sessão** — Retoma conversas entre mensagens via `--resume`
-- **Execução de skills** — Comando `/skill` com autocomplete, argumentos opcionais, retomada dentro da thread
-- **Hot reload** — Novos skills adicionados a `~/.claude/skills/` são detectados automaticamente (atualização a cada 60s, sem reinício)
-- **Sessões concorrentes** — Múltiplas sessões paralelas com limite configurável
-- **Parar sem limpar** — `/stop` para uma sessão preservando-a para retomada
-- **Suporte a anexos** — Arquivos de texto adicionados automaticamente ao prompt (até 5 × 50 KB); imagens baixadas e passadas via `--image` (até 4 × 5 MB)
-- **Notificações de timeout** — Embed com tempo decorrido e guia de retomada ao atingir timeout
+- **Painel de threads** — Embed fixado ao vivo mostrando quais threads estão ativas vs. aguardando; owner é @mencionado quando input é necessário
+
+#### 🤝 Colaboração Humano-IA
 - **Perguntas interativas** — `AskUserQuestion` renderiza como Botões do Discord ou Menu de Seleção; a sessão retoma com sua resposta; botões sobrevivem a reinícios do bot
 - **Plan Mode** — Quando Claude chama `ExitPlanMode`, um embed do Discord exibe o plano completo com botões Aprovar/Cancelar; Claude prossegue somente após aprovação; cancelamento automático após 5 minutos
 - **Solicitações de permissão de ferramenta** — Quando Claude precisa de permissão para executar uma ferramenta, o Discord exibe botões Permitir/Negar com o nome e a entrada da ferramenta; negação automática após 2 minutos
 - **MCP Elicitation** — Servidores MCP podem solicitar entrada do usuário via Discord (modo formulário: até 5 campos Modal do esquema JSON; modo URL: botão URL + confirmação); timeout de 5 minutos
 - **Progresso em tempo real do TodoWrite** — Quando Claude chama `TodoWrite`, um único embed do Discord é postado e editado in-place a cada atualização; mostra ✅ concluído, 🔄 ativo (com rótulo `activeForm`), ⬜ pendente
-- **Painel de threads** — Embed fixado ao vivo mostrando quais threads estão ativas vs. aguardando; owner é @mencionado quando input é necessário
+
+#### 📊 Observabilidade
 - **Uso de tokens** — Taxa de acerto de cache e contagem de tokens exibidos no embed de sessão completa
 - **Uso de contexto** — Percentual da janela de contexto (tokens de entrada + cache, excluindo saída) e capacidade restante até o auto-compact exibidos no embed de sessão concluída; ⚠️ aviso quando acima de 83,5%
 - **Detecção de compactação** — Notifica na thread quando a compactação de contexto ocorre (tipo de gatilho + contagem de tokens antes da compactação)
-- **Interrupção de sessão** — Enviar uma nova mensagem a uma thread ativa envia SIGINT à sessão em execução e reinicia com a nova instrução; sem necessidade de `/stop` manual
 - **Notificação de travamento** — Mensagem na thread após 30 s sem atividade (pensamento estendido ou compressão de contexto); reinicia automaticamente quando Claude retoma
+- **Notificações de timeout** — Embed com tempo decorrido e guia de retomada ao atingir timeout
+
+#### 🔌 Entrada e Skills
+- **Suporte a anexos** — Arquivos de texto adicionados automaticamente ao prompt (até 5 × 50 KB); imagens baixadas e passadas via `--image` (até 4 × 5 MB)
+- **Execução de skills** — Comando `/skill` com autocomplete, argumentos opcionais, retomada dentro da thread
+- **Hot reload** — Novos skills adicionados a `~/.claude/skills/` são detectados automaticamente (atualização a cada 60s, sem reinício)
 
 ### Concorrência e Coordenação
 - **Instruções de worktree auto-injetadas** — Cada sessão recebe instruções para usar `git worktree` antes de tocar em qualquer arquivo
