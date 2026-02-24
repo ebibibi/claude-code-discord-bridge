@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-02-24
+
+### Fixed
+- **Critical: CLI subprocess hang on Claude >=2.1.50** — `ClaudeRunner` spawned Claude CLI with `stdin=asyncio.subprocess.PIPE`, which causes Claude CLI >=2.1.50 to block indefinitely even in non-interactive (`-p`) mode. Switched to `stdin=asyncio.subprocess.DEVNULL`. This was causing all Bot-spawned sessions to create threads but never respond. `inject_tool_result()` already handles the missing stdin gracefully (logs a warning and returns) (#162)
+
+### Changed
+- Improved debug logging in `ClaudeRunner`: logs cwd at startup, PID after process creation, first 3 stdout lines, and EOF line count for easier troubleshooting (#162)
+- README: reorganized Interactive Chat features from flat 23-item list into 5 scannable sub-sections with emoji headers (#160)
+
 ## [1.4.0] - 2026-02-22
 
 ### Added
@@ -139,7 +148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline: Python 3.10/3.11/3.12, ruff, pytest
 - Branch protection and PR workflow
 
-[Unreleased]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.1.0...v1.2.0
