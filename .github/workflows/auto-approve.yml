@@ -66,8 +66,7 @@ jobs:
                 echo "Skipping docs-sync: excluded branch ($HEAD_REF)"
               fi
 
-              # --- Version bump dispatch (skip only for docs-sync PRs) ---
-              # auto/bump-* PRs DO trigger dispatch (with [skip-bump] title → tag & release).
+              # --- Version bump dispatch (skip for docs-sync PRs) ---
               if [[ "$HEAD_REF" != docs-sync/* ]] && [[ "$PR_TITLE" != '[docs-sync]'* ]]; then
                 echo "Dispatching pr-merged event for version bump..."
                 DISPATCH_PAYLOAD=$(jq -c -n \
