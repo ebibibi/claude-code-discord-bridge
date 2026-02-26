@@ -162,6 +162,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 
 #### 🔌 入力とスキル
 - **添付ファイル対応** — テキストファイルをプロンプトに自動追加（最大 5 ファイル × 50 KB）；画像は Discord CDN URL として `--input-format stream-json` 経由で送信（最大 4 枚 × 5 MB）
+- **オンデマンドファイル配信** — 「送って」「添付して」などと指示すると Claude が `.ccdb-attachments` にパスを書き込み、セッション完了時に Bot がファイルを Discord に添付して送信
 - **スキル実行** — `/skill` コマンド（オートコンプリート付き）、オプション引数、スレッド内リジューム
 - **ホットリロード** — `~/.claude/skills/` に追加した新スキルを自動検出（60 秒更新、再起動不要）
 
@@ -279,8 +280,6 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `COORDINATION_CHANNEL_ID` | セッション間イベントブロードキャスト用チャンネル ID | （オプション） |
 | `CCDB_COORDINATION_CHANNEL_NAME` | 協調チャンネルを名前で自動作成 | （オプション） |
 | `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
-| `CCDB_ATTACH_WRITTEN_FILES` | セッション完了時に書き込み・編集したファイルを Discord に添付（`true`/`1`/`yes` で有効化） | `false` |
-| `CCDB_ATTACH_MAX_BYTES` | 添付ファイルのサイズ上限（バイト単位、上限超過のファイルはスキップ） | `524288`（512 KB） |
 
 ---
 
