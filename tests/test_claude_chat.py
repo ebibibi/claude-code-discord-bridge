@@ -174,11 +174,13 @@ class TestBuildPrompt:
         content_type: str = "text/plain",
         size: int = 100,
         content: bytes = b"hello world",
+        url: str = "https://cdn.discordapp.com/attachments/123/456/test.txt",
     ) -> MagicMock:
         att = MagicMock(spec=discord.Attachment)
         att.filename = filename
         att.content_type = content_type
         att.size = size
+        att.url = url
         att.read = AsyncMock(return_value=content)
         return att
 
@@ -209,29 +211,32 @@ class TestBuildPrompt:
         assert "file content here" in result
 
     @pytest.mark.asyncio
-    async def test_image_attachment_not_inlined_in_prompt(self) -> None:
-        """Images are downloaded to tempfiles, NOT inlined into the prompt text."""
-        import os
+    async def test_image_attachment_returns_cdn_url(self) -> None:
+        """Images are returned as Discord CDN URLs, NOT downloaded to tempfiles.
 
+        Claude Code CLI silently drops base64 image blocks in stream-json mode.
+        Passing the Discord CDN URL directly as a url-type image block is the
+        only mechanism that reaches the Anthropic API.
+        """
+        cdn_url = "https://cdn.discordapp.com/attachments/111/222/image.png"
         cog = _make_cog()
         att = self._make_attachment(
             filename="image.png",
             content_type="image/png",
             size=100,
-            content=b"\x89PNG...",
+            url=cdn_url,
         )
         msg = self._make_message(content="see image", attachments=[att])
 
-        prompt, image_paths = await cog._build_prompt_and_images(msg)
+        prompt, image_urls = await cog._build_prompt_and_images(msg)
 
         # Prompt text stays clean — no image content inlined.
         assert prompt == "see image"
-        # One tempfile created for the image.
-        assert len(image_paths) == 1
-        assert os.path.exists(image_paths[0])
-        # Clean up.
-        for p in image_paths:
-            os.unlink(p)
+        # CDN URL returned directly — no tempfile download needed.
+        assert len(image_urls) == 1
+        assert image_urls[0] == cdn_url
+        # Attachment.read() must NOT be called (no download).
+        att.read.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_binary_non_image_skipped(self) -> None:

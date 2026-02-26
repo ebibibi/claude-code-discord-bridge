@@ -399,18 +399,23 @@ class TestImageStreamJson:
     args even though the flag does not exist in claude CLI.  Images must be
     passed via --input-format stream-json / stdin instead.
 
+    Images are passed as HTTPS URL content blocks (``{"type": "url", "url": ...}``),
+    not base64.  Claude Code CLI silently drops base64 image blocks in stream-json
+    input mode (confirmed with CLI 2.1.59); URL type is the only format that
+    reaches the Anthropic API through the CLI's stream-json input pipeline.
+
     See: https://github.com/ebibibi/claude-code-discord-bridge/issues/177
     """
 
     def test_no_image_flag_in_args(self) -> None:
         """_build_args() must NOT produce --image flags (flag does not exist)."""
-        runner = ClaudeRunner(image_paths=["/tmp/photo.png"])
+        runner = ClaudeRunner(image_urls=["https://cdn.discordapp.com/photo.png"])
         args = runner._build_args("look at this", session_id=None)
         assert "--image" not in args
 
     def test_stream_json_input_format_added_for_images(self) -> None:
-        """_build_args() adds --input-format stream-json when image_paths is set."""
-        runner = ClaudeRunner(image_paths=["/tmp/photo.png"])
+        """_build_args() adds --input-format stream-json when image_urls is set."""
+        runner = ClaudeRunner(image_urls=["https://cdn.discordapp.com/photo.png"])
         args = runner._build_args("look at this", session_id=None)
         assert "--input-format" in args
         idx = args.index("--input-format")
@@ -422,7 +427,7 @@ class TestImageStreamJson:
         In stream-json mode the prompt is part of the JSON sent to stdin.
         Passing it as a CLI arg as well would cause a duplicate-input error.
         """
-        runner = ClaudeRunner(image_paths=["/tmp/photo.png"])
+        runner = ClaudeRunner(image_urls=["https://cdn.discordapp.com/photo.png"])
         args = runner._build_args("look at this", session_id=None)
         # Double-dash separator must not be present
         assert "--" not in args
@@ -430,7 +435,7 @@ class TestImageStreamJson:
         assert "look at this" not in args
 
     def test_no_stream_json_input_format_without_images(self) -> None:
-        """Without image_paths, --input-format stream-json is NOT added."""
+        """Without image_urls, --input-format stream-json is NOT added."""
         runner = ClaudeRunner()
         args = runner._build_args("hello", session_id=None)
         assert "--input-format" not in args
@@ -442,167 +447,114 @@ class TestImageStreamJson:
         assert args[-1] == "hello"
         assert args[-2] == "--"
 
-    # ── helpers ──────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _make_png() -> bytes:
-        """Return bytes of a minimal but structurally valid 1×1 red PNG."""
-        import zlib
-
-        # PNG signature
-        sig = b"\x89PNG\r\n\x1a\n"
-
-        def chunk(tag: bytes, data: bytes) -> bytes:
-            length = len(data).to_bytes(4, "big")
-            crc = zlib.crc32(tag + data).to_bytes(4, "big")
-            return length + tag + data + crc
-
-        ihdr_data = (
-            (1).to_bytes(4, "big")  # width = 1
-            + (1).to_bytes(4, "big")  # height = 1
-            + bytes([8, 2, 0, 0, 0])  # 8-bit depth, RGB, no filter/interlace
-        )
-        # Filter byte 0x00 + RGB for one pixel (255, 0, 0) = red
-        raw_row = b"\x00\xff\x00\x00"
-        idat_data = zlib.compress(raw_row)
-
-        return sig + chunk(b"IHDR", ihdr_data) + chunk(b"IDAT", idat_data) + chunk(b"IEND", b"")
-
     # ── tests ─────────────────────────────────────────────────────────────────
 
     @pytest.mark.asyncio
-    async def test_send_stream_json_message_base64_matches_file_content(self) -> None:
-        """The base64 in the JSON must exactly match the bytes on disk.
+    async def test_send_stream_json_message_url_format(self) -> None:
+        """Images are sent as url-type blocks, NOT base64.
 
-        This test catches the case where the image file is read but encoded
-        incorrectly, or where a wrong file is sent.
+        Claude Code CLI silently drops base64 image blocks in stream-json input
+        mode.  URL-type image blocks are the only format that reaches the
+        Anthropic API through the CLI's stream-json pipeline.
         """
-        import base64
         import json
-        import os
-        import tempfile
 
-        png_bytes = self._make_png()
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            f.write(png_bytes)
-            img_path = f.name
+        image_url = "https://cdn.discordapp.com/attachments/123/456/photo.png"
+        runner = ClaudeRunner(image_urls=[image_url])
 
-        try:
-            runner = ClaudeRunner(image_paths=[img_path])
+        written: list[bytes] = []
 
-            written: list[bytes] = []
+        def capture_write(data: bytes) -> None:
+            written.append(data)
 
-            def capture_write(data: bytes) -> None:
-                written.append(data)
+        stdin_mock = MagicMock()
+        stdin_mock.write = capture_write
+        stdin_mock.drain = AsyncMock()
 
-            stdin_mock = MagicMock()
-            stdin_mock.write = capture_write
-            stdin_mock.drain = AsyncMock()
+        mock_process = MagicMock()
+        mock_process.stdin = stdin_mock
+        runner._process = mock_process
 
-            mock_process = MagicMock()
-            mock_process.stdin = stdin_mock
-            runner._process = mock_process
+        await runner._send_stream_json_message("describe this image")
 
-            await runner._send_stream_json_message("describe this image")
+        assert len(written) == 1, "stdin.write should be called exactly once"
+        payload = json.loads(written[0].decode())
 
-            assert len(written) == 1, "stdin.write should be called exactly once"
-            payload = json.loads(written[0].decode())
+        content = payload["message"]["content"]
+        assert len(content) == 2, "should have one image block + one text block"
 
-            content = payload["message"]["content"]
-            assert len(content) == 2, "should have one image block + one text block"
+        img_block = content[0]
+        assert img_block["type"] == "image"
+        assert img_block["source"]["type"] == "url", (
+            "image source must be 'url' type — base64 is silently dropped by Claude Code CLI"
+        )
+        assert img_block["source"]["url"] == image_url
 
-            img_block = content[0]
-            assert img_block["type"] == "image"
-            assert img_block["source"]["type"] == "base64"
-            assert img_block["source"]["media_type"] == "image/png"
-
-            # The base64 data must round-trip back to the exact file bytes
-            decoded = base64.standard_b64decode(img_block["source"]["data"])
-            assert decoded == png_bytes, "base64 data does not match the file on disk"
-
-            text_block = content[1]
-            assert text_block["type"] == "text"
-            assert text_block["text"] == "describe this image"
-        finally:
-            os.unlink(img_path)
+        text_block = content[1]
+        assert text_block["type"] == "text"
+        assert text_block["text"] == "describe this image"
 
     @pytest.mark.asyncio
-    async def test_run_uses_pipe_stdin_and_sends_image_via_stdin(self) -> None:
-        """run() uses stdin=PIPE and the JSON written to stdin contains the real image.
-
-        This replaces the old test that used a nonexistent file path (/nonexistent/test.png),
-        which meant _send_stream_json_message silently skipped the image and the test
-        only verified stdin mode — not that the image was actually transmitted.
-        """
+    async def test_run_uses_pipe_stdin_and_sends_image_url_via_stdin(self) -> None:
+        """run() uses stdin=PIPE and the JSON written to stdin contains the image URL."""
         import asyncio as _asyncio
-        import base64
         import json
-        import os
-        import tempfile
 
-        png_bytes = self._make_png()
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            f.write(png_bytes)
-            img_path = f.name
+        image_url = "https://cdn.discordapp.com/attachments/123/456/photo.png"
+        runner = ClaudeRunner(image_urls=[image_url])
 
-        try:
-            runner = ClaudeRunner(image_paths=[img_path])
+        written: list[bytes] = []
 
-            written: list[bytes] = []
+        def capture_write(data: bytes) -> None:
+            written.append(data)
 
-            def capture_write(data: bytes) -> None:
-                written.append(data)
+        mock_stdin = MagicMock()
+        mock_stdin.write = capture_write
+        mock_stdin.drain = AsyncMock()
 
-            mock_stdin = MagicMock()
-            mock_stdin.write = capture_write
-            mock_stdin.drain = AsyncMock()
+        mock_process = AsyncMock()
+        mock_process.pid = 42
+        mock_process.returncode = None
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.read = AsyncMock(return_value=b"")
+        mock_process.stdin = mock_stdin
+        mock_process.wait = AsyncMock(return_value=0)
 
-            mock_process = AsyncMock()
-            mock_process.pid = 42
-            mock_process.returncode = None
-            mock_process.stdout = AsyncMock()
-            mock_process.stdout.readline = AsyncMock(return_value=b"")
-            mock_process.stderr = AsyncMock()
-            mock_process.stderr.read = AsyncMock(return_value=b"")
-            mock_process.stdin = mock_stdin
-            mock_process.wait = AsyncMock(return_value=0)
+        with (
+            patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_process,
+            ) as mock_exec,
+            patch.object(runner, "_cleanup", new_callable=AsyncMock),
+        ):
+            _ = [event async for event in runner.run("what do you see?")]
 
-            with (
-                patch(
-                    "asyncio.create_subprocess_exec",
-                    return_value=mock_process,
-                ) as mock_exec,
-                patch.object(runner, "_cleanup", new_callable=AsyncMock),
-            ):
-                _ = [event async for event in runner.run("what do you see?")]
+        # 1. subprocess must have been started with stdin=PIPE
+        call_kwargs = mock_exec.call_args[1]
+        assert call_kwargs["stdin"] == _asyncio.subprocess.PIPE, (
+            "stdin must be PIPE when images are present, not DEVNULL"
+        )
 
-            # 1. subprocess must have been started with stdin=PIPE
-            call_kwargs = mock_exec.call_args[1]
-            assert call_kwargs["stdin"] == _asyncio.subprocess.PIPE, (
-                "stdin must be PIPE when images are present, not DEVNULL"
-            )
+        # 2. stdin.write must have been called — image data was actually sent
+        assert len(written) == 1, "stdin.write should be called once with the user message"
 
-            # 2. stdin.write must have been called — image data was actually sent
-            assert len(written) == 1, "stdin.write should be called once with the user message"
+        payload = json.loads(written[0].decode())
+        content = payload["message"]["content"]
 
-            payload = json.loads(written[0].decode())
-            content = payload["message"]["content"]
+        # 3. image block must be present and use url type
+        image_blocks = [c for c in content if c.get("type") == "image"]
+        assert len(image_blocks) == 1, "exactly one image block expected"
+        assert image_blocks[0]["source"]["type"] == "url", (
+            "image source must be 'url' type — base64 is silently dropped by Claude Code CLI"
+        )
+        assert image_blocks[0]["source"]["url"] == image_url
 
-            # 3. image block must be present and contain the real file's bytes
-            image_blocks = [c for c in content if c.get("type") == "image"]
-            assert len(image_blocks) == 1, "exactly one image block expected"
-            decoded = base64.standard_b64decode(image_blocks[0]["source"]["data"])
-            assert decoded == png_bytes, (
-                "image bytes in JSON do not match the file on disk — "
-                "encoding is broken or wrong file was read"
-            )
-
-            # 4. text prompt must also be present
-            text_blocks = [c for c in content if c.get("type") == "text"]
-            assert len(text_blocks) == 1
-            assert text_blocks[0]["text"] == "what do you see?"
-        finally:
-            os.unlink(img_path)
+        # 4. text prompt must also be present
+        text_blocks = [c for c in content if c.get("type") == "text"]
+        assert len(text_blocks) == 1
+        assert text_blocks[0]["text"] == "what do you see?"
 
     @pytest.mark.asyncio
     async def test_run_uses_devnull_stdin_without_images(self) -> None:
@@ -636,38 +588,35 @@ class TestImageStreamJson:
         )
 
     @pytest.mark.asyncio
-    async def test_jpeg_media_type_detected_from_extension(self) -> None:
-        """JPEG files are sent with media_type=image/jpeg."""
+    async def test_multiple_image_urls_all_sent(self) -> None:
+        """Multiple image URLs are all included as separate url-type image blocks."""
         import json
-        import os
-        import tempfile
 
-        # Minimal valid JPEG (SOI + EOI markers)
-        jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00\xff\xd9"
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
-            f.write(jpeg_bytes)
-            img_path = f.name
+        urls = [
+            "https://cdn.discordapp.com/attachments/1/2/a.png",
+            "https://cdn.discordapp.com/attachments/1/2/b.jpg",
+        ]
+        runner = ClaudeRunner(image_urls=urls)
 
-        try:
-            runner = ClaudeRunner(image_paths=[img_path])
+        written: list[bytes] = []
 
-            written: list[bytes] = []
+        def capture_write(data: bytes) -> None:
+            written.append(data)
 
-            def capture_write(data: bytes) -> None:
-                written.append(data)
+        stdin_mock = MagicMock()
+        stdin_mock.write = capture_write
+        stdin_mock.drain = AsyncMock()
 
-            stdin_mock = MagicMock()
-            stdin_mock.write = capture_write
-            stdin_mock.drain = AsyncMock()
+        mock_process = MagicMock()
+        mock_process.stdin = stdin_mock
+        runner._process = mock_process
 
-            mock_process = MagicMock()
-            mock_process.stdin = stdin_mock
-            runner._process = mock_process
+        await runner._send_stream_json_message("compare these")
 
-            await runner._send_stream_json_message("what's this?")
+        payload = json.loads(written[0].decode())
+        content = payload["message"]["content"]
 
-            payload = json.loads(written[0].decode())
-            img_block = payload["message"]["content"][0]
-            assert img_block["source"]["media_type"] == "image/jpeg"
-        finally:
-            os.unlink(img_path)
+        image_blocks = [c for c in content if c.get("type") == "image"]
+        assert len(image_blocks) == 2, "both image URLs must appear as image blocks"
+        sent_urls = [b["source"]["url"] for b in image_blocks]
+        assert sent_urls == urls
