@@ -205,6 +205,8 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 
 ## Quick Start — Claude in Discord in 5 Minutes
 
+**Prerequisites:** Python 3.10+, [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated. Runs on Linux, macOS, and Windows.
+
 ### Step 1 — Create a Discord Bot (one-time, ~2 minutes)
 
 1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application**
