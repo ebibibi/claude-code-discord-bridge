@@ -13,14 +13,58 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 import signal
 import sys
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 from .parser import parse_line
 from .types import MessageType, StreamEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_windows_cmd(cmd_path: Path) -> list[str] | None:
+    """Resolve a Windows npm .cmd/.bat wrapper to ``[node, cli_js]``.
+
+    npm installs a thin ``.cmd`` wrapper that references the real ``.js``
+    entry-point via the ``%~dp0`` batch variable (the wrapper's own directory).
+    ``create_subprocess_exec`` cannot execute ``.cmd`` files directly, so we
+    read the wrapper, extract the ``.js`` path, and prepend the ``node``
+    executable.
+
+    Works with all common npm layout styles (global, local, nvm-windows,
+    pnpm, Scoop, etc.) because the path is read from the file itself rather
+    than inferred from a fixed directory structure.
+
+    Returns ``[node_exe, js_path]`` on success, ``None`` if the wrapper cannot
+    be resolved (caller falls back to the original command).
+    """
+    try:
+        content = cmd_path.read_text(encoding="utf-8", errors="ignore")
+        # npm wrappers embed the JS entry-point as: "%~dp0\path\to\script.js"
+        match = re.search(r'"%~dp0\\([^"]+\.js)"', content)
+        if match:
+            cli_js = cmd_path.parent / match.group(1)
+            if cli_js.exists():
+                node = shutil.which("node") or "node"
+                return [node, str(cli_js)]
+    except OSError:
+        pass
+
+    # Fallback: conventional npm global layout (node_modules next to the .cmd)
+    cli_js = cmd_path.parent / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+    if cli_js.exists():
+        node = shutil.which("node") or "node"
+        return [node, str(cli_js)]
+
+    logger.warning(
+        "Windows .cmd wrapper %s could not be resolved to a Node.js script; "
+        "Claude CLI will likely fail to start",
+        cmd_path,
+    )
+    return None
 
 
 class ClaudeRunner:
@@ -247,14 +291,9 @@ class ClaudeRunner:
         # On Windows, .cmd/.bat wrappers cannot be executed directly by
         # create_subprocess_exec.  Resolve to the underlying Node script.
         if sys.platform == "win32" and args[0].lower().endswith((".cmd", ".bat")):
-            import shutil
-            from pathlib import Path
-
-            cmd_path = Path(args[0])
-            cli_js = cmd_path.parent / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
-            if cli_js.exists():
-                node = shutil.which("node") or "node"
-                args = [node, str(cli_js)] + args[1:]
+            resolved = _resolve_windows_cmd(Path(args[0]))
+            if resolved:
+                args = resolved + args[1:]
 
         return args
 
