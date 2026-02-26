@@ -495,6 +495,41 @@ class TestImageStreamJson:
         assert text_block["text"] == "describe this image"
 
     @pytest.mark.asyncio
+    async def test_send_stream_json_message_empty_prompt_omits_text_block(self) -> None:
+        """Empty prompt must NOT add a text block.
+
+        The Anthropic API rejects empty text blocks when cache_control is set:
+        "cache_control cannot be set for empty text blocks"
+        This happens when the user sends just an image with no text in Discord.
+        """
+        import json
+
+        image_url = "https://cdn.discordapp.com/attachments/123/456/photo.png"
+        runner = ClaudeRunner(image_urls=[image_url])
+
+        written: list[bytes] = []
+
+        def capture_write(data: bytes) -> None:
+            written.append(data)
+
+        stdin_mock = MagicMock()
+        stdin_mock.write = capture_write
+        stdin_mock.drain = AsyncMock()
+
+        mock_process = MagicMock()
+        mock_process.stdin = stdin_mock
+        runner._process = mock_process
+
+        await runner._send_stream_json_message("")
+
+        assert len(written) == 1
+        payload = json.loads(written[0].decode())
+        content = payload["message"]["content"]
+
+        assert len(content) == 1, "empty prompt: only the image block, no text block"
+        assert content[0]["type"] == "image"
+
+    @pytest.mark.asyncio
     async def test_run_uses_pipe_stdin_and_sends_image_url_via_stdin(self) -> None:
         """run() uses stdin=PIPE and the JSON written to stdin contains the image URL."""
         import asyncio as _asyncio
