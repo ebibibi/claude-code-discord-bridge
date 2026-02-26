@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import os
 import signal as signal_module
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from claude_discord.claude.runner import ClaudeRunner
+from claude_discord.claude.runner import ClaudeRunner, _resolve_windows_cmd
 
 
 class TestBuildArgs:
@@ -655,3 +656,113 @@ class TestImageStreamJson:
         assert len(image_blocks) == 2, "both image URLs must appear as image blocks"
         sent_urls = [b["source"]["url"] for b in image_blocks]
         assert sent_urls == urls
+
+
+class TestResolveWindowsCmd:
+    """Tests for _resolve_windows_cmd helper.
+
+    All tests run on every OS.  File system interactions use tmp_path so no
+    actual Windows installation is required.
+    """
+
+    # A minimal npm-generated .cmd wrapper.  Real wrappers have more boilerplate
+    # but the critical line always matches: "%~dp0\<relative\path\to\script.js>"
+    _NPM_CMD_TEMPLATE = (
+        '@ECHO off\r\nGOTO start\r\n:start\r\nSET _prog=node\r\n"%~dp0\\{rel_path}" %*\r\n'
+    )
+
+    def _make_cmd(self, tmp_path: Path, rel_js: str) -> Path:
+        """Write a minimal .cmd wrapper and the target .js file."""
+        js_path = tmp_path / rel_js
+        js_path.parent.mkdir(parents=True, exist_ok=True)
+        js_path.write_text("// cli entry\n")
+
+        cmd_path = tmp_path / "claude.cmd"
+        cmd_path.write_text(self._NPM_CMD_TEMPLATE.format(rel_path=rel_js))
+        return cmd_path
+
+    def test_parses_npm_wrapper_and_returns_node_js(self, tmp_path: Path) -> None:
+        """Primary path: regex extracts JS path from .cmd content."""
+        rel = r"node_modules\@anthropic-ai\claude-code\cli.js"
+        cmd_path = self._make_cmd(tmp_path, rel)
+
+        with patch("claude_discord.claude.runner.shutil.which", return_value="/usr/bin/node"):
+            result = _resolve_windows_cmd(cmd_path)
+
+        assert result is not None
+        assert result[0] == "/usr/bin/node"
+        assert result[1].endswith("cli.js")
+
+    def test_falls_back_to_node_modules_heuristic(self, tmp_path: Path) -> None:
+        """Fallback path: .cmd has no parseable JS ref, but node_modules exists."""
+        # Write a .cmd file without the "%~dp0\..." pattern
+        cmd_path = tmp_path / "claude.cmd"
+        cmd_path.write_text("@ECHO off\r\nREM non-standard wrapper\r\n")
+
+        # Create the fallback cli.js location
+        cli_js = tmp_path / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+        cli_js.parent.mkdir(parents=True, exist_ok=True)
+        cli_js.write_text("// cli entry\n")
+
+        with patch("claude_discord.claude.runner.shutil.which", return_value="node"):
+            result = _resolve_windows_cmd(cmd_path)
+
+        assert result is not None
+        assert result[1] == str(cli_js)
+
+    def test_returns_none_when_js_not_found(self, tmp_path: Path) -> None:
+        """Both paths fail: .cmd wrapper points to a non-existent .js file."""
+        cmd_path = tmp_path / "claude.cmd"
+        # Regex will match but the resolved path won't exist
+        cmd_path.write_text(r'"%~dp0\node_modules\@anthropic-ai\claude-code\cli.js"' + "\r\n")
+        # Do NOT create cli.js — both primary and fallback should fail
+
+        result = _resolve_windows_cmd(cmd_path)
+        assert result is None
+
+    def test_returns_none_on_unreadable_cmd(self, tmp_path: Path) -> None:
+        """OSError while reading the .cmd file: both paths should be attempted."""
+        cmd_path = tmp_path / "ghost.cmd"
+        # File does not exist → read_text raises FileNotFoundError (subclass of OSError)
+
+        result = _resolve_windows_cmd(cmd_path)
+        assert result is None
+
+    def test_shutil_which_fallback_when_node_not_on_path(self, tmp_path: Path) -> None:
+        """When node is not on PATH, falls back to bare 'node' string."""
+        rel = r"node_modules\@anthropic-ai\claude-code\cli.js"
+        cmd_path = self._make_cmd(tmp_path, rel)
+
+        with patch("claude_discord.claude.runner.shutil.which", return_value=None):
+            result = _resolve_windows_cmd(cmd_path)
+
+        assert result is not None
+        assert result[0] == "node"
+
+    def test_build_args_patches_cmd_on_win32(self, tmp_path: Path) -> None:
+        """_build_args replaces .cmd with [node, cli.js] when sys.platform == win32."""
+        rel = r"node_modules\@anthropic-ai\claude-code\cli.js"
+        cmd_path = self._make_cmd(tmp_path, rel)
+
+        runner = ClaudeRunner(command=str(cmd_path), model="sonnet")
+
+        with (
+            patch("claude_discord.claude.runner.sys.platform", "win32"),
+            patch("claude_discord.claude.runner.shutil.which", return_value="/usr/bin/node"),
+        ):
+            args = runner._build_args("hello", session_id=None)
+
+        assert args[0] == "/usr/bin/node"
+        assert args[1].endswith("cli.js")
+
+    def test_build_args_unchanged_on_linux(self, tmp_path: Path) -> None:
+        """_build_args does not touch the command on non-Windows platforms."""
+        cmd_path = tmp_path / "claude.cmd"
+        cmd_path.write_text("#!/bin/sh\n")
+
+        runner = ClaudeRunner(command=str(cmd_path), model="sonnet")
+
+        with patch("claude_discord.claude.runner.sys.platform", "linux"):
+            args = runner._build_args("hello", session_id=None)
+
+        assert args[0] == str(cmd_path)
