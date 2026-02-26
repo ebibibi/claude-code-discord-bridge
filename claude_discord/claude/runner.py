@@ -217,7 +217,12 @@ class ClaudeRunner:
             )
             logger.debug("Added image URL for stream-json input: %.80s", url)
 
-        content.append({"type": "text", "text": prompt})
+        # Only add the text block if the prompt is non-empty.
+        # An empty text block causes a 400 error from the Anthropic API when
+        # Claude Code CLI adds cache_control to it:
+        #   "cache_control cannot be set for empty text blocks"
+        if prompt:
+            content.append({"type": "text", "text": prompt})
 
         message = {
             "type": "user",
