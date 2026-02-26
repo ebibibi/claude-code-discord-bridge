@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import signal
+import sys
 from collections.abc import AsyncGenerator
 
 from .parser import parse_line
@@ -242,6 +243,19 @@ class ClaudeRunner:
         # content starting with - from being interpreted as a flag)
         args.append("--")
         args.append(prompt)
+
+        # On Windows, .cmd/.bat wrappers cannot be executed directly by
+        # create_subprocess_exec.  Resolve to the underlying Node script.
+        if sys.platform == "win32" and args[0].lower().endswith((".cmd", ".bat")):
+            import shutil
+            from pathlib import Path
+
+            cmd_path = Path(args[0])
+            cli_js = cmd_path.parent / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
+            if cli_js.exists():
+                node = shutil.which("node") or "node"
+                args = [node, str(cli_js)] + args[1:]
+
         return args
 
     # Environment variables that must never leak to the CLI subprocess.
