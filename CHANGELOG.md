@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Windows compatibility** — resolved Windows npm `.cmd`/`.bat` Claude CLI wrapper to the underlying Node.js script so `create_subprocess_exec` can launch it; `add_signal_handler` (unsupported on Windows) now skipped on `win32` (#176)
+
 ## [1.5.0] - 2026-02-26
 
 ### Added

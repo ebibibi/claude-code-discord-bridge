@@ -214,6 +214,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) のインストールと認証
 - Message Content Intent が有効な Discord Bot トークン
 - [uv](https://docs.astral.sh/uv/)（推奨）または pip
+- 対応プラットフォーム: Linux、macOS、Windows
 
 ### スタンドアロン
 
