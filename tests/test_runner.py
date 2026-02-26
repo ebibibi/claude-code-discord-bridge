@@ -390,3 +390,136 @@ class TestSignalKillSuppression:
         runner = ClaudeRunner(model="haiku")
         cloned = runner.clone()
         assert cloned.model == "haiku"
+
+
+class TestImageStreamJson:
+    """Tests for --input-format stream-json image attachment support.
+
+    Regression tests for the bug where --image flags were added to the CLI
+    args even though the flag does not exist in claude CLI.  Images must be
+    passed via --input-format stream-json / stdin instead.
+
+    See: https://github.com/ebibibi/claude-code-discord-bridge/issues/177
+    """
+
+    def test_no_image_flag_in_args(self) -> None:
+        """_build_args() must NOT produce --image flags (flag does not exist)."""
+        runner = ClaudeRunner(image_paths=["/tmp/photo.png"])
+        args = runner._build_args("look at this", session_id=None)
+        assert "--image" not in args
+
+    def test_stream_json_input_format_added_for_images(self) -> None:
+        """_build_args() adds --input-format stream-json when image_paths is set."""
+        runner = ClaudeRunner(image_paths=["/tmp/photo.png"])
+        args = runner._build_args("look at this", session_id=None)
+        assert "--input-format" in args
+        idx = args.index("--input-format")
+        assert args[idx + 1] == "stream-json"
+
+    def test_prompt_not_in_cli_args_when_images_present(self) -> None:
+        """Prompt must NOT appear as a CLI arg when using stream-json input.
+
+        In stream-json mode the prompt is part of the JSON sent to stdin.
+        Passing it as a CLI arg as well would cause a duplicate-input error.
+        """
+        runner = ClaudeRunner(image_paths=["/tmp/photo.png"])
+        args = runner._build_args("look at this", session_id=None)
+        # Double-dash separator must not be present
+        assert "--" not in args
+        # Prompt must not appear as a positional arg
+        assert "look at this" not in args
+
+    def test_no_stream_json_input_format_without_images(self) -> None:
+        """Without image_paths, --input-format stream-json is NOT added."""
+        runner = ClaudeRunner()
+        args = runner._build_args("hello", session_id=None)
+        assert "--input-format" not in args
+
+    def test_prompt_in_cli_args_without_images(self) -> None:
+        """Without images, prompt is still passed as a CLI arg (existing behaviour)."""
+        runner = ClaudeRunner()
+        args = runner._build_args("hello", session_id=None)
+        assert args[-1] == "hello"
+        assert args[-2] == "--"
+
+    @pytest.mark.asyncio
+    async def test_send_stream_json_message_writes_to_stdin(self) -> None:
+        """_send_stream_json_message() writes a JSON user message to stdin."""
+        import base64
+        import json
+        import tempfile
+
+        # Write a tiny valid PNG to a tempfile
+        png_1x1 = base64.standard_b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
+            "AABjkB6QAAAABJRU5ErkJggg=="
+        )
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(png_1x1)
+            img_path = f.name
+
+        try:
+            runner = ClaudeRunner(image_paths=[img_path])
+
+            stdin_mock = AsyncMock()
+            stdin_mock.drain = AsyncMock()
+
+            mock_process = MagicMock()
+            mock_process.stdin = stdin_mock
+            runner._process = mock_process
+
+            await runner._send_stream_json_message("describe this image")
+
+            # stdin.write must have been called with a JSON line
+            stdin_mock.write.assert_called_once()
+            raw_bytes = stdin_mock.write.call_args[0][0]
+            payload = json.loads(raw_bytes.decode())
+
+            assert payload["type"] == "user"
+            content = payload["message"]["content"]
+            # First block: image
+            assert content[0]["type"] == "image"
+            assert content[0]["source"]["type"] == "base64"
+            assert content[0]["source"]["media_type"] == "image/png"
+            # Second block: text prompt
+            assert content[-1]["type"] == "text"
+            assert content[-1]["text"] == "describe this image"
+        finally:
+            import os
+
+            os.unlink(img_path)
+
+    @pytest.mark.asyncio
+    async def test_send_stream_json_message_uses_pipe_stdin(self) -> None:
+        """run() uses stdin=PIPE (not DEVNULL) when image_paths is set."""
+        import asyncio as _asyncio
+
+        runner = ClaudeRunner(image_paths=["/nonexistent/test.png"])
+
+        async def fake_events():
+            yield  # empty generator
+
+        mock_process = AsyncMock()
+        mock_process.pid = 42
+        mock_process.returncode = None
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.read = AsyncMock(return_value=b"")
+        mock_process.stdin = AsyncMock()
+        mock_process.stdin.drain = AsyncMock()
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with (
+            patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_process,
+            ) as mock_exec,
+            patch.object(runner, "_cleanup", new_callable=AsyncMock),
+        ):
+            # Consume the generator (image file doesn't exist — _send will log warning)
+            _ = [event async for event in runner.run("test")]
+
+        # Verify stdin was PIPE (not DEVNULL)
+        call_kwargs = mock_exec.call_args[1]
+        assert call_kwargs["stdin"] == _asyncio.subprocess.PIPE

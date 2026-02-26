@@ -10,6 +10,8 @@ pass user prompts as arguments without shell injection risk.
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import logging
 import os
 import re
@@ -81,12 +83,18 @@ class ClaudeRunner:
             "Starting Claude CLI: %s (cwd=%s, pid will follow)", " ".join(args[:6]) + " ...", cwd
         )
 
-        # Claude CLI >=2.1.50 blocks on startup when stdin is an open pipe,
-        # even in non-interactive (-p) mode.  Use DEVNULL to avoid the hang.
-        # inject_tool_result() will log a warning if called without stdin.
+        # When image attachments are present we use --input-format stream-json and
+        # write the user message (with base64 images) to stdin immediately after
+        # process start.  This requires stdin=PIPE.
+        #
+        # For text-only sessions we keep stdin=DEVNULL: Claude CLI blocks on startup
+        # when stdin is an open pipe in default text-input mode, and we have no data
+        # to send.
+        stdin_mode = asyncio.subprocess.PIPE if self.image_paths else asyncio.subprocess.DEVNULL
+
         self._process = await asyncio.create_subprocess_exec(
             *args,
-            stdin=asyncio.subprocess.DEVNULL,
+            stdin=stdin_mode,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
@@ -95,6 +103,11 @@ class ClaudeRunner:
         )
 
         logger.info("Claude CLI started: pid=%s", self._process.pid)
+
+        # For stream-json input sessions, send the initial user message (including
+        # base64-encoded images) to stdin now that the process is up.
+        if self.image_paths and self._process.stdin is not None:
+            await self._send_stream_json_message(prompt)
 
         try:
             async for event in self._read_stream():
@@ -175,6 +188,62 @@ class ClaudeRunner:
         except Exception:
             logger.warning("inject_tool_result: failed to write to stdin", exc_info=True)
 
+    # Map common image file extensions to MIME types.
+    _IMAGE_MEDIA_TYPES: dict[str, str] = {
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "gif": "image/gif",
+        "webp": "image/webp",
+    }
+
+    async def _send_stream_json_message(self, prompt: str) -> None:
+        """Write the initial user message to stdin in stream-json format.
+
+        Called immediately after process start when ``image_paths`` is set.
+        Builds a user message with base64-encoded image content blocks followed
+        by the text prompt, then writes it as a single JSON line to stdin.
+
+        The CLI reads this message and begins processing; stdin is left open so
+        that ``inject_tool_result`` can send subsequent responses if needed.
+        """
+        assert self._process is not None and self._process.stdin is not None
+
+        content: list[dict] = []
+        for path in self.image_paths or []:
+            try:
+                with open(path, "rb") as fh:
+                    image_data = base64.standard_b64encode(fh.read()).decode()
+                ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+                media_type = self._IMAGE_MEDIA_TYPES.get(ext, "image/jpeg")
+                content.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": image_data,
+                        },
+                    }
+                )
+                logger.debug("Encoded image %s (%s) for stream-json input", path, media_type)
+            except Exception:
+                logger.warning("Failed to read image %s for stream-json input", path, exc_info=True)
+
+        content.append({"type": "text", "text": prompt})
+
+        message = {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+        }
+        line = json.dumps(message) + "\n"
+        try:
+            self._process.stdin.write(line.encode())
+            await self._process.stdin.drain()
+            logger.debug("Sent stream-json user message (%d image(s))", len(content) - 1)
+        except Exception:
+            logger.warning("_send_stream_json_message: failed to write to stdin", exc_info=True)
+
     async def interrupt(self) -> None:
         """Interrupt the subprocess with SIGINT (graceful stop, like Ctrl+C / Escape).
 
@@ -235,13 +304,17 @@ class ClaudeRunner:
             args.extend(["--append-system-prompt", self.append_system_prompt])
 
         if self.image_paths:
-            for path in self.image_paths:
-                args.extend(["--image", path])
+            # Images are passed via stdin as base64 content blocks in the
+            # stream-json input protocol.  The --input-format flag tells the
+            # CLI to read the user message from stdin instead of the positional
+            # argument, so we do NOT append "-- <prompt>" in this branch.
+            args.extend(["--input-format", "stream-json"])
+        else:
+            # Use -- to separate flags from positional args (prevents prompt
+            # content starting with - from being interpreted as a flag)
+            args.append("--")
+            args.append(prompt)
 
-        # Use -- to separate flags from positional args (prevents prompt
-        # content starting with - from being interpreted as a flag)
-        args.append("--")
-        args.append(prompt)
         return args
 
     # Environment variables that must never leak to the CLI subprocess.
