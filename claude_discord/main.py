@@ -105,10 +105,11 @@ async def main() -> None:
         if deleted:
             logger.info("Cleaned up %d old sessions", deleted)
 
-        # Handle signals
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, lambda: asyncio.create_task(bot.close()))
+        # Handle signals (add_signal_handler is not supported on Windows)
+        if sys.platform != "win32":
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, lambda: asyncio.create_task(bot.close()))
 
         await bot.start(config["token"])
 
