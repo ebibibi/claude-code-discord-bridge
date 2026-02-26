@@ -28,6 +28,7 @@ from ..discord_ui.embeds import (
     tool_result_preview_embed,
     tool_use_embed,
 )
+from ..discord_ui.file_sender import send_written_files
 from ..discord_ui.permission_view import PermissionView
 from ..discord_ui.plan_view import PlanApprovalView
 from ..discord_ui.streaming_manager import StreamingMessageManager
@@ -273,6 +274,14 @@ class EventProcessor:
                 for chunk in chunk_message(response_text):
                     await self._config.thread.send(chunk)
 
+            # Attach files written/edited during the session.
+            if self._state.written_files:
+                await send_written_files(
+                    self._config.thread,
+                    self._state.written_files,
+                    self._config.runner.working_dir,
+                )
+
             await self._config.thread.send(
                 embed=session_complete_embed(
                     event.cost_usd,
@@ -348,6 +357,13 @@ class EventProcessor:
 
         timer = LiveToolTimer(msg, event.tool_use)
         self._state.active_timers[event.tool_use.tool_id] = timer.start()
+
+        # Track files written/edited for session-complete attachment.
+        tu = event.tool_use
+        if tu.tool_name in ("Write", "Edit", "MultiEdit"):
+            fp = tu.tool_input.get("file_path", "")
+            if fp and fp not in self._state.written_files:
+                self._state.written_files.append(fp)
 
         await self._bump_stop()
 

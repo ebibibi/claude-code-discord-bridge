@@ -668,3 +668,176 @@ class TestTodoWrite:
         await p.process(self._make_todo_event())
 
         assert p._state.todo_message is None
+
+
+class TestWrittenFilesTracking:
+    """Write/Edit/MultiEdit tool use accumulates paths in SessionState.written_files."""
+
+    def _make_write_event(
+        self, tool_id: str = "t1", tool_name: str = "Write", path: str = "/work/foo.py"
+    ) -> StreamEvent:
+        return StreamEvent(
+            message_type=MessageType.ASSISTANT,
+            tool_use=ToolUseEvent(
+                tool_id=tool_id,
+                tool_name=tool_name,
+                tool_input={"file_path": path, "file_content": "x = 1"},
+                category=ToolCategory.EDIT,
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_write_tool_path_is_tracked(self, thread: MagicMock, runner: MagicMock) -> None:
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(self._make_write_event(path="/work/foo.py"))
+
+        assert "/work/foo.py" in p._state.written_files
+
+    @pytest.mark.asyncio
+    async def test_edit_tool_path_is_tracked(self, thread: MagicMock, runner: MagicMock) -> None:
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(self._make_write_event(tool_name="Edit", path="/work/bar.py"))
+
+        assert "/work/bar.py" in p._state.written_files
+
+    @pytest.mark.asyncio
+    async def test_multiedit_tool_path_is_tracked(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(self._make_write_event(tool_name="MultiEdit", path="/work/baz.py"))
+
+        assert "/work/baz.py" in p._state.written_files
+
+    @pytest.mark.asyncio
+    async def test_duplicate_path_stored_only_once(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        for i in range(3):
+            await p.process(self._make_write_event(tool_id=f"t{i}", path="/work/foo.py"))
+
+        assert p._state.written_files.count("/work/foo.py") == 1
+
+    @pytest.mark.asyncio
+    async def test_non_write_tool_not_tracked(self, thread: MagicMock, runner: MagicMock) -> None:
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        # Bash tool should not appear in written_files
+        await p.process(_make_tool_event())
+
+        assert p._state.written_files == []
+
+    @pytest.mark.asyncio
+    async def test_multiple_distinct_paths_all_tracked(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(self._make_write_event(tool_id="t1", path="/work/a.py"))
+        await p.process(self._make_write_event(tool_id="t2", tool_name="Edit", path="/work/b.py"))
+
+        assert "/work/a.py" in p._state.written_files
+        assert "/work/b.py" in p._state.written_files
+
+    @pytest.mark.asyncio
+    async def test_write_tool_without_file_path_ignored(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Tool inputs lacking file_path should not crash or add empty strings."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        event = StreamEvent(
+            message_type=MessageType.ASSISTANT,
+            tool_use=ToolUseEvent(
+                tool_id="t1",
+                tool_name="Write",
+                tool_input={},  # no file_path key
+                category=ToolCategory.EDIT,
+            ),
+        )
+        await p.process(event)
+
+        assert p._state.written_files == []
+
+
+class TestOnCompleteFileSending:
+    """_on_complete() calls send_written_files when written_files is non-empty."""
+
+    @pytest.mark.asyncio
+    async def test_send_written_files_called_on_success(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        (tmp_path / "out.py").write_text("result = 42", encoding="utf-8")
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        p._state.written_files = [str(tmp_path / "out.py")]
+
+        with patch("claude_discord.cogs.event_processor.send_written_files") as mock_send:
+            mock_send.return_value = None
+            mock_send = AsyncMock()
+            with patch(
+                "claude_discord.cogs.event_processor.send_written_files",
+                new=mock_send,
+            ):
+                await p.process(_make_result_event(session_id="s1"))
+
+        mock_send.assert_called_once_with(
+            thread,
+            [str(tmp_path / "out.py")],
+            str(tmp_path),
+        )
+
+    @pytest.mark.asyncio
+    async def test_send_written_files_not_called_on_error(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        (tmp_path / "out.py").write_text("x = 1", encoding="utf-8")
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        p._state.written_files = [str(tmp_path / "out.py")]
+
+        with patch(
+            "claude_discord.cogs.event_processor.send_written_files",
+            new=AsyncMock(),
+        ) as mock_send:
+            await p.process(_make_result_event(error="Claude crashed"))
+
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_send_written_files_not_called_when_list_empty(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        from unittest.mock import patch
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        # written_files is empty by default
+
+        with patch(
+            "claude_discord.cogs.event_processor.send_written_files",
+            new=AsyncMock(),
+        ) as mock_send:
+            await p.process(_make_result_event(session_id="s1"))
+
+        mock_send.assert_not_called()
