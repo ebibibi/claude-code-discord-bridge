@@ -7,8 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-02-26
+
+### Added
+- **Cross-platform CI** — test matrix now covers Linux, Windows, and macOS × Python 3.10/3.11/3.12 (9 parallel jobs); `fail-fast: false` so all OS results are visible in one run (#192)
+- **`_resolve_windows_cmd` unit tests** — 7 new tests covering npm wrapper parsing, fallback heuristic, OSError, missing node, and `_build_args` integration; all tests pass on every OS via `tmp_path` fixtures and `sys.platform` mocking (#192)
+
 ### Fixed
 - **Windows compatibility** — resolved Windows npm `.cmd`/`.bat` Claude CLI wrapper to the underlying Node.js script so `create_subprocess_exec` can launch it; `add_signal_handler` (unsupported on Windows) now skipped on `win32` (#176)
+- **Windows CI: UnicodeDecodeError in test_architecture** — `read_text()` calls now specify `encoding="utf-8"` explicitly; previously failed on Windows where the default encoding is locale-dependent (e.g. cp932)
 
 ## [1.5.0] - 2026-02-26
 
