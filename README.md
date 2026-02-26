@@ -159,6 +159,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 
 #### 🔌 Input & Skills
 - **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images sent as Discord CDN URLs via `--input-format stream-json` (up to 4 × 5 MB)
+- **On-demand file delivery** — Ask Claude to "send me" or "attach" a file and it writes the path to `.ccdb-attachments`; the bot reads it and delivers the file as a Discord attachment when the session completes
 - **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume
 - **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
 
@@ -344,8 +345,6 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `COORDINATION_CHANNEL_ID` | Channel ID for cross-session event broadcasts | (optional) |
 | `CCDB_COORDINATION_CHANNEL_NAME` | Auto-create coordination channel by name | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
-| `CCDB_ATTACH_WRITTEN_FILES` | Send files written/edited during a session as Discord attachments on session complete (`true`/`1`/`yes` to enable) | `false` |
-| `CCDB_ATTACH_MAX_BYTES` | Per-file size limit for attachments in bytes (files over this limit are skipped) | `524288` (512 KB) |
 
 ---
 
