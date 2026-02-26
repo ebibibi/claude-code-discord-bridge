@@ -69,7 +69,7 @@ class RunConfig:
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.
     def __post_init__(self) -> None:
-        if not self.prompt:
+        if not self.prompt and not self.image_urls:
             raise ValueError("RunConfig.prompt must not be empty")
 
     def with_prompt(self, prompt: str) -> RunConfig:
