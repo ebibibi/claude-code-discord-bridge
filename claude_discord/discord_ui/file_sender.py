@@ -67,7 +67,7 @@ def _relative_path(file_path: str, working_dir: str | None) -> str:
     """
     if working_dir:
         with contextlib.suppress(ValueError):
-            return str(Path(file_path).relative_to(working_dir))
+            return Path(file_path).relative_to(working_dir).as_posix()
     return Path(file_path).name
 
 
