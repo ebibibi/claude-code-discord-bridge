@@ -413,6 +413,10 @@ class ClaudeChatCog(commands.Cog):
         session_id = record.session_id if record else None
         prompt, image_urls = await self._build_prompt_and_images(message)
 
+        # Nothing to send — ignore silently (e.g. unsupported attachment only).
+        if not prompt and not image_urls:
+            return
+
         # Interrupt any active session in this thread before starting a new one.
         existing_runner = self._active_runners.get(thread.id)
         existing_task = self._active_tasks.get(thread.id)
