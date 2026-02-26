@@ -279,6 +279,8 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `COORDINATION_CHANNEL_ID` | セッション間イベントブロードキャスト用チャンネル ID | （オプション） |
 | `CCDB_COORDINATION_CHANNEL_NAME` | 協調チャンネルを名前で自動作成 | （オプション） |
 | `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
+| `CCDB_ATTACH_WRITTEN_FILES` | セッション完了時に書き込み・編集したファイルを Discord に添付（`true`/`1`/`yes` で有効化） | `false` |
+| `CCDB_ATTACH_MAX_BYTES` | 添付ファイルのサイズ上限（バイト単位、上限超過のファイルはスキップ） | `524288`（512 KB） |
 
 ---
 

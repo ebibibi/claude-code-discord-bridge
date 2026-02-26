@@ -344,6 +344,8 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `COORDINATION_CHANNEL_ID` | Channel ID for cross-session event broadcasts | (optional) |
 | `CCDB_COORDINATION_CHANNEL_NAME` | Auto-create coordination channel by name | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
+| `CCDB_ATTACH_WRITTEN_FILES` | Send files written/edited during a session as Discord attachments on session complete (`true`/`1`/`yes` to enable) | `false` |
+| `CCDB_ATTACH_MAX_BYTES` | Per-file size limit for attachments in bytes (files over this limit are skipped) | `524288` (512 KB) |
 
 ---
 
