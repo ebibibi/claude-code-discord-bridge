@@ -9,7 +9,7 @@ This module is the thin orchestration layer that:
 Primary API:
     run_claude_with_config(config: RunConfig) -> str | None
 
-Legacy shim (kept for backward compatibility):
+Legacy shim:
     run_claude_in_thread(thread, runner, repo, prompt, session_id, ...) -> str | None
 """
 
@@ -21,17 +21,11 @@ import re
 
 import discord
 
-from ..discord_ui.ask_handler import ASK_ANSWER_TIMEOUT, collect_ask_answers  # noqa: F401
+from ..discord_ui.ask_handler import collect_ask_answers
 from ..discord_ui.embeds import error_embed, timeout_embed
-from ..discord_ui.streaming_manager import (  # noqa: F401
-    STREAM_EDIT_INTERVAL,
-    STREAM_MAX_CHARS,
-    StreamingMessageManager,
-)
-from ..discord_ui.tool_timer import TOOL_TIMER_INTERVAL, LiveToolTimer  # noqa: F401
 from ..lounge import build_lounge_prompt
 from .event_processor import EventProcessor
-from .run_config import RunConfig  # noqa: F401
+from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
 
