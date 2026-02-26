@@ -228,8 +228,8 @@ class ClaudeChatCog(commands.Cog):
         """Create a new thread and start a Claude Code session."""
         thread_name = message.content[:100] if message.content else "Claude Chat"
         thread = await message.create_thread(name=thread_name)
-        prompt, image_paths = await self._build_prompt_and_images(message)
-        await self._run_claude(message, thread, prompt, session_id=None, image_paths=image_paths)
+        prompt, image_urls = await self._build_prompt_and_images(message)
+        await self._run_claude(message, thread, prompt, session_id=None, image_urls=image_urls)
 
     async def spawn_session(
         self,
@@ -411,7 +411,7 @@ class ClaudeChatCog(commands.Cog):
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
-        prompt, image_paths = await self._build_prompt_and_images(message)
+        prompt, image_urls = await self._build_prompt_and_images(message)
 
         # Interrupt any active session in this thread before starting a new one.
         existing_runner = self._active_runners.get(thread.id)
@@ -426,7 +426,7 @@ class ClaudeChatCog(commands.Cog):
                     await existing_task
 
         await self._run_claude(
-            message, thread, prompt, session_id=session_id, image_paths=image_paths
+            message, thread, prompt, session_id=session_id, image_urls=image_urls
         )
 
     async def _build_prompt(self, message: discord.Message) -> str:
@@ -435,34 +435,36 @@ class ClaudeChatCog(commands.Cog):
         return prompt
 
     async def _build_prompt_and_images(self, message: discord.Message) -> tuple[str, list[str]]:
-        """Build the prompt string and download image attachments to tempfiles.
+        """Build the prompt string and collect image attachment URLs.
 
         Text attachments (text/*, application/json, application/xml) are appended
-        inline to the prompt.  Image attachments (image/*) are downloaded to
-        temporary files and returned as paths for the ``--image`` flag.
+        inline to the prompt.  Image attachments (image/*) are collected as HTTPS
+        URLs (Discord CDN) and returned for stream-json input to Claude Code CLI.
+
+        Claude Code CLI silently drops base64 image blocks in stream-json mode.
+        Passing Discord CDN URLs directly as ``{"type": "url"}`` image sources is
+        the only format the CLI forwards to the Anthropic API.
 
         Both binary-file types that exceed size limits and unsupported types are
         silently skipped — never raise an error to the user.
 
         Returns:
-            (prompt_text, image_temp_paths) — callers must delete tempfiles.
+            (prompt_text, image_urls) — HTTPS URLs for stream-json url-type blocks.
         """
-        import tempfile
-
         prompt = message.content or ""
         if not message.attachments:
             return prompt, []
 
         total_bytes = 0
         sections: list[str] = []
-        image_paths: list[str] = []
+        image_urls: list[str] = []
 
         for attachment in message.attachments[:_MAX_ATTACHMENTS]:
             content_type = attachment.content_type or ""
 
-            # ---- Image attachments → tempfile for --image flag ----
+            # ---- Image attachments → collect CDN URL for stream-json input ----
             if content_type.startswith(_IMAGE_MIME_PREFIXES):
-                if len(image_paths) >= _MAX_IMAGES:
+                if len(image_urls) >= _MAX_IMAGES:
                     logger.debug("Skipping image %s: max images reached", attachment.filename)
                     continue
                 if attachment.size > _MAX_IMAGE_BYTES:
@@ -472,17 +474,10 @@ class ClaudeChatCog(commands.Cog):
                         attachment.size,
                     )
                     continue
-                try:
-                    data = await attachment.read()
-                    suffix = f"_{attachment.filename}"
-                    with tempfile.NamedTemporaryFile(
-                        delete=False, suffix=suffix, prefix="ccdb_img_"
-                    ) as f:
-                        f.write(data)
-                        image_paths.append(f.name)
-                    logger.debug("Downloaded image %s → %s", attachment.filename, f.name)
-                except Exception:
-                    logger.debug("Failed to download image %s", attachment.filename, exc_info=True)
+                image_urls.append(attachment.url)
+                logger.debug(
+                    "Collected image URL for %s: %.80s", attachment.filename, attachment.url
+                )
                 continue
 
             # ---- Text attachments → inline in prompt ----
@@ -512,7 +507,7 @@ class ClaudeChatCog(commands.Cog):
                 logger.debug("Failed to read attachment %s", attachment.filename, exc_info=True)
                 continue
 
-        return prompt + "".join(sections), image_paths
+        return prompt + "".join(sections), image_urls
 
     async def _run_claude(
         self,
@@ -520,7 +515,7 @@ class ClaudeChatCog(commands.Cog):
         thread: discord.Thread,
         prompt: str,
         session_id: str | None,
-        image_paths: list[str] | None = None,
+        image_urls: list[str] | None = None,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
         if self._semaphore.locked():
@@ -580,7 +575,7 @@ class ClaudeChatCog(commands.Cog):
                         lounge_repo=self._lounge_repo,
                         stop_view=stop_view,
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
-                        image_paths=image_paths,
+                        image_urls=image_urls,
                     )
                 )
             finally:
