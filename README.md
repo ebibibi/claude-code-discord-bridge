@@ -564,6 +564,8 @@ claude_discord/
     claude_chat.py         # Interactive chat (thread creation, message handling)
     skill_command.py       # /skill slash command with autocomplete
     session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_sync.py        # Thread-creation and message-posting logic for sync-sessions (extracted from SessionManageCog)
+    prompt_builder.py      # build_prompt_and_images() — pure function, no Cog/Bot state
     scheduler.py           # Periodic Claude Code task executor
     webhook_trigger.py     # Webhook → Claude Code task execution (CI/CD)
     auto_upgrade.py        # Webhook → package upgrade + drain-aware restart
