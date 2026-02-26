@@ -33,25 +33,13 @@ from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.views import StopView
 from ._run_helper import run_claude_with_config
+from .prompt_builder import build_prompt_and_images
 from .run_config import RunConfig
 
 if TYPE_CHECKING:
     from ..bot import ClaudeDiscordBot
 
 logger = logging.getLogger(__name__)
-
-# Attachment filtering constants
-_ALLOWED_MIME_PREFIXES = (
-    "text/",
-    "application/json",
-    "application/xml",
-)
-_IMAGE_MIME_PREFIXES = ("image/",)
-_MAX_ATTACHMENT_BYTES = 50_000  # 50 KB per file
-_MAX_IMAGE_BYTES = 5_000_000  # 5 MB per image
-_MAX_TOTAL_BYTES = 100_000  # 100 KB across all text attachments
-_MAX_ATTACHMENTS = 5
-_MAX_IMAGES = 4  # Claude supports up to 4 images per prompt
 
 
 class ClaudeChatCog(commands.Cog):
@@ -433,85 +421,9 @@ class ClaudeChatCog(commands.Cog):
             message, thread, prompt, session_id=session_id, image_urls=image_urls
         )
 
-    async def _build_prompt(self, message: discord.Message) -> str:
-        """Build the prompt string (text only). Use _build_prompt_and_images for full processing."""
-        prompt, _ = await self._build_prompt_and_images(message)
-        return prompt
-
     async def _build_prompt_and_images(self, message: discord.Message) -> tuple[str, list[str]]:
-        """Build the prompt string and collect image attachment URLs.
-
-        Text attachments (text/*, application/json, application/xml) are appended
-        inline to the prompt.  Image attachments (image/*) are collected as HTTPS
-        URLs (Discord CDN) and returned for stream-json input to Claude Code CLI.
-
-        Claude Code CLI silently drops base64 image blocks in stream-json mode.
-        Passing Discord CDN URLs directly as ``{"type": "url"}`` image sources is
-        the only format the CLI forwards to the Anthropic API.
-
-        Both binary-file types that exceed size limits and unsupported types are
-        silently skipped — never raise an error to the user.
-
-        Returns:
-            (prompt_text, image_urls) — HTTPS URLs for stream-json url-type blocks.
-        """
-        prompt = message.content or ""
-        if not message.attachments:
-            return prompt, []
-
-        total_bytes = 0
-        sections: list[str] = []
-        image_urls: list[str] = []
-
-        for attachment in message.attachments[:_MAX_ATTACHMENTS]:
-            content_type = attachment.content_type or ""
-
-            # ---- Image attachments → collect CDN URL for stream-json input ----
-            if content_type.startswith(_IMAGE_MIME_PREFIXES):
-                if len(image_urls) >= _MAX_IMAGES:
-                    logger.debug("Skipping image %s: max images reached", attachment.filename)
-                    continue
-                if attachment.size > _MAX_IMAGE_BYTES:
-                    logger.debug(
-                        "Skipping image %s: too large (%d bytes)",
-                        attachment.filename,
-                        attachment.size,
-                    )
-                    continue
-                image_urls.append(attachment.url)
-                logger.debug(
-                    "Collected image URL for %s: %.80s", attachment.filename, attachment.url
-                )
-                continue
-
-            # ---- Text attachments → inline in prompt ----
-            if attachment.size > _MAX_ATTACHMENT_BYTES:
-                logger.debug(
-                    "Skipping attachment %s: too large (%d bytes)",
-                    attachment.filename,
-                    attachment.size,
-                )
-                continue
-            if not content_type.startswith(_ALLOWED_MIME_PREFIXES):
-                logger.debug(
-                    "Skipping attachment %s: unsupported type %s",
-                    attachment.filename,
-                    content_type,
-                )
-                continue
-            total_bytes += attachment.size
-            if total_bytes > _MAX_TOTAL_BYTES:
-                logger.debug("Stopping attachment processing: total size exceeded")
-                break
-            try:
-                data = await attachment.read()
-                text = data.decode("utf-8", errors="replace")
-                sections.append(f"\n\n--- Attached file: {attachment.filename} ---\n{text}")
-            except Exception:
-                logger.debug("Failed to read attachment %s", attachment.filename, exc_info=True)
-                continue
-
-        return prompt + "".join(sections), image_urls
+        """Delegate to the standalone prompt_builder module."""
+        return await build_prompt_and_images(message)
 
     async def _run_claude(
         self,

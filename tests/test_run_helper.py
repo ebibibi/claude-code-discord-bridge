@@ -17,8 +17,6 @@ from claude_discord.claude.types import (
 )
 from claude_discord.cogs._run_helper import (
     TOOL_RESULT_MAX_CHARS,
-    LiveToolTimer,
-    StreamingMessageManager,
     _make_error_embed,
     _truncate_result,
     run_claude_in_thread,
@@ -26,6 +24,8 @@ from claude_discord.cogs._run_helper import (
 )
 from claude_discord.cogs.run_config import RunConfig
 from claude_discord.concurrency import SessionRegistry
+from claude_discord.discord_ui.streaming_manager import StreamingMessageManager
+from claude_discord.discord_ui.tool_timer import LiveToolTimer
 
 
 class TestTruncateResult:
@@ -1032,8 +1032,6 @@ class TestLiveToolTimer:
     @pytest.mark.asyncio
     async def test_run_claude_cancels_timer_on_tool_result(self) -> None:
         """Timer task should be cancelled when the tool result arrives."""
-        import claude_discord.cogs._run_helper as rh
-
         thread = MagicMock(spec=discord.Thread)
         thread.id = 11111
         tool_msg = MagicMock(spec=discord.Message)
@@ -1076,12 +1074,14 @@ class TestLiveToolTimer:
 
         runner.run = gen
 
-        original_interval = rh.TOOL_TIMER_INTERVAL
-        rh.TOOL_TIMER_INTERVAL = 100  # ensure timer never fires during this test
+        import claude_discord.discord_ui.tool_timer as tt
+
+        original_interval = tt.TOOL_TIMER_INTERVAL
+        tt.TOOL_TIMER_INTERVAL = 100  # ensure timer never fires during this test
         try:
             await run_claude_in_thread(thread, runner, repo, "login", None)
         finally:
-            rh.TOOL_TIMER_INTERVAL = original_interval
+            tt.TOOL_TIMER_INTERVAL = original_interval
 
         # All timers should be cleared after run completes
         # (verified indirectly: no ghost tasks, session finishes cleanly)

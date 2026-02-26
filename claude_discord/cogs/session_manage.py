@@ -9,7 +9,6 @@ Provides slash commands for viewing and managing Claude Code sessions:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -20,8 +19,8 @@ from discord.ext import commands
 from ..database.repository import SessionRepository
 from ..database.settings_repo import SettingsRepository
 from ..discord_ui.embeds import COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
-from ..session_sync import CliSession, extract_recent_messages, scan_cli_sessions
 from ..worktree import WorktreeManager
+from .session_sync import sync_cli_sessions
 
 if TYPE_CHECKING:
     from ..bot import ClaudeDiscordBot
@@ -384,17 +383,7 @@ class SessionManageCog(commands.Cog):
         since_hours = await self._get_since_hours()
         min_results = await self._get_min_results()
 
-        # Run CPU/IO-heavy scan in a thread to avoid blocking the event loop
-        cli_sessions = await asyncio.to_thread(
-            scan_cli_sessions,
-            self.cli_sessions_path,
-            since_hours=since_hours,
-            min_results=min_results,
-        )
         raw_channel = self.bot.get_channel(self.bot.channel_id)
-
-        imported = 0
-        skipped = 0
 
         if not isinstance(raw_channel, discord.TextChannel):
             logger.warning("Channel %d is not a TextChannel", self.bot.channel_id)
@@ -407,139 +396,25 @@ class SessionManageCog(commands.Cog):
             )
             return
 
-        channel: discord.TextChannel = raw_channel
+        result = await sync_cli_sessions(
+            cli_sessions_path=self.cli_sessions_path,
+            channel=raw_channel,
+            repo=self.repo,
+            thread_style=thread_style,
+            since_hours=since_hours,
+            min_results=min_results,
+        )
 
-        for cli_session in cli_sessions:
-            # Check if already tracked
-            existing = await self.repo.get_by_session_id(cli_session.session_id)
-            if existing:
-                skipped += 1
-                continue
-
-            thread_name = (cli_session.summary or cli_session.session_id)[:100]
-
-            # Create thread based on configured style
-            thread = await self._create_sync_thread(channel, cli_session, thread_name, thread_style)
-
-            # Save to DB
-            await self.repo.save(
-                thread_id=thread.id,
-                session_id=cli_session.session_id,
-                working_dir=cli_session.working_dir,
-                origin="cli",
-                summary=cli_session.summary,
-            )
-
-            # Post info embed inside the thread (for channel-style threads
-            # this is the main content; for message-style the embed is on
-            # the parent message so we skip the duplicate here)
-            if thread_style == THREAD_STYLE_CHANNEL:
-                info_embed = discord.Embed(
-                    title="\U0001f5a5\ufe0f Imported CLI Session",
-                    description=(
-                        f"This thread is linked to a Claude Code CLI session.\n"
-                        f"Reply here to continue the conversation.\n\n"
-                        f"```\nclaude --resume {cli_session.session_id}\n```"
-                    ),
-                    color=COLOR_INFO,
-                )
-                if cli_session.working_dir:
-                    info_embed.add_field(
-                        name="Working Directory",
-                        value=f"`{cli_session.working_dir}`",
-                        inline=True,
-                    )
-                if cli_session.timestamp:
-                    info_embed.add_field(
-                        name="Created", value=cli_session.timestamp[:10], inline=True
-                    )
-                info_embed.set_footer(text=f"Session: {cli_session.session_id[:8]}...")
-                await thread.send(embed=info_embed)
-
-            # Post recent conversation messages for context
-            await self._post_recent_messages(thread, cli_session.session_id)
-
-            imported += 1
-
-        # Send result
-        total_found = len(cli_sessions)
         embed = discord.Embed(
             title="\U0001f504 Session Sync Complete",
             description=(
-                f"Found **{total_found}** CLI session(s).\n"
-                f"\u2705 Imported: **{imported}**\n"
-                f"\u23ed\ufe0f Already synced: **{skipped}**"
+                f"Found **{result.total_found}** CLI session(s).\n"
+                f"\u2705 Imported: **{result.imported}**\n"
+                f"\u23ed\ufe0f Already synced: **{result.skipped}**"
             ),
             color=COLOR_SUCCESS,
         )
         await interaction.followup.send(embed=embed)
-
-    async def _create_sync_thread(
-        self,
-        channel: discord.TextChannel,
-        cli_session: CliSession,
-        thread_name: str,
-        style: str,
-    ) -> discord.Thread:
-        """Create a thread using the configured style.
-
-        - channel: Creates a standalone thread in the Threads panel.
-        - message: Posts a summary embed, then creates a thread from it.
-        """
-        if style == THREAD_STYLE_MESSAGE:
-            embed = discord.Embed(
-                title=f"\U0001f5a5\ufe0f {thread_name[:80]}",
-                description=f"```\nclaude --resume {cli_session.session_id}\n```",
-                color=COLOR_INFO,
-            )
-            if cli_session.working_dir:
-                dir_short = cli_session.working_dir.rsplit("/", 1)[-1]
-                embed.add_field(name="Directory", value=f"`{dir_short}`", inline=True)
-            if cli_session.timestamp:
-                embed.add_field(name="Created", value=cli_session.timestamp[:10], inline=True)
-            embed.set_footer(text=f"Session: {cli_session.session_id[:8]}...")
-
-            summary_msg = await channel.send(embed=embed)
-            return await summary_msg.create_thread(name=f"\U0001f5a5 {thread_name}")
-
-        # Default: channel thread
-        return await channel.create_thread(
-            name=f"\U0001f5a5 {thread_name}",
-            type=discord.ChannelType.public_thread,
-        )
-
-    async def _post_recent_messages(self, thread: discord.Thread, session_id: str) -> None:
-        """Post recent conversation messages inside the thread for context."""
-        assert self.cli_sessions_path is not None  # Caller ensures this
-        recent = await asyncio.to_thread(
-            extract_recent_messages,
-            self.cli_sessions_path,
-            session_id,
-            count=6,
-            max_content_len=500,
-        )
-        if not recent:
-            return
-
-        lines: list[str] = []
-        for msg in recent:
-            if msg.role == "user":
-                lines.append(f"**You:** {msg.content}")
-            else:
-                lines.append(f"**Claude:** {msg.content}")
-
-        # Split into chunks that fit Discord's 2000 char limit
-        chunk = ""
-        for line in lines:
-            candidate = f"{chunk}\n\n{line}" if chunk else line
-            if len(candidate) > 1900:
-                if chunk:
-                    await thread.send(chunk)
-                chunk = line[:1900]
-            else:
-                chunk = candidate
-        if chunk:
-            await thread.send(chunk)
 
     # ------------------------------------------------------------------
     # Worktree commands
