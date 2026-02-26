@@ -1,4 +1,4 @@
-"""Tests for discord_ui.file_sender — TDD first pass.
+"""Tests for discord_ui.file_sender.
 
 All tests use tmp_path (pytest built-in) and AsyncMock so they run on every
 OS without a real Discord connection.
@@ -6,9 +6,8 @@ OS without a real Discord connection.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -16,7 +15,7 @@ from claude_discord.discord_ui.file_sender import (
     _is_binary,
     _relative_path,
     collect_discord_files,
-    send_written_files,
+    send_files,
 )
 
 # ---------------------------------------------------------------------------
@@ -126,7 +125,6 @@ class TestCollectDiscordFiles:
 
         files = collect_discord_files([str(f)], str(tmp_path))
 
-        # The discord.File fp is an in-memory BytesIO
         content = files[0].fp.read()
         assert b"result = 42" in content
 
@@ -140,43 +138,17 @@ class TestCollectDiscordFiles:
 
 
 # ---------------------------------------------------------------------------
-# send_written_files
+# send_files
 # ---------------------------------------------------------------------------
 
 
-class TestSendWrittenFiles:
-    @pytest.mark.asyncio
-    async def test_does_nothing_when_disabled_by_env(self, tmp_path: Path) -> None:
-        thread = MagicMock()
-        thread.send = AsyncMock()
-        f = tmp_path / "foo.py"
-        f.write_text("x = 1", encoding="utf-8")
-
-        with patch.dict(os.environ, {"CCDB_ATTACH_WRITTEN_FILES": "false"}):
-            await send_written_files(thread, [str(f)], str(tmp_path))
-
-        thread.send.assert_not_called()
-
+class TestSendFiles:
     @pytest.mark.asyncio
     async def test_does_nothing_for_empty_list(self) -> None:
         thread = MagicMock()
         thread.send = AsyncMock()
 
-        await send_written_files(thread, [], None)
-
-        thread.send.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_disabled_by_default(self, tmp_path: Path) -> None:
-        """Feature is OFF when CCDB_ATTACH_WRITTEN_FILES is not set."""
-        thread = MagicMock()
-        thread.send = AsyncMock()
-        f = tmp_path / "result.py"
-        f.write_text("print('done')", encoding="utf-8")
-
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("CCDB_ATTACH_WRITTEN_FILES", None)
-            await send_written_files(thread, [str(f)], str(tmp_path))
+        await send_files(thread, [], None)
 
         thread.send.assert_not_called()
 
@@ -187,8 +159,7 @@ class TestSendWrittenFiles:
         f = tmp_path / "result.py"
         f.write_text("print('done')", encoding="utf-8")
 
-        with patch.dict(os.environ, {"CCDB_ATTACH_WRITTEN_FILES": "true"}):
-            await send_written_files(thread, [str(f)], str(tmp_path))
+        await send_files(thread, [str(f)], str(tmp_path))
 
         thread.send.assert_called_once()
         kwargs = thread.send.call_args.kwargs
@@ -204,8 +175,7 @@ class TestSendWrittenFiles:
         f.write_text("x = 1", encoding="utf-8")
 
         # Must complete without raising
-        with patch.dict(os.environ, {"CCDB_ATTACH_WRITTEN_FILES": "true"}):
-            await send_written_files(thread, [str(f)], str(tmp_path))
+        await send_files(thread, [str(f)], str(tmp_path))
 
     @pytest.mark.asyncio
     async def test_batches_more_than_10_files(self, tmp_path: Path) -> None:
@@ -219,8 +189,7 @@ class TestSendWrittenFiles:
             f.write_text(f"x = {i}", encoding="utf-8")
             paths.append(str(f))
 
-        with patch.dict(os.environ, {"CCDB_ATTACH_WRITTEN_FILES": "true"}):
-            await send_written_files(thread, paths, str(tmp_path))
+        await send_files(thread, paths, str(tmp_path))
 
         # 12 files → 2 calls (10 + 2)
         assert thread.send.call_count == 2
@@ -236,35 +205,6 @@ class TestSendWrittenFiles:
         f = tmp_path / "img.png"
         f.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00")
 
-        with patch.dict(os.environ, {"CCDB_ATTACH_WRITTEN_FILES": "true"}):
-            await send_written_files(thread, [str(f)], str(tmp_path))
+        await send_files(thread, [str(f)], str(tmp_path))
 
         thread.send.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_env_false_variants(self, tmp_path: Path) -> None:
-        """'0', 'no', 'false' all disable the feature."""
-        thread = MagicMock()
-        thread.send = AsyncMock()
-        f = tmp_path / "foo.py"
-        f.write_text("x = 1", encoding="utf-8")
-
-        for val in ("0", "no", "NO", "False", "FALSE"):
-            thread.send.reset_mock()
-            with patch.dict(os.environ, {"CCDB_ATTACH_WRITTEN_FILES": val}):
-                await send_written_files(thread, [str(f)], str(tmp_path))
-            thread.send.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_env_true_variants(self, tmp_path: Path) -> None:
-        """'1', 'yes', 'true' all enable the feature."""
-        thread = MagicMock()
-        thread.send = AsyncMock()
-        f = tmp_path / "foo.py"
-        f.write_text("x = 1", encoding="utf-8")
-
-        for val in ("1", "yes", "YES", "True", "TRUE"):
-            thread.send.reset_mock()
-            with patch.dict(os.environ, {"CCDB_ATTACH_WRITTEN_FILES": val}):
-                await send_written_files(thread, [str(f)], str(tmp_path))
-            thread.send.assert_called()

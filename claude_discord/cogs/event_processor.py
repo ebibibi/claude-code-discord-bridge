@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from pathlib import Path
 
 from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent
 from ..discord_ui.chunker import chunk_message
@@ -28,7 +29,7 @@ from ..discord_ui.embeds import (
     tool_result_preview_embed,
     tool_use_embed,
 )
-from ..discord_ui.file_sender import send_written_files
+from ..discord_ui.file_sender import send_files
 from ..discord_ui.permission_view import PermissionView
 from ..discord_ui.plan_view import PlanApprovalView
 from ..discord_ui.streaming_manager import StreamingMessageManager
@@ -36,6 +37,33 @@ from ..discord_ui.tool_timer import LiveToolTimer
 from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
+
+# Marker file written by Claude when the user asks to receive specific files.
+_ATTACHMENT_MARKER = ".ccdb-attachments"
+
+
+async def _send_attachment_requests(
+    thread: object,
+    working_dir: str | None,
+) -> None:
+    """Read .ccdb-attachments and send listed files to Discord.
+
+    If the marker file does not exist or is empty, this is a no-op.
+    The marker file is deleted after sending so it does not persist into
+    future sessions.  Any error (missing file, Discord API failure, etc.)
+    is suppressed — file attachment is non-fatal.
+    """
+    if not working_dir:
+        return
+    marker = Path(working_dir) / _ATTACHMENT_MARKER
+    if not marker.exists():
+        return
+    with contextlib.suppress(OSError):
+        paths = [p.strip() for p in marker.read_text(encoding="utf-8").splitlines() if p.strip()]
+        marker.unlink(missing_ok=True)
+        if paths:
+            await send_files(thread, paths, working_dir)  # type: ignore[arg-type]
+
 
 # Max characters for tool result display.
 # Sized to show ~30 lines of typical output (100 chars/line × 30 = 3000).
@@ -274,13 +302,11 @@ class EventProcessor:
                 for chunk in chunk_message(response_text):
                     await self._config.thread.send(chunk)
 
-            # Attach files written/edited during the session.
-            if self._state.written_files:
-                await send_written_files(
-                    self._config.thread,
-                    self._state.written_files,
-                    self._config.runner.working_dir,
-                )
+            # Send files listed in the .ccdb-attachments marker file, if present.
+            await _send_attachment_requests(
+                self._config.thread,
+                self._config.runner.working_dir,
+            )
 
             await self._config.thread.send(
                 embed=session_complete_embed(
@@ -357,13 +383,6 @@ class EventProcessor:
 
         timer = LiveToolTimer(msg, event.tool_use)
         self._state.active_timers[event.tool_use.tool_id] = timer.start()
-
-        # Track files written/edited for session-complete attachment.
-        tu = event.tool_use
-        if tu.tool_name in ("Write", "Edit", "MultiEdit"):
-            fp = tu.tool_input.get("file_path", "")
-            if fp and fp not in self._state.written_files:
-                self._state.written_files.append(fp)
 
         await self._bump_stop()
 

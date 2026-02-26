@@ -1,16 +1,11 @@
 """File attachment sender for session-complete events.
 
-Collects files written/edited during a Claude session and sends them as
-Discord attachments when the session completes successfully.
-
-Configuration (environment variables):
-    CCDB_ATTACH_WRITTEN_FILES: Set to "false", "0", or "no" to disable.
-        Defaults to enabled.
-    CCDB_ATTACH_MAX_BYTES: Per-file size limit in bytes.
-        Defaults to 524288 (512 KB).
+Sends files as Discord attachments when Claude has been asked to deliver them.
+Files are specified by writing their paths to ``.ccdb-attachments`` in the
+working directory; the bot reads this marker and sends the listed files.
 
 Discord limits: 10 files per message, 8 MB per file (non-boosted server).
-Files exceeding the configured size limit or detected as binary are skipped.
+Files exceeding the size limit or detected as binary are skipped.
 """
 
 from __future__ import annotations
@@ -18,37 +13,17 @@ from __future__ import annotations
 import contextlib
 import io
 import logging
-import os
 from pathlib import Path
 
 import discord
 
 logger = logging.getLogger(__name__)
 
-# Default per-file size limit — generous for source code, avoids accidental
-# large binary uploads.
-_DEFAULT_MAX_FILE_BYTES = 512 * 1024  # 512 KB
+# Per-file size limit — generous for source code, avoids large binary uploads.
+_MAX_FILE_BYTES = 512 * 1024  # 512 KB
 
 # Discord API hard limit: 10 files per message.
 _MAX_FILES_PER_MESSAGE = 10
-
-
-def _is_enabled() -> bool:
-    """Return True only when CCDB_ATTACH_WRITTEN_FILES is explicitly set to a truthy value."""
-    return os.environ.get("CCDB_ATTACH_WRITTEN_FILES", "false").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
-
-
-def _max_file_bytes() -> int:
-    """Return the per-file size limit from env, falling back to the default."""
-    raw = os.environ.get("CCDB_ATTACH_MAX_BYTES", "")
-    if raw:
-        with contextlib.suppress(ValueError):
-            return int(raw)
-    return _DEFAULT_MAX_FILE_BYTES
 
 
 def _is_binary(data: bytes) -> bool:
@@ -74,7 +49,7 @@ def _relative_path(file_path: str, working_dir: str | None) -> str:
 def collect_discord_files(
     file_paths: list[str],
     working_dir: str | None,
-    max_bytes: int | None = None,
+    max_bytes: int = _MAX_FILE_BYTES,
 ) -> list[discord.File]:
     """Read qualifying files from disk and return ``discord.File`` objects.
 
@@ -90,12 +65,11 @@ def collect_discord_files(
     Args:
         file_paths: Absolute or working-dir-relative paths to attach.
         working_dir: Base directory used to compute relative display names.
-        max_bytes: Per-file size limit.  ``None`` reads from env / default.
+        max_bytes: Per-file size limit.
 
     Returns:
         List of ``discord.File`` objects, ready to pass to ``thread.send()``.
     """
-    limit = max_bytes if max_bytes is not None else _max_file_bytes()
     result: list[discord.File] = []
 
     for path_str in file_paths:
@@ -111,11 +85,11 @@ def collect_discord_files(
             logger.debug("Cannot stat file, skipping: %s", path)
             continue
 
-        if size > limit:
+        if size > max_bytes:
             logger.info(
                 "Skipping file exceeding size limit (%d > %d bytes): %s",
                 size,
-                limit,
+                max_bytes,
                 path,
             )
             continue
@@ -136,28 +110,27 @@ def collect_discord_files(
     return result
 
 
-async def send_written_files(
+async def send_files(
     thread: discord.Thread,
     file_paths: list[str],
     working_dir: str | None,
 ) -> None:
-    """Send files created during a Claude session as Discord attachments.
+    """Send files as Discord attachments.
 
-    Called from ``EventProcessor._on_complete()`` after a successful session.
-    Sends in batches of up to 10 (Discord API limit).  Any Discord error is
-    suppressed so that a network hiccup never kills the session-complete flow.
+    Called from ``EventProcessor._on_complete()`` when the ``.ccdb-attachments``
+    marker file is present.  Sends in batches of up to 10 (Discord API limit).
+    Any Discord error is suppressed so that a network hiccup never kills the
+    session-complete flow.
 
-    Does nothing when:
-    * ``CCDB_ATTACH_WRITTEN_FILES`` is falsy
-    * *file_paths* is empty
-    * All files fail qualification (binary / missing / oversized)
+    Does nothing when *file_paths* is empty or all files fail qualification
+    (binary / missing / oversized).
 
     Args:
         thread: Discord thread to post attachments to.
-        file_paths: Paths of files written/edited during the session.
+        file_paths: Paths of files to send.
         working_dir: Runner working directory for relative display names.
     """
-    if not _is_enabled() or not file_paths:
+    if not file_paths:
         return
 
     files = collect_discord_files(file_paths, working_dir)
@@ -168,6 +141,6 @@ async def send_written_files(
         batch = files[i : i + _MAX_FILES_PER_MESSAGE]
         with contextlib.suppress(Exception):
             await thread.send(
-                content="-# 📎 Files written this session" if i == 0 else None,
+                content="-# 📎 Files attached" if i == 0 else None,
                 files=batch,
             )

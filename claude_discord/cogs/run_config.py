@@ -65,6 +65,9 @@ class RunConfig:
     # HTTPS URLs of image attachments to pass as stream-json url-type image blocks.
     # Claude Code CLI silently drops base64 image blocks; URL type is required.
     image_urls: list[str] | None = None
+    # When True, inject a system-prompt instruction telling Claude to write
+    # requested file paths to .ccdb-attachments so the bot can send them.
+    attach_on_request: bool = False
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

@@ -27,6 +27,33 @@ MAX_ATTACHMENTS = 5
 MAX_IMAGES = 4  # Claude supports up to 4 images per prompt
 
 
+# Keywords that indicate the user wants a file sent/attached.
+_SEND_FILE_KEYWORDS = (
+    "送って",
+    "ちょうだい",
+    "添付して",
+    "くれ",
+    "送ってください",
+    "ください",
+    "attach",
+    "send me",
+    "send the file",
+    "give me",
+    "download",
+)
+
+
+def wants_file_attachment(prompt: str) -> bool:
+    """Return True if *prompt* contains a file-send/attach request.
+
+    Used to enable the ``.ccdb-attachments`` delivery mechanism for the
+    session — Claude is instructed to write the paths it wants to send,
+    and the bot attaches them when the session completes.
+    """
+    lower = prompt.lower()
+    return any(kw in lower for kw in _SEND_FILE_KEYWORDS)
+
+
 async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[str]]:
     """Build the prompt string and collect image attachment URLs.
 

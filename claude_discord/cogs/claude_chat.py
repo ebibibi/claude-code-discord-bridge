@@ -33,7 +33,7 @@ from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.views import StopView
 from ._run_helper import run_claude_with_config
-from .prompt_builder import build_prompt_and_images
+from .prompt_builder import build_prompt_and_images, wants_file_attachment
 from .run_config import RunConfig
 
 if TYPE_CHECKING:
@@ -492,6 +492,7 @@ class ClaudeChatCog(commands.Cog):
                         stop_view=stop_view,
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
                         image_urls=image_urls,
+                        attach_on_request=wants_file_attachment(prompt),
                     )
                 )
             finally:

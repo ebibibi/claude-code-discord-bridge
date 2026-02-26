@@ -87,6 +87,20 @@ async def _build_system_context(config: RunConfig) -> str | None:
             "No session registry — concurrency notice skipped for thread %d", config.thread.id
         )
 
+    # File attachment instruction: injected only when the user asked for files.
+    if config.attach_on_request:
+        wd = config.runner.working_dir or "your current working directory"
+        parts.append(
+            "## File Delivery\n"
+            "The user wants you to send specific files to Discord.\n"
+            "When you are ready to deliver a file, write its absolute path "
+            "(one path per line, UTF-8) to the file:\n"
+            f"  {wd}/.ccdb-attachments\n"
+            "The bot will attach those files to Discord when this session ends.\n"
+            "Only include files the user explicitly asked to receive — "
+            "not everything you create."
+        )
+
     return "\n\n".join(parts) if parts else None
 
 
