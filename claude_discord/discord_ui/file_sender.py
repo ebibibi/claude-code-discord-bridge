@@ -34,11 +34,11 @@ _MAX_FILES_PER_MESSAGE = 10
 
 
 def _is_enabled() -> bool:
-    """Return False when CCDB_ATTACH_WRITTEN_FILES is set to a falsy value."""
-    return os.environ.get("CCDB_ATTACH_WRITTEN_FILES", "true").lower() not in (
-        "false",
-        "0",
-        "no",
+    """Return True only when CCDB_ATTACH_WRITTEN_FILES is explicitly set to a truthy value."""
+    return os.environ.get("CCDB_ATTACH_WRITTEN_FILES", "false").lower() in (
+        "true",
+        "1",
+        "yes",
     )
 
 
