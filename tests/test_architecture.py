@@ -46,7 +46,7 @@ class TestNoDirectRunnerRunInCogs:
         """No Cog file should call runner.run() directly."""
         violations = []
         for cog_file in self._get_cog_files():
-            content = cog_file.read_text()
+            content = cog_file.read_text(encoding="utf-8")
             matches = list(self._RUNNER_RUN_PATTERN.finditer(content))
             if matches:
                 lines = content.splitlines()
@@ -68,10 +68,10 @@ class TestNoDirectRunnerRunInCogs:
 
     def test_run_helper_exports_run_claude_with_config(self) -> None:
         """_run_helper must export the primary run_claude_with_config function."""
-        content = RUN_HELPER.read_text()
+        content = RUN_HELPER.read_text(encoding="utf-8")
         assert "async def run_claude_with_config" in content
 
     def test_run_helper_exports_run_claude_in_thread(self) -> None:
         """_run_helper must also export the backward-compat shim."""
-        content = RUN_HELPER.read_text()
+        content = RUN_HELPER.read_text(encoding="utf-8")
         assert "async def run_claude_in_thread" in content
