@@ -19,6 +19,7 @@ class MessageType(Enum):
     USER = "user"
     RESULT = "result"
     PROGRESS = "progress"
+    STREAM_EVENT = "stream_event"  # low-level streaming events; parsed but not acted on
 
 
 class ContentBlockType(Enum):
