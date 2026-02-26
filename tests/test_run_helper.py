@@ -17,13 +17,15 @@ from claude_discord.claude.types import (
 )
 from claude_discord.cogs._run_helper import (
     TOOL_RESULT_MAX_CHARS,
-    LiveToolTimer,
-    StreamingMessageManager,
     _make_error_embed,
     _truncate_result,
     run_claude_in_thread,
+    run_claude_with_config,
 )
+from claude_discord.cogs.run_config import RunConfig
 from claude_discord.concurrency import SessionRegistry
+from claude_discord.discord_ui.streaming_manager import StreamingMessageManager
+from claude_discord.discord_ui.tool_timer import LiveToolTimer
 
 
 class TestTruncateResult:
@@ -665,6 +667,106 @@ class TestRunClaudeInThread:
         )
 
 
+class TestStopViewRunnerSync:
+    """Regression tests for stop button not interrupting the active subprocess.
+
+    When _run_helper clones the runner to inject --append-system-prompt, the
+    StopView must be updated to point at the clone that actually owns the live
+    subprocess.  Without this, Stop sends SIGINT to the original runner whose
+    _process is None and has no effect.
+
+    See: https://github.com/ebibibi/claude-code-discord-bridge/issues/174
+    """
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        t.id = 55555
+        t.send = AsyncMock(return_value=MagicMock(spec=discord.Message))
+        return t
+
+    def _simple_events(self) -> list[StreamEvent]:
+        return [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-x"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-x",
+                cost_usd=0.001,
+                duration_ms=100,
+            ),
+        ]
+
+    def _make_async_gen(self, events: list[StreamEvent]):
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return gen
+
+    @pytest.mark.asyncio
+    async def test_stop_view_updated_to_cloned_runner(self, thread: MagicMock) -> None:
+        """stop_view.update_runner() is called when a clone is created for system context.
+
+        When registry/lounge is configured, _run_helper calls runner.clone() and
+        the resulting clone is the one that runs the subprocess.  The StopView
+        must be redirected to that clone so the Stop button actually works.
+        """
+        original_runner = MagicMock()
+        original_runner.working_dir = None
+        original_runner.interrupt = AsyncMock()
+
+        cloned_runner = MagicMock()
+        cloned_runner.interrupt = AsyncMock()
+        cloned_runner.run = self._make_async_gen(self._simple_events())
+
+        # clone() returns a *different* object simulating the system-context clone
+        original_runner.clone.return_value = cloned_runner
+
+        stop_view = MagicMock()
+        stop_view.bump = AsyncMock()
+        stop_view.disable = AsyncMock()
+
+        registry = SessionRegistry()
+
+        config = RunConfig(
+            thread=thread,
+            runner=original_runner,
+            prompt="hello",
+            stop_view=stop_view,
+            registry=registry,
+        )
+
+        await run_claude_with_config(config)
+
+        # stop_view must have been updated to point at the clone
+        stop_view.update_runner.assert_called_once_with(cloned_runner)
+
+    @pytest.mark.asyncio
+    async def test_stop_view_not_updated_when_no_clone(self, thread: MagicMock) -> None:
+        """When no system context exists, no clone is created and update_runner is not called."""
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.run = self._make_async_gen(self._simple_events())
+        # clone should NOT be called if there is no system context
+
+        stop_view = MagicMock()
+        stop_view.bump = AsyncMock()
+        stop_view.disable = AsyncMock()
+
+        # No registry, no lounge_repo → system_context is None → no clone
+        config = RunConfig(
+            thread=thread,
+            runner=runner,
+            prompt="hello",
+            stop_view=stop_view,
+        )
+
+        await run_claude_with_config(config)
+
+        stop_view.update_runner.assert_not_called()
+
+
 class TestMakeErrorEmbed:
     """Unit tests for the _make_error_embed router function."""
 
@@ -930,8 +1032,6 @@ class TestLiveToolTimer:
     @pytest.mark.asyncio
     async def test_run_claude_cancels_timer_on_tool_result(self) -> None:
         """Timer task should be cancelled when the tool result arrives."""
-        import claude_discord.cogs._run_helper as rh
-
         thread = MagicMock(spec=discord.Thread)
         thread.id = 11111
         tool_msg = MagicMock(spec=discord.Message)
@@ -974,12 +1074,86 @@ class TestLiveToolTimer:
 
         runner.run = gen
 
-        original_interval = rh.TOOL_TIMER_INTERVAL
-        rh.TOOL_TIMER_INTERVAL = 100  # ensure timer never fires during this test
+        import claude_discord.discord_ui.tool_timer as tt
+
+        original_interval = tt.TOOL_TIMER_INTERVAL
+        tt.TOOL_TIMER_INTERVAL = 100  # ensure timer never fires during this test
         try:
             await run_claude_in_thread(thread, runner, repo, "login", None)
         finally:
-            rh.TOOL_TIMER_INTERVAL = original_interval
+            tt.TOOL_TIMER_INTERVAL = original_interval
 
         # All timers should be cleared after run completes
         # (verified indirectly: no ghost tasks, session finishes cleanly)
+
+
+class TestImageOnlyRunConfig:
+    """Regression tests: image-only messages (empty prompt) through run_claude_with_config.
+
+    The bug: RunConfig.__post_init__ rejected empty prompts unconditionally,
+    but image-only Discord messages produce prompt="" with valid image_urls.
+    """
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        msg = MagicMock(spec=discord.Message)
+        t.send = AsyncMock(return_value=msg)
+        msg.edit = AsyncMock()
+        t.id = 42
+        return t
+
+    def _simple_events(self) -> list[StreamEvent]:
+        return [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-img"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-img",
+                cost_usd=0.001,
+                duration_ms=100,
+            ),
+        ]
+
+    def _make_async_gen(self, events: list[StreamEvent]):
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return gen
+
+    @pytest.mark.asyncio
+    async def test_empty_prompt_with_images_completes(self, thread: MagicMock) -> None:
+        """run_claude_with_config with prompt='' and image_urls must complete without error."""
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.image_urls = None
+        runner.run = self._make_async_gen(self._simple_events())
+
+        config = RunConfig(
+            thread=thread,
+            runner=runner,
+            prompt="",
+            image_urls=["https://cdn.discordapp.com/attachments/111/222/photo.png"],
+        )
+
+        session_id = await run_claude_with_config(config)
+        assert session_id == "sess-img"
+
+    @pytest.mark.asyncio
+    async def test_image_urls_injected_into_runner(self, thread: MagicMock) -> None:
+        """Image URLs from config must be set on the runner before run() is called."""
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.image_urls = None
+        runner.run = self._make_async_gen(self._simple_events())
+
+        config = RunConfig(
+            thread=thread,
+            runner=runner,
+            prompt="",
+            image_urls=["https://example.com/img.png"],
+        )
+
+        await run_claude_with_config(config)
+        assert runner.image_urls == ["https://example.com/img.png"]

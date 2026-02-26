@@ -161,7 +161,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **タイムアウト通知** — 経過時間とリジューム手順付きの embed 表示
 
 #### 🔌 入力とスキル
-- **添付ファイル対応** — テキストファイルをプロンプトに自動追加（最大 5 ファイル × 50 KB）；画像は `--image` フラグ経由で渡す（最大 4 枚 × 5 MB）
+- **添付ファイル対応** — テキストファイルをプロンプトに自動追加（最大 5 ファイル × 50 KB）；画像は Discord CDN URL として `--input-format stream-json` 経由で送信（最大 4 枚 × 5 MB）
 - **スキル実行** — `/skill` コマンド（オートコンプリート付き）、オプション引数、スレッド内リジューム
 - **ホットリロード** — `~/.claude/skills/` に追加した新スキルを自動検出（60 秒更新、再起動不要）
 
@@ -502,6 +502,8 @@ claude_discord/
     claude_chat.py         # インタラクティブチャット（スレッド作成、メッセージ処理）
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
     session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_sync.py        # sync-sessions のスレッド作成・メッセージ投稿ロジック（SessionManageCog から抽出）
+    prompt_builder.py      # build_prompt_and_images() — 純粋関数、Cog/Bot 状態に非依存
     scheduler.py           # 定期 Claude Code タスク実行エンジン
     webhook_trigger.py     # Webhook → Claude Code タスク実行（CI/CD）
     auto_upgrade.py        # Webhook → パッケージアップグレード + DrainAware 再起動

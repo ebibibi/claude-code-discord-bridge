@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-02-26
+
+### Added
+- **Collapsible tool results** — long tool outputs now collapse behind an expand button to keep threads readable (#171)
+- **Todo embed pinned at bottom** — TodoWrite embed is delete-reposted so it always stays at the bottom of the thread (#170)
+
+### Changed
+- **Refactor: extract prompt_builder and session_sync modules** — split oversized files per project conventions; `claude_chat.py` (601→513 lines) with new `prompt_builder.py`, `session_manage.py` (702→577 lines) with new `session_sync.py` (#188)
+- **Dead code cleanup** — removed 7 unused backward-compat re-exports from `_run_helper.py`, fixed duplicate exports in `discord_ui/__init__.py`, removed unused `_build_prompt` wrapper (#188)
+
+### Fixed
+- **Image-only messages** — sending a Discord message with only an image (no text) no longer crashes the bot; empty prompt with image URLs is now valid (#186, #187)
+- **Image attachment support via stream-json** — images now passed as url-type blocks in `--input-format stream-json` mode instead of the removed `--image` flag (#178, #181, #182)
+- **StopView runner reference** — Stop button now correctly targets the active runner after system-context clone (#175)
+- **Discord system messages ignored** — thread renames, pins, and other system messages no longer trigger Claude (#172)
+- **`is_error:true` result events** — error results from Claude CLI are now surfaced as error embeds in Discord (#184)
+- **`stream_event` debug noise** — suppressed noisy debug logs for `stream_event` message type (#185)
+- **CI: auto-version-bump** — release PRs with `[release]` tag no longer trigger spurious patch bumps; branch protection respected (#164, #167, #169, #173)
+
 ## [1.4.1] - 2026-02-24
 
 ### Fixed
@@ -148,7 +167,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline: Python 3.10/3.11/3.12, ruff, pytest
 - Branch protection and PR workflow
 
-[Unreleased]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.2.0...v1.3.0

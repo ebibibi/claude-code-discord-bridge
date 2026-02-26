@@ -158,7 +158,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
 
 #### 🔌 Input & Skills
-- **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images downloaded and passed via `--image` (up to 4 × 5 MB)
+- **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images sent as Discord CDN URLs via `--input-format stream-json` (up to 4 × 5 MB)
 - **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume
 - **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
 
@@ -564,6 +564,8 @@ claude_discord/
     claude_chat.py         # Interactive chat (thread creation, message handling)
     skill_command.py       # /skill slash command with autocomplete
     session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_sync.py        # Thread-creation and message-posting logic for sync-sessions (extracted from SessionManageCog)
+    prompt_builder.py      # build_prompt_and_images() — pure function, no Cog/Bot state
     scheduler.py           # Periodic Claude Code task executor
     webhook_trigger.py     # Webhook → Claude Code task execution (CI/CD)
     auto_upgrade.py        # Webhook → package upgrade + drain-aware restart

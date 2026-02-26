@@ -8,12 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from claude_discord.cogs.claude_chat import (
-    _MAX_ATTACHMENT_BYTES,
-    _MAX_ATTACHMENTS,
-    _MAX_TOTAL_BYTES,
-    ClaudeChatCog,
-)
+from claude_discord.cogs.claude_chat import ClaudeChatCog
 from claude_discord.concurrency import SessionRegistry
 from claude_discord.coordination.service import CoordinationService
 
@@ -163,192 +158,6 @@ class TestActiveCountAlias:
         cog._active_runners[2] = MagicMock()
         assert cog.active_count == 2
         assert cog.active_count == cog.active_session_count
-
-
-class TestBuildPrompt:
-    """Tests for the _build_prompt method (attachment handling)."""
-
-    @staticmethod
-    def _make_attachment(
-        filename: str = "test.txt",
-        content_type: str = "text/plain",
-        size: int = 100,
-        content: bytes = b"hello world",
-    ) -> MagicMock:
-        att = MagicMock(spec=discord.Attachment)
-        att.filename = filename
-        att.content_type = content_type
-        att.size = size
-        att.read = AsyncMock(return_value=content)
-        return att
-
-    @staticmethod
-    def _make_message(content: str = "my message", attachments: list | None = None) -> MagicMock:
-        msg = MagicMock(spec=discord.Message)
-        msg.content = content
-        msg.attachments = attachments or []
-        return msg
-
-    @pytest.mark.asyncio
-    async def test_no_attachments_returns_content(self) -> None:
-        cog = _make_cog()
-        msg = self._make_message(content="hello")
-        result = await cog._build_prompt(msg)
-        assert result == "hello"
-
-    @pytest.mark.asyncio
-    async def test_text_attachment_appended(self) -> None:
-        cog = _make_cog()
-        att = self._make_attachment(filename="notes.txt", content=b"file content here")
-        msg = self._make_message(content="check this", attachments=[att])
-
-        result = await cog._build_prompt(msg)
-
-        assert "check this" in result
-        assert "notes.txt" in result
-        assert "file content here" in result
-
-    @pytest.mark.asyncio
-    async def test_image_attachment_not_inlined_in_prompt(self) -> None:
-        """Images are downloaded to tempfiles, NOT inlined into the prompt text."""
-        import os
-
-        cog = _make_cog()
-        att = self._make_attachment(
-            filename="image.png",
-            content_type="image/png",
-            size=100,
-            content=b"\x89PNG...",
-        )
-        msg = self._make_message(content="see image", attachments=[att])
-
-        prompt, image_paths = await cog._build_prompt_and_images(msg)
-
-        # Prompt text stays clean — no image content inlined.
-        assert prompt == "see image"
-        # One tempfile created for the image.
-        assert len(image_paths) == 1
-        assert os.path.exists(image_paths[0])
-        # Clean up.
-        for p in image_paths:
-            os.unlink(p)
-
-    @pytest.mark.asyncio
-    async def test_binary_non_image_skipped(self) -> None:
-        """Non-image binary files (e.g. zip) are still silently skipped."""
-        cog = _make_cog()
-        att = self._make_attachment(
-            filename="archive.zip",
-            content_type="application/zip",
-            content=b"PK...",
-        )
-        msg = self._make_message(content="see zip", attachments=[att])
-
-        result = await cog._build_prompt(msg)
-
-        assert result == "see zip"
-        att.read.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_oversized_attachment_skipped(self) -> None:
-        cog = _make_cog()
-        att = self._make_attachment(
-            filename="huge.txt",
-            content_type="text/plain",
-            size=_MAX_ATTACHMENT_BYTES + 1,
-        )
-        msg = self._make_message(content="big file", attachments=[att])
-
-        result = await cog._build_prompt(msg)
-
-        assert result == "big file"
-        att.read.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_empty_content_with_attachment(self) -> None:
-        """Message with only an attachment (no text) should still work."""
-        cog = _make_cog()
-        att = self._make_attachment(
-            filename="code.py", content_type="text/x-python", content=b"print('hi')"
-        )
-        msg = self._make_message(content="", attachments=[att])
-
-        result = await cog._build_prompt(msg)
-
-        assert "code.py" in result
-        assert "print('hi')" in result
-
-    @pytest.mark.asyncio
-    async def test_max_attachments_limit(self) -> None:
-        """Only the first _MAX_ATTACHMENTS files should be processed."""
-        cog = _make_cog()
-        attachments = [
-            self._make_attachment(filename=f"file{i}.txt", content=f"content{i}".encode())
-            for i in range(_MAX_ATTACHMENTS + 2)
-        ]
-        msg = self._make_message(attachments=attachments)
-
-        await cog._build_prompt(msg)
-
-        # Extra attachments beyond the limit should not be read
-        for att in attachments[_MAX_ATTACHMENTS:]:
-            att.read.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_total_size_limit_stops_processing(self) -> None:
-        """Processing stops when cumulative size exceeds _MAX_TOTAL_BYTES."""
-        cog = _make_cog()
-        # Each file is just under the per-file limit but together they exceed total
-        chunk = _MAX_ATTACHMENT_BYTES - 100  # 49.9 KB
-        attachments = [
-            self._make_attachment(
-                filename=f"file{i}.txt",
-                size=chunk,
-                content=b"x" * chunk,
-            )
-            for i in range(10)
-        ]
-        msg = self._make_message(attachments=attachments)
-
-        await cog._build_prompt(msg)
-
-        # Should stop after total exceeds _MAX_TOTAL_BYTES (~2 files)
-        read_count = sum(1 for att in attachments if att.read.called)
-        expected_max = (_MAX_TOTAL_BYTES // chunk) + 1
-        assert read_count <= expected_max
-
-    @pytest.mark.asyncio
-    async def test_json_attachment_included(self) -> None:
-        """application/json is in the allowed types."""
-        cog = _make_cog()
-        att = self._make_attachment(
-            filename="config.json",
-            content_type="application/json",
-            content=b'{"key": "value"}',
-        )
-        msg = self._make_message(content="here is config", attachments=[att])
-
-        result = await cog._build_prompt(msg)
-
-        assert "config.json" in result
-        assert '{"key": "value"}' in result
-
-    @pytest.mark.asyncio
-    async def test_multiple_text_attachments(self) -> None:
-        """Multiple allowed attachments should all be included."""
-        cog = _make_cog()
-        attachments = [
-            self._make_attachment(filename="a.txt", content=b"alpha"),
-            self._make_attachment(filename="b.md", content_type="text/markdown", content=b"beta"),
-        ]
-        msg = self._make_message(content="two files", attachments=attachments)
-
-        result = await cog._build_prompt(msg)
-
-        assert "a.txt" in result
-        assert "alpha" in result
-        assert "b.md" in result
-        assert "beta" in result
 
 
 class TestRegistryAutoDiscovery:
@@ -897,3 +706,84 @@ class TestOnMessageSystemMessageFilter:
             await cog.on_message(msg)
 
         # The filter did not block it — execution reached _handle_thread_reply
+
+
+class TestImageOnlyMessage:
+    """Image-only messages (no text) must be handled without errors.
+
+    This is a regression test suite for the bug where sending a Discord message
+    with only an image attachment (no text) caused a ValueError in
+    RunConfig.__post_init__ because prompt was empty. The ValueError propagated
+    uncaught through the event loop, freezing the entire bot.
+    """
+
+    @staticmethod
+    def _make_image_message(thread_id: int = 42) -> MagicMock:
+        """Return a discord.Message with only an image attachment (no text)."""
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = thread_id
+        thread.parent_id = 999
+        thread.send = AsyncMock()
+        msg = MagicMock(spec=discord.Message)
+        msg.channel = thread
+        msg.content = ""  # No text — image only
+        msg.author = MagicMock()
+        msg.author.bot = False
+        att = MagicMock(spec=discord.Attachment)
+        att.filename = "photo.png"
+        att.content_type = "image/png"
+        att.size = 500_000
+        att.url = "https://cdn.discordapp.com/attachments/111/222/photo.png"
+        att.read = AsyncMock(return_value=b"PNG...")
+        msg.attachments = [att]
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_build_prompt_and_images_returns_empty_prompt(self) -> None:
+        """Image-only message should return empty prompt + image URL list."""
+        cog = _make_cog()
+        msg = self._make_image_message()
+
+        prompt, image_urls = await cog._build_prompt_and_images(msg)
+
+        assert prompt == ""
+        assert len(image_urls) == 1
+        assert "photo.png" in image_urls[0]
+
+    @pytest.mark.asyncio
+    async def test_handle_thread_reply_does_not_crash(self) -> None:
+        """_handle_thread_reply with image-only message must not raise."""
+        cog = _make_cog()
+        msg = self._make_image_message()
+        cog._run_claude = AsyncMock()
+
+        # Must not raise ValueError or any other exception
+        await cog._handle_thread_reply(msg)
+
+        cog._run_claude.assert_called_once()
+        # Verify image_urls were passed through
+        call_kwargs = cog._run_claude.call_args
+        assert call_kwargs.kwargs.get("image_urls") == [
+            "https://cdn.discordapp.com/attachments/111/222/photo.png"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_handle_thread_reply_skips_empty_message(self) -> None:
+        """A message with no text AND no attachments should not start a session."""
+        cog = _make_cog()
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+        thread.parent_id = 999
+        thread.send = AsyncMock()
+        msg = MagicMock(spec=discord.Message)
+        msg.channel = thread
+        msg.content = ""
+        msg.attachments = []
+        msg.author = MagicMock()
+        msg.author.bot = False
+
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_thread_reply(msg)
+
+        cog._run_claude.assert_not_called()

@@ -9,7 +9,7 @@ This module is the thin orchestration layer that:
 Primary API:
     run_claude_with_config(config: RunConfig) -> str | None
 
-Legacy shim (kept for backward compatibility):
+Legacy shim:
     run_claude_in_thread(thread, runner, repo, prompt, session_id, ...) -> str | None
 """
 
@@ -21,17 +21,11 @@ import re
 
 import discord
 
-from ..discord_ui.ask_handler import ASK_ANSWER_TIMEOUT, collect_ask_answers  # noqa: F401
+from ..discord_ui.ask_handler import collect_ask_answers
 from ..discord_ui.embeds import error_embed, timeout_embed
-from ..discord_ui.streaming_manager import (  # noqa: F401
-    STREAM_EDIT_INTERVAL,
-    STREAM_MAX_CHARS,
-    StreamingMessageManager,
-)
-from ..discord_ui.tool_timer import TOOL_TIMER_INTERVAL, LiveToolTimer  # noqa: F401
 from ..lounge import build_lounge_prompt
 from .event_processor import EventProcessor
-from .run_config import RunConfig  # noqa: F401
+from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
 
@@ -139,16 +133,6 @@ async def _cleanup_session_worktree(config: RunConfig) -> None:
         logger.exception("Unexpected error during worktree cleanup for thread %d", config.thread.id)
 
 
-async def _cleanup_image_tempfiles(image_paths: list[str]) -> None:
-    """Delete image tempfiles downloaded for --image flags."""
-    import os
-
-    for path in image_paths:
-        with contextlib.suppress(Exception):
-            os.unlink(path)
-            logger.debug("Deleted image tempfile: %s", path)
-
-
 async def run_claude_with_config(config: RunConfig) -> str | None:
     """Execute Claude Code CLI and stream results to a Discord thread.
 
@@ -164,9 +148,17 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
         if system_context
         else config.runner
     )
-    # Inject per-invocation image paths (not inherited by runner.clone()).
-    if config.image_paths:
-        runner.image_paths = config.image_paths
+    # Inject per-invocation image URLs (not inherited by runner.clone()).
+    if config.image_urls:
+        runner.image_urls = config.image_urls
+
+    # Keep stop_view in sync with the runner that will own the live subprocess.
+    # When system_context is present a fresh clone is created above, making the
+    # original config.runner a "dead" runner with no process.  Without this
+    # update the Stop button would send SIGINT to that dead runner and have no
+    # effect.  See: https://github.com/ebibibi/claude-code-discord-bridge/issues/174
+    if config.stop_view is not None and runner is not config.runner:
+        config.stop_view.update_runner(runner)
 
     processor = EventProcessor(config)
 
@@ -191,8 +183,6 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
             config.registry.unregister(config.thread.id)
         if config.worktree_manager is not None:
             await _cleanup_session_worktree(config)
-        if config.image_paths:
-            await _cleanup_image_tempfiles(config.image_paths)
 
     # After the stream ends, handle pending AskUserQuestion by showing Discord
     # UI and resuming the session with the user's answer.
