@@ -36,6 +36,17 @@ class StopView(discord.ui.View):
         """Store the message this view is attached to."""
         self._message = message
 
+    def update_runner(self, runner: ClaudeRunner) -> None:
+        """Replace the runner reference with the one that owns the live subprocess.
+
+        ``run_claude_with_config`` may clone the runner to inject an
+        ``--append-system-prompt`` (lounge context, concurrency notice).
+        The subprocess lives in that clone, not in the original runner passed
+        to the constructor.  Call this immediately after the clone is created
+        so that the Stop button sends SIGINT to the right process.
+        """
+        self._runner = runner
+
     async def bump(self, thread: discord.Thread) -> None:
         """Re-post the Stop button as the latest message in the thread.
 

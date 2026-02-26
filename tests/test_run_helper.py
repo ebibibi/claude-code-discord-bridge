@@ -22,7 +22,9 @@ from claude_discord.cogs._run_helper import (
     _make_error_embed,
     _truncate_result,
     run_claude_in_thread,
+    run_claude_with_config,
 )
+from claude_discord.cogs.run_config import RunConfig
 from claude_discord.concurrency import SessionRegistry
 
 
@@ -663,6 +665,106 @@ class TestRunClaudeInThread:
         assert len(start_embeds) == 1, (
             f"Expected exactly 1 session_start_embed, got {len(start_embeds)}"
         )
+
+
+class TestStopViewRunnerSync:
+    """Regression tests for stop button not interrupting the active subprocess.
+
+    When _run_helper clones the runner to inject --append-system-prompt, the
+    StopView must be updated to point at the clone that actually owns the live
+    subprocess.  Without this, Stop sends SIGINT to the original runner whose
+    _process is None and has no effect.
+
+    See: https://github.com/ebibibi/claude-code-discord-bridge/issues/174
+    """
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        t.id = 55555
+        t.send = AsyncMock(return_value=MagicMock(spec=discord.Message))
+        return t
+
+    def _simple_events(self) -> list[StreamEvent]:
+        return [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-x"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-x",
+                cost_usd=0.001,
+                duration_ms=100,
+            ),
+        ]
+
+    def _make_async_gen(self, events: list[StreamEvent]):
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return gen
+
+    @pytest.mark.asyncio
+    async def test_stop_view_updated_to_cloned_runner(self, thread: MagicMock) -> None:
+        """stop_view.update_runner() is called when a clone is created for system context.
+
+        When registry/lounge is configured, _run_helper calls runner.clone() and
+        the resulting clone is the one that runs the subprocess.  The StopView
+        must be redirected to that clone so the Stop button actually works.
+        """
+        original_runner = MagicMock()
+        original_runner.working_dir = None
+        original_runner.interrupt = AsyncMock()
+
+        cloned_runner = MagicMock()
+        cloned_runner.interrupt = AsyncMock()
+        cloned_runner.run = self._make_async_gen(self._simple_events())
+
+        # clone() returns a *different* object simulating the system-context clone
+        original_runner.clone.return_value = cloned_runner
+
+        stop_view = MagicMock()
+        stop_view.bump = AsyncMock()
+        stop_view.disable = AsyncMock()
+
+        registry = SessionRegistry()
+
+        config = RunConfig(
+            thread=thread,
+            runner=original_runner,
+            prompt="hello",
+            stop_view=stop_view,
+            registry=registry,
+        )
+
+        await run_claude_with_config(config)
+
+        # stop_view must have been updated to point at the clone
+        stop_view.update_runner.assert_called_once_with(cloned_runner)
+
+    @pytest.mark.asyncio
+    async def test_stop_view_not_updated_when_no_clone(self, thread: MagicMock) -> None:
+        """When no system context exists, no clone is created and update_runner is not called."""
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.run = self._make_async_gen(self._simple_events())
+        # clone should NOT be called if there is no system context
+
+        stop_view = MagicMock()
+        stop_view.bump = AsyncMock()
+        stop_view.disable = AsyncMock()
+
+        # No registry, no lounge_repo → system_context is None → no clone
+        config = RunConfig(
+            thread=thread,
+            runner=runner,
+            prompt="hello",
+            stop_view=stop_view,
+        )
+
+        await run_claude_with_config(config)
+
+        stop_view.update_runner.assert_not_called()
 
 
 class TestMakeErrorEmbed:
