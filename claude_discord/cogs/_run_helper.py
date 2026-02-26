@@ -168,6 +168,14 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
     if config.image_paths:
         runner.image_paths = config.image_paths
 
+    # Keep stop_view in sync with the runner that will own the live subprocess.
+    # When system_context is present a fresh clone is created above, making the
+    # original config.runner a "dead" runner with no process.  Without this
+    # update the Stop button would send SIGINT to that dead runner and have no
+    # effect.  See: https://github.com/ebibibi/claude-code-discord-bridge/issues/174
+    if config.stop_view is not None and runner is not config.runner:
+        config.stop_view.update_runner(runner)
+
     processor = EventProcessor(config)
 
     try:

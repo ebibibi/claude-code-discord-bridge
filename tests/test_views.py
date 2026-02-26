@@ -237,3 +237,37 @@ class TestStopViewBump:
         thread.send = AsyncMock(side_effect=discord.HTTPException(MagicMock(), "rate limited"))
 
         await view.bump(thread)  # should not raise
+
+
+class TestStopViewUpdateRunner:
+    @pytest.mark.asyncio
+    async def test_update_runner_replaces_runner(self) -> None:
+        """update_runner() swaps the internal runner reference."""
+        original = _make_runner()
+        view = StopView(original)
+        cloned = _make_runner()
+
+        view.update_runner(cloned)
+        await _click(view, _make_interaction())
+
+        cloned.interrupt.assert_called_once()
+        original.interrupt.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_button_uses_updated_runner(self) -> None:
+        """After update_runner(), Stop sends SIGINT to the new runner, not the original.
+
+        This is the regression test for the bug where _run_helper.py created a
+        second clone for --append-system-prompt injection but StopView kept a
+        reference to the first clone that had no live subprocess.
+        """
+        dead_runner = _make_runner()  # clone #1: no subprocess
+        live_runner = _make_runner()  # clone #2: owns the subprocess
+
+        view = StopView(dead_runner)
+        view.update_runner(live_runner)  # simulate what _run_helper now does
+
+        await _click(view, _make_interaction())
+
+        live_runner.interrupt.assert_called_once()
+        dead_runner.interrupt.assert_not_called()
