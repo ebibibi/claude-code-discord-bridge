@@ -502,6 +502,8 @@ claude_discord/
     claude_chat.py         # インタラクティブチャット（スレッド作成、メッセージ処理）
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
     session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_sync.py        # sync-sessions のスレッド作成・メッセージ投稿ロジック（SessionManageCog から抽出）
+    prompt_builder.py      # build_prompt_and_images() — 純粋関数、Cog/Bot 状態に非依存
     scheduler.py           # 定期 Claude Code タスク実行エンジン
     webhook_trigger.py     # Webhook → Claude Code タスク実行（CI/CD）
     auto_upgrade.py        # Webhook → パッケージアップグレード + DrainAware 再起動
