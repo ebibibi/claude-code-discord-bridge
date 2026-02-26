@@ -1085,3 +1085,75 @@ class TestLiveToolTimer:
 
         # All timers should be cleared after run completes
         # (verified indirectly: no ghost tasks, session finishes cleanly)
+
+
+class TestImageOnlyRunConfig:
+    """Regression tests: image-only messages (empty prompt) through run_claude_with_config.
+
+    The bug: RunConfig.__post_init__ rejected empty prompts unconditionally,
+    but image-only Discord messages produce prompt="" with valid image_urls.
+    """
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        msg = MagicMock(spec=discord.Message)
+        t.send = AsyncMock(return_value=msg)
+        msg.edit = AsyncMock()
+        t.id = 42
+        return t
+
+    def _simple_events(self) -> list[StreamEvent]:
+        return [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-img"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-img",
+                cost_usd=0.001,
+                duration_ms=100,
+            ),
+        ]
+
+    def _make_async_gen(self, events: list[StreamEvent]):
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return gen
+
+    @pytest.mark.asyncio
+    async def test_empty_prompt_with_images_completes(self, thread: MagicMock) -> None:
+        """run_claude_with_config with prompt='' and image_urls must complete without error."""
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.image_urls = None
+        runner.run = self._make_async_gen(self._simple_events())
+
+        config = RunConfig(
+            thread=thread,
+            runner=runner,
+            prompt="",
+            image_urls=["https://cdn.discordapp.com/attachments/111/222/photo.png"],
+        )
+
+        session_id = await run_claude_with_config(config)
+        assert session_id == "sess-img"
+
+    @pytest.mark.asyncio
+    async def test_image_urls_injected_into_runner(self, thread: MagicMock) -> None:
+        """Image URLs from config must be set on the runner before run() is called."""
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.image_urls = None
+        runner.run = self._make_async_gen(self._simple_events())
+
+        config = RunConfig(
+            thread=thread,
+            runner=runner,
+            prompt="",
+            image_urls=["https://example.com/img.png"],
+        )
+
+        await run_claude_with_config(config)
+        assert runner.image_urls == ["https://example.com/img.png"]

@@ -902,3 +902,84 @@ class TestOnMessageSystemMessageFilter:
             await cog.on_message(msg)
 
         # The filter did not block it — execution reached _handle_thread_reply
+
+
+class TestImageOnlyMessage:
+    """Image-only messages (no text) must be handled without errors.
+
+    This is a regression test suite for the bug where sending a Discord message
+    with only an image attachment (no text) caused a ValueError in
+    RunConfig.__post_init__ because prompt was empty. The ValueError propagated
+    uncaught through the event loop, freezing the entire bot.
+    """
+
+    @staticmethod
+    def _make_image_message(thread_id: int = 42) -> MagicMock:
+        """Return a discord.Message with only an image attachment (no text)."""
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = thread_id
+        thread.parent_id = 999
+        thread.send = AsyncMock()
+        msg = MagicMock(spec=discord.Message)
+        msg.channel = thread
+        msg.content = ""  # No text — image only
+        msg.author = MagicMock()
+        msg.author.bot = False
+        att = MagicMock(spec=discord.Attachment)
+        att.filename = "photo.png"
+        att.content_type = "image/png"
+        att.size = 500_000
+        att.url = "https://cdn.discordapp.com/attachments/111/222/photo.png"
+        att.read = AsyncMock(return_value=b"PNG...")
+        msg.attachments = [att]
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_build_prompt_and_images_returns_empty_prompt(self) -> None:
+        """Image-only message should return empty prompt + image URL list."""
+        cog = _make_cog()
+        msg = self._make_image_message()
+
+        prompt, image_urls = await cog._build_prompt_and_images(msg)
+
+        assert prompt == ""
+        assert len(image_urls) == 1
+        assert "photo.png" in image_urls[0]
+
+    @pytest.mark.asyncio
+    async def test_handle_thread_reply_does_not_crash(self) -> None:
+        """_handle_thread_reply with image-only message must not raise."""
+        cog = _make_cog()
+        msg = self._make_image_message()
+        cog._run_claude = AsyncMock()
+
+        # Must not raise ValueError or any other exception
+        await cog._handle_thread_reply(msg)
+
+        cog._run_claude.assert_called_once()
+        # Verify image_urls were passed through
+        call_kwargs = cog._run_claude.call_args
+        assert call_kwargs.kwargs.get("image_urls") == [
+            "https://cdn.discordapp.com/attachments/111/222/photo.png"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_handle_thread_reply_skips_empty_message(self) -> None:
+        """A message with no text AND no attachments should not start a session."""
+        cog = _make_cog()
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+        thread.parent_id = 999
+        thread.send = AsyncMock()
+        msg = MagicMock(spec=discord.Message)
+        msg.channel = thread
+        msg.content = ""
+        msg.attachments = []
+        msg.author = MagicMock()
+        msg.author.bot = False
+
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_thread_reply(msg)
+
+        cog._run_claude.assert_not_called()
