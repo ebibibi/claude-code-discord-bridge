@@ -203,3 +203,6 @@ class SessionState:
     active_timers: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     # TodoWrite: reference to the live todo embed message (edited in-place on each update)
     todo_message: discord.Message | None = None
+    # Paths of files written/edited during this session (Write, Edit, MultiEdit tools).
+    # Collected by _handle_tool_use() and sent as Discord attachments on session complete.
+    written_files: list[str] = field(default_factory=list)
