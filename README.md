@@ -158,7 +158,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
 
 #### 🔌 Input & Skills
-- **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images downloaded and passed via `--image` (up to 4 × 5 MB)
+- **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images base64-encoded and sent via `--input-format stream-json` (up to 4 × 5 MB)
 - **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume
 - **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
 
