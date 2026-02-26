@@ -200,10 +200,20 @@ def _parse_result(data: dict[str, Any], event: StreamEvent) -> None:
     if result_text:
         event.text = result_text
 
-    # Check for errors
+    # Check for errors.
+    # Two error shapes from the CLI:
+    #   {"type":"result","subtype":"error","error":"..."} — explicit error subtype
+    #   {"type":"result","subtype":"success","is_error":true,"result":"API Error: ..."} — API-level
+    #     error reported as a "successful" result with is_error flag (e.g. 400 from Anthropic API)
     subtype = data.get("subtype", "")
     if subtype == "error":
         event.error = data.get("error", "Unknown error")
+    elif data.get("is_error") and result_text:
+        # API-level error (e.g. "API Error: 400 ...") surfaced via is_error flag.
+        # Promote it to event.error so the Discord handler shows an error embed,
+        # not a normal session-complete embed.
+        event.error = result_text
+        event.text = ""  # suppress duplicate display via result text path
 
 
 def _parse_ask_questions(tool_input: dict[str, Any]) -> list[AskQuestion]:

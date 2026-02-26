@@ -89,6 +89,29 @@ class TestParseLine:
         assert event.is_complete is True
         assert event.error == "Something broke"
 
+    def test_result_is_error_true_promoted_to_event_error(self):
+        """API-level errors come as subtype=success + is_error=true + result=<error text>.
+
+        Previously parse_line only checked subtype=="error", so these were silently
+        swallowed — the Discord handler showed a successful session_complete embed
+        instead of an error embed.  Now is_error:true must promote event.error.
+        """
+        line = (
+            '{"type": "result", "subtype": "success", "is_error": true, '
+            '"result": "API Error: 400 {\\"type\\":\\"error\\",\\"error\\":{'
+            '\\"type\\":\\"invalid_request_error\\",\\"message\\":\\"messages: '
+            'text content blocks must be non-empty\\"}}", '
+            '"session_id": "abc-123", "duration_ms": 965}'
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.is_complete is True
+        assert event.error is not None
+        assert "400" in event.error
+        assert "non-empty" in event.error
+        # result text must be cleared to avoid duplicate display
+        assert event.text == ""
+
 
 class TestToolResultContent:
     def test_tool_result_string_content(self):
