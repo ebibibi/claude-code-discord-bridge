@@ -183,7 +183,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Auto-upgrade** — Automatically update the bot when upstream packages are released
 - **DrainAware restart** — Waits for active sessions to finish before restarting
 - **Auto-resume marking** — Active sessions are automatically marked for resume on any shutdown (upgrade restart via `AutoUpgradeCog`, or any other shutdown via `ClaudeChatCog.cog_unload()`); they pick up where they left off after the bot comes back online
-- **Restart approval** — Optional gate to confirm upgrades; approve via ✅ reaction in the upgrade thread or via button posted to the parent channel
+- **Restart approval** — Optional gate to confirm upgrades; approve via ✅ reaction in the upgrade thread or via button posted to the parent channel; the button re-posts itself at the bottom as new messages arrive so it stays visible
 - **Manual upgrade trigger** — `/upgrade` slash command lets authorised users trigger the upgrade pipeline directly from Discord (opt-in via `slash_command_enabled=True`)
 
 ### Session Management
