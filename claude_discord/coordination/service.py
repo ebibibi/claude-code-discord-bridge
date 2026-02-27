@@ -49,7 +49,7 @@ class CoordinationService:
         channel = self._get_channel()
         if channel is None:
             return
-        content = f"✅ **{thread.name}** セッション終了"
+        content = f"✅ session/{thread.id} end"
         await self._safe_send(channel, content)
 
     async def _safe_send(self, channel: discord.TextChannel, content: str) -> None:

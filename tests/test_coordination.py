@@ -10,9 +10,10 @@ import pytest
 from claude_discord.coordination.service import CoordinationService
 
 
-def _make_thread(name: str = "Test Thread") -> MagicMock:
+def _make_thread(name: str = "Test Thread", thread_id: int = 12345) -> MagicMock:
     thread = MagicMock(spec=discord.Thread)
     thread.name = name
+    thread.id = thread_id
     return thread
 
 
@@ -58,12 +59,13 @@ class TestCoordinationServicePosts:
         bot = _make_bot(channel)
         svc = CoordinationService(bot, channel_id=9999)
 
-        thread = _make_thread("Issue #42")
+        thread = _make_thread(thread_id=42)
         await svc.post_session_end(thread)
 
         channel.send.assert_called_once()
         sent = channel.send.call_args[0][0]
-        assert "Issue #42" in sent
+        assert "session/42" in sent
+        assert "end" in sent
 
 
 class TestCoordinationServiceChannelNotFound:
