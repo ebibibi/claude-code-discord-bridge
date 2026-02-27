@@ -68,6 +68,10 @@ class RunConfig:
     # When True, inject a system-prompt instruction telling Claude to write
     # requested file paths to .ccdb-attachments so the bot can send them.
     attach_on_request: bool = False
+    # Discord user ID of the person who triggered this session.
+    # When set, the user is mentioned after significant work (≥ threshold tool calls).
+    # None for bot-spawned sessions (no user to ping).
+    requester_id: int | None = None
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

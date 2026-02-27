@@ -493,6 +493,7 @@ class ClaudeChatCog(commands.Cog):
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
                         image_urls=image_urls,
                         attach_on_request=wants_file_attachment(prompt),
+                        requester_id=(None if user_message.author.bot else user_message.author.id),
                     )
                 )
             finally:

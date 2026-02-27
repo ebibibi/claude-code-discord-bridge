@@ -787,3 +787,82 @@ class TestCcdbAttachmentsDelivery:
             await p.process(_make_result_event(error="Claude crashed"))
 
         mock_send.assert_not_called()
+
+
+class TestRequesterMention:
+    """User mention after significant work (>= _MENTION_TOOL_THRESHOLD tool calls)."""
+
+    async def _dispatch_tools(self, p: EventProcessor, count: int) -> None:
+        """Fire `count` tool-use events through the processor."""
+        for i in range(count):
+            await p.process(_make_tool_event(tool_id=f"tool{i}"))
+
+    @pytest.mark.asyncio
+    async def test_mention_sent_after_threshold_tool_calls(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """requester_id set + >=3 tool uses -> mention is sent after session complete."""
+        config = _make_config(thread, runner, requester_id=123456789)
+        p = EventProcessor(config)
+
+        await self._dispatch_tools(p, 3)
+        await p.process(_make_result_event(session_id="s1"))
+
+        all_sends = [c.args[0] for c in thread.send.call_args_list if c.args]
+        mention_sends = [s for s in all_sends if "<@123456789>" in s]
+        assert len(mention_sends) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_mention_below_threshold(self, thread: MagicMock, runner: MagicMock) -> None:
+        """Fewer than 3 tool uses -> no mention, even with requester_id set."""
+        config = _make_config(thread, runner, requester_id=123456789)
+        p = EventProcessor(config)
+
+        await self._dispatch_tools(p, 2)
+        await p.process(_make_result_event(session_id="s1"))
+
+        all_sends = [c.args[0] for c in thread.send.call_args_list if c.args]
+        mention_sends = [s for s in all_sends if "<@123456789>" in s]
+        assert len(mention_sends) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_mention_without_requester_id(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """requester_id is None (bot-spawned session) -> no mention even with many tools."""
+        config = _make_config(thread, runner, requester_id=None)
+        p = EventProcessor(config)
+
+        await self._dispatch_tools(p, 5)
+        await p.process(_make_result_event(session_id="s1"))
+
+        all_sends = [c.args[0] for c in thread.send.call_args_list if c.args]
+        mention_sends = [s for s in all_sends if s.startswith("<@")]
+        assert len(mention_sends) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_mention_on_error_completion(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Error session -> no mention even if threshold was reached."""
+        config = _make_config(thread, runner, requester_id=123456789)
+        p = EventProcessor(config)
+
+        await self._dispatch_tools(p, 3)
+        await p.process(
+            StreamEvent(message_type=MessageType.RESULT, is_complete=True, error="Oops")
+        )
+
+        all_sends = [c.args[0] for c in thread.send.call_args_list if c.args]
+        mention_sends = [s for s in all_sends if "<@123456789>" in s]
+        assert len(mention_sends) == 0
+
+    @pytest.mark.asyncio
+    async def test_tool_use_count_increments(self, thread: MagicMock, runner: MagicMock) -> None:
+        """Each tool-use event increments the session's tool_use_count."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        assert p._state.tool_use_count == 0
+        await self._dispatch_tools(p, 4)
+        assert p._state.tool_use_count == 4
