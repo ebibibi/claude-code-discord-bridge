@@ -124,7 +124,7 @@ Si le bot redémarre en cours de session, les sessions Claude interrompues repre
 #### 📡 Retour en Temps Réel
 - **Statut en temps réel** — Réactions emoji : 🧠 réflexion, 🛠️ lecture de fichiers, 💻 édition, 🌐 recherche web
 - **Texte en streaming** — Le texte intermédiaire de l'assistant apparaît pendant que Claude travaille
-- **Embeds de résultats d'outils** — Résultats en direct avec temps écoulé augmentant toutes les 10s
+- **Embeds de résultats d'outils** — Résultats en direct avec temps écoulé augmentant toutes les 10s ; résultats d'une seule ligne affichés directement, résultats multi-lignes réduits derrière un bouton d'expansion
 - **Pensée étendue** — Raisonnement affiché sous forme d'embeds avec spoiler (cliquer pour révéler)
 - **Tableau de bord des fils** — Embed épinglé en direct montrant quels fils sont actifs vs. en attente ; le propriétaire est @mentionné quand une saisie est nécessaire
 

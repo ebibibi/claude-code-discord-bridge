@@ -124,7 +124,7 @@ Si el bot se reinicia a mitad de sesión, las sesiones de Claude interrumpidas s
 #### 📡 Retroalimentación en Tiempo Real
 - **Estado en tiempo real** — Reacciones emoji: 🧠 pensando, 🛠️ leyendo archivos, 💻 editando, 🌐 búsqueda web
 - **Texto en streaming** — El texto intermedio aparece mientras Claude trabaja
-- **Embeds de resultados de herramientas** — Resultados en vivo con tiempo transcurrido que aumenta cada 10s
+- **Embeds de resultados de herramientas** — Resultados en vivo con tiempo transcurrido que aumenta cada 10s; resultados de una línea se muestran directamente, resultados de múltiples líneas se colapsan tras un botón de expansión
 - **Pensamiento extendido** — Razonamiento mostrado como embeds con spoiler (clic para revelar)
 - **Panel de hilos** — Embed fijo en vivo mostrando qué hilos están activos vs. en espera; el propietario es @mencionado cuando se necesita entrada
 
