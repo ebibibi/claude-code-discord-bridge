@@ -187,6 +187,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Manual upgrade trigger** — `/upgrade` slash command lets authorised users trigger the upgrade pipeline directly from Discord (opt-in via `slash_command_enabled=True`)
 
 ### Session Management
+- **Built-in help** — `/help` shows all available slash commands and basic usage (ephemeral, only visible to the caller)
 - **Session sync** — Import CLI sessions as Discord threads (`/sync-sessions`)
 - **Session list** — `/sessions` with filtering by origin (Discord / CLI / all) and time window
 - **Resume info** — `/resume-info` shows the CLI command to continue the current session in a terminal
