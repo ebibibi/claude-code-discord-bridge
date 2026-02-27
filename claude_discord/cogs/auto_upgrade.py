@@ -39,14 +39,18 @@ class UpgradeApprovalView(discord.ui.View):
     Usage::
 
         approved = asyncio.Event()
-        view = UpgradeApprovalView(approved_event=approved, bot_id=bot.user.id)
-        channel_msg = await channel.send("Approve restart?", view=view)
+        content = "🔔 Approve restart?"
+        view = UpgradeApprovalView(approved_event=approved, bot_id=bot.user.id, content=content)
+        channel_msg = await channel.send(content, view=view)
+        view.set_message(channel_msg)
         await approved.wait()           # blocks until button clicked
-        await channel_msg.delete()      # clean up
 
     The same ``approved`` event can be watched in parallel with a reaction loop
     so that *either* a reaction on the thread message *or* clicking this button
     grants approval.
+
+    Call ``bump(channel)`` periodically to re-post the button at the bottom of
+    the channel so it stays visible as other messages arrive above it.
     """
 
     def __init__(
@@ -55,15 +59,38 @@ class UpgradeApprovalView(discord.ui.View):
         approved_event: asyncio.Event,
         bot_id: int | None = None,
         label: str = "✅ Approve",
+        content: str = "",
     ) -> None:
         super().__init__(timeout=None)
         self._event = approved_event
         self._bot_id = bot_id
+        self._content = content
+        self._message: discord.Message | None = None
         # Override the default label set by the decorator
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.label = label
                 break
+
+    def set_message(self, message: discord.Message) -> None:
+        """Store the message this view is attached to for use by bump()."""
+        self._message = message
+
+    async def bump(self, channel: discord.abc.Messageable) -> None:
+        """Re-post the approval button as the latest message in the channel.
+
+        Deletes the old button message and sends a new one so the button stays
+        accessible as other messages push it up. No-op if already approved.
+        """
+        if self._event.is_set():
+            return
+        old_message = self._message
+        with contextlib.suppress(discord.HTTPException):
+            new_message = await channel.send(self._content, view=self)
+            self._message = new_message
+        if old_message:
+            with contextlib.suppress(discord.HTTPException):
+                await old_message.delete()
 
     @discord.ui.button(label="✅ Approve", style=discord.ButtonStyle.green)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
@@ -441,18 +468,21 @@ class AutoUpgradeCog(commands.Cog):
         # Post a button in the parent channel so approval is always one click
         # away at the bottom of the channel (no need to scroll up to the thread).
         channel_msg: discord.Message | None = None
+        view: UpgradeApprovalView | None = None
         parent = getattr(thread, "parent", None)
         if parent is not None:
             bot_id = self.bot.user.id if self.bot.user else None
-            view = UpgradeApprovalView(approved_event=approved, bot_id=bot_id)
+            msg_content = (
+                f"🔔 **Approval needed** — {text}\n"
+                "(React ✅ in the upgrade thread above, or click here ↓)"
+            )
+            view = UpgradeApprovalView(approved_event=approved, bot_id=bot_id, content=msg_content)
             try:
-                channel_msg = await parent.send(
-                    f"🔔 **Approval needed** — {text}\n"
-                    "(React ✅ in the upgrade thread above, or click here ↓)",
-                    view=view,
-                )
+                channel_msg = await parent.send(msg_content, view=view)
+                view.set_message(channel_msg)
             except Exception:
                 logger.debug("Could not post approval button to parent channel", exc_info=True)
+                view = None
 
         # Task 1: watch for the ✅ reaction on the thread message.
         async def _watch_reaction() -> None:
@@ -475,6 +505,9 @@ class AutoUpgradeCog(commands.Cog):
                             "⏳ Still waiting for restart approval... "
                             "React ✅ above or click the button in the channel."
                         )
+                        # Re-post the button at the bottom so it stays visible.
+                        if view is not None and parent is not None:
+                            await view.bump(parent)
 
         # Task 2: resolve as soon as the button (or reaction) sets the event.
         async def _watch_button() -> None:
@@ -498,9 +531,11 @@ class AutoUpgradeCog(commands.Cog):
             task.result()
 
         # Remove the channel button — it's no longer needed.
-        if channel_msg is not None:
+        # view._message tracks the latest button post (may have been bumped).
+        final_msg = (view._message if view is not None else None) or channel_msg
+        if final_msg is not None:
             with contextlib.suppress(discord.NotFound):
-                await channel_msg.delete()
+                await final_msg.delete()
 
         await thread.send("👍 Restart approved!")
 
