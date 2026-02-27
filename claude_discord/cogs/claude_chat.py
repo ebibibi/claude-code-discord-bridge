@@ -162,6 +162,51 @@ class ClaudeChatCog(commands.Cog):
         ):
             await self._handle_thread_reply(message)
 
+    @app_commands.command(name="help", description="Show available commands and how to use the bot")
+    async def help_command(self, interaction: discord.Interaction) -> None:
+        """Display a summary of all slash commands and basic usage."""
+        embed = discord.Embed(
+            title="🤖 Claude Code Bot — Help",
+            description=(
+                "**Getting started**: type a message in the configured channel.\n"
+                "A new thread is created and Claude Code begins working.\n\n"
+                "**In a thread**: reply to continue the conversation, "
+                "or use the slash commands below."
+            ),
+            color=0x5865F2,  # Discord blurple
+        )
+        embed.add_field(
+            name="📌 Session",
+            value=(
+                "`/stop` — Interrupt the current run (session preserved, resumable)\n"
+                "`/clear` — Reset the session for this thread\n"
+                "`/sessions` — List all known sessions\n"
+                "`/resume-info` — Show the CLI command to resume locally\n"
+                "`/sync-sessions` — Import existing CLI sessions as threads\n"
+                "`/sync-settings` — View or change session sync settings"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🤖 Model",
+            value=(
+                "`/model-show` — Show the active Claude model\n"
+                "`/model-set` — Change the model for new sessions"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🔧 Advanced",
+            value=(
+                "`/skill <name>` — Run a Claude Code skill\n"
+                "`/worktree-list` — List active session worktrees\n"
+                "`/worktree-cleanup` — Remove orphaned worktrees\n"
+                "`/upgrade` — Update the bot package"
+            ),
+            inline=False,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
     @app_commands.command(name="stop", description="Stop the active session (session is preserved)")
     async def stop_session(self, interaction: discord.Interaction) -> None:
         """Stop the active Claude run without clearing the session.
