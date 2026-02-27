@@ -305,7 +305,7 @@ class TestOnToolResult:
 
 
 class TestToolResultCollapse:
-    """Tool results with >3 lines are shown collapsed with an expand button."""
+    """Tool results with >1 line are shown collapsed with an expand button."""
 
     def _plant_tool_msg(self, p: EventProcessor, tool_id: str) -> MagicMock:
         fake_embed = MagicMock(spec=discord.Embed)
@@ -316,7 +316,7 @@ class TestToolResultCollapse:
         p._state.active_tools[tool_id] = fake_msg
         return fake_msg
 
-    def _make_result_event(self, tool_id: str, content: str) -> StreamEvent:
+    def _make_result_event(self, tool_id: str, content: str | None) -> StreamEvent:
         return StreamEvent(
             message_type=MessageType.USER,
             tool_result_id=tool_id,
@@ -324,24 +324,41 @@ class TestToolResultCollapse:
         )
 
     @pytest.mark.asyncio
-    async def test_short_result_no_expand_button(
+    async def test_single_line_result_no_expand_button(
         self, thread: MagicMock, runner: MagicMock
     ) -> None:
-        """3 lines or fewer → full embed shown, no expand button."""
+        """Single-line result → full embed shown inline, no expand button."""
         config = _make_config(thread, runner)
         p = EventProcessor(config)
         fake_msg = self._plant_tool_msg(p, "t1")
 
-        await p.process(self._make_result_event("t1", "line1\nline2\nline3"))
+        await p.process(self._make_result_event("t1", "ok"))
 
         call_kwargs = fake_msg.edit.call_args.kwargs
         assert "view" not in call_kwargs
 
     @pytest.mark.asyncio
+    async def test_two_line_result_adds_expand_button(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Two or more lines → ToolResultView attached to the message."""
+        from claude_discord.discord_ui.views import ToolResultView
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        fake_msg = self._plant_tool_msg(p, "t1")
+
+        await p.process(self._make_result_event("t1", "line1\nline2"))
+
+        call_kwargs = fake_msg.edit.call_args.kwargs
+        assert "view" in call_kwargs
+        assert isinstance(call_kwargs["view"], ToolResultView)
+
+    @pytest.mark.asyncio
     async def test_long_result_adds_expand_button(
         self, thread: MagicMock, runner: MagicMock
     ) -> None:
-        """More than 3 lines → ToolResultView attached to the message."""
+        """Many lines → ToolResultView attached to the message."""
         from claude_discord.discord_ui.views import ToolResultView
 
         config = _make_config(thread, runner)
@@ -372,6 +389,24 @@ class TestToolResultCollapse:
         assert "line2" in embed.description
         assert "line3" not in embed.description
         assert "+7" in embed.description  # 10 total - 3 shown = 7 hidden
+
+    @pytest.mark.asyncio
+    async def test_empty_result_still_updates_embed(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Tool with no output still clears the in-progress indicator."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        fake_msg = self._plant_tool_msg(p, "t1")
+
+        await p.process(self._make_result_event("t1", None))
+
+        fake_msg.edit.assert_called_once()
+        call_kwargs = fake_msg.edit.call_args.kwargs
+        assert "view" not in call_kwargs
+        # Embed title should strip the trailing "..."
+        embed = call_kwargs["embed"]
+        assert "..." not in embed.title
 
 
 class TestAskUserQuestion:

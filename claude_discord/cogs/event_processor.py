@@ -69,8 +69,9 @@ async def _send_attachment_requests(
 # Sized to show ~30 lines of typical output (100 chars/line × 30 = 3000).
 # The embed description limit is 4096, so this leaves room for code block markers.
 _TOOL_RESULT_MAX_CHARS = 3000
-# Lines of output shown before the "展開 ▼" button appears.
-_COLLAPSED_LINES = 3
+# Lines of output shown inline before the "展開 ▼" button appears.
+# 1 means single-line results are shown flat; 2+ lines get a collapse button.
+_COLLAPSED_LINES = 1
 
 
 def _truncate_result(content: str) -> str:
@@ -259,9 +260,12 @@ class EventProcessor:
 
         # Update the tool embed with result content.
         tool_msg = self._state.active_tools.get(event.tool_result_id)
-        if tool_msg and event.tool_result_content:
+        if tool_msg is None:
+            return
+
+        title = tool_msg.embeds[0].title or ""
+        if event.tool_result_content:
             truncated = _truncate_result(event.tool_result_content)
-            title = tool_msg.embeds[0].title or ""
             if len(truncated.split("\n")) > _COLLAPSED_LINES:
                 from ..discord_ui.views import ToolResultView
 
@@ -272,6 +276,10 @@ class EventProcessor:
             else:
                 with contextlib.suppress(Exception):
                     await tool_msg.edit(embed=tool_result_embed(title, truncated))
+        else:
+            # Tool completed with no output — remove the in-progress indicator.
+            with contextlib.suppress(Exception):
+                await tool_msg.edit(embed=tool_result_embed(title, ""))
 
     async def _on_progress(self, event: StreamEvent) -> None:
         """Handle PROGRESS events — reset stall timer (compact in progress)."""
