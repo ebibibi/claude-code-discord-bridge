@@ -41,6 +41,33 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# /help command metadata
+#
+# _HELP_CATEGORY maps every slash-command name to its display section.
+# Use None to exclude a command from the embed (e.g. "help" itself).
+# Commands missing from this dict fall through to "🔧 Advanced" at runtime,
+# but the test_help_sync.py CI test will fail — forcing explicit categorisation.
+# ---------------------------------------------------------------------------
+_HELP_CATEGORY: dict[str, str | None] = {
+    "help": None,  # the help command doesn't list itself
+    "stop": "📌 Session",
+    "clear": "📌 Session",
+    "sessions": "📌 Session",
+    "resume-info": "📌 Session",
+    "sync-sessions": "📌 Session",
+    "sync-settings": "📌 Session",
+    "model-show": "🤖 Model",
+    "model-set": "🤖 Model",
+    "skill": "🔧 Advanced",
+    "worktree-list": "🔧 Advanced",
+    "worktree-cleanup": "🔧 Advanced",
+    "upgrade": "🔧 Advanced",
+}
+
+# Section display order in the embed.
+_HELP_SECTION_ORDER: list[str] = ["📌 Session", "🤖 Model", "🔧 Advanced"]
+
 
 class ClaudeChatCog(commands.Cog):
     """Cog that handles Claude Code conversations via Discord threads."""
@@ -164,7 +191,21 @@ class ClaudeChatCog(commands.Cog):
 
     @app_commands.command(name="help", description="Show available commands and how to use the bot")
     async def help_command(self, interaction: discord.Interaction) -> None:
-        """Display a summary of all slash commands and basic usage."""
+        """Display a categorised embed of all slash commands.
+
+        Command names and descriptions are read dynamically from the live
+        command tree so they can never drift from the actual definitions.
+        Category assignments live in _HELP_CATEGORY; CI (test_help_sync.py)
+        ensures every registered command is listed there.
+        """
+        sections: dict[str, list[str]] = {s: [] for s in _HELP_SECTION_ORDER}
+
+        for cmd in sorted(interaction.client.tree.get_commands(), key=lambda c: c.name):  # type: ignore[attr-defined]
+            section = _HELP_CATEGORY.get(cmd.name, "🔧 Advanced")
+            if section is None:
+                continue  # excluded (e.g. the help command itself)
+            sections.setdefault(section, []).append(f"`/{cmd.name}` — {cmd.description}")
+
         embed = discord.Embed(
             title="🤖 Claude Code Bot — Help",
             description=(
@@ -175,36 +216,11 @@ class ClaudeChatCog(commands.Cog):
             ),
             color=0x5865F2,  # Discord blurple
         )
-        embed.add_field(
-            name="📌 Session",
-            value=(
-                "`/stop` — Interrupt the current run (session preserved, resumable)\n"
-                "`/clear` — Reset the session for this thread\n"
-                "`/sessions` — List all known sessions\n"
-                "`/resume-info` — Show the CLI command to resume locally\n"
-                "`/sync-sessions` — Import existing CLI sessions as threads\n"
-                "`/sync-settings` — View or change session sync settings"
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="🤖 Model",
-            value=(
-                "`/model-show` — Show the active Claude model\n"
-                "`/model-set` — Change the model for new sessions"
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="🔧 Advanced",
-            value=(
-                "`/skill <name>` — Run a Claude Code skill\n"
-                "`/worktree-list` — List active session worktrees\n"
-                "`/worktree-cleanup` — Remove orphaned worktrees\n"
-                "`/upgrade` — Update the bot package"
-            ),
-            inline=False,
-        )
+        for section_name in _HELP_SECTION_ORDER:
+            lines = sections.get(section_name, [])
+            if lines:
+                embed.add_field(name=section_name, value="\n".join(lines), inline=False)
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="stop", description="Stop the active session (session is preserved)")
