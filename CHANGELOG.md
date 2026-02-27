@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Tool result collapse threshold** — single-line tool outputs are now shown flat (no expand button); multi-line results (2+ lines) collapse behind an expand button. Previously, only outputs with 4+ lines were collapsed.
+
+### Fixed
+- **Empty tool output stuck embed** — tool calls that complete with no output (e.g. a command that exits silently) now properly clear the in-progress indicator on the embed instead of leaving it stuck.
+
 ## [1.6.0] - 2026-02-26
 
 ### Added
