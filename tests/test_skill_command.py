@@ -487,3 +487,35 @@ class TestIsClaudeThread:
         cog = _make_cog()
         channel = MagicMock(spec=discord.TextChannel)
         assert cog._is_claude_thread(channel) is False
+
+    def test_thread_under_secondary_channel_in_claude_channel_ids(self) -> None:
+        """Thread under a secondary channel listed in claude_channel_ids is recognised."""
+        bot = MagicMock()
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        cog = SkillCommandCog(
+            bot=bot,
+            repo=repo,
+            runner=MagicMock(),
+            claude_channel_id=999,
+            claude_channel_ids={999, 888},
+            skills_dir="/nonexistent/skills",
+        )
+        thread = _make_thread(parent_id=888)
+        assert cog._is_claude_thread(thread) is True
+
+    def test_thread_outside_all_channel_ids_not_recognised(self) -> None:
+        """Thread under a channel not in the set is not recognised."""
+        bot = MagicMock()
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        cog = SkillCommandCog(
+            bot=bot,
+            repo=repo,
+            runner=MagicMock(),
+            claude_channel_id=999,
+            claude_channel_ids={999, 888},
+            skills_dir="/nonexistent/skills",
+        )
+        thread = _make_thread(parent_id=777)
+        assert cog._is_claude_thread(thread) is False

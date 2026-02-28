@@ -221,6 +221,52 @@ async def test_setup_bridge_auto_wires_api_server(tmp_path: object) -> None:
 
 
 @pytest.mark.asyncio
+async def test_setup_bridge_registers_skill_cog_with_only_claude_channel_ids(
+    tmp_path: object,
+) -> None:
+    """SkillCommandCog should be registered when only claude_channel_ids is supplied."""
+    bot = _make_bot()
+    runner = _make_runner()
+
+    await setup_bridge(
+        bot,
+        runner,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        claude_channel_id=None,
+        claude_channel_ids={111, 222},
+        enable_scheduler=False,
+    )
+
+    cog_names = [call.args[0].__class__.__name__ for call in bot.add_cog.call_args_list]
+    assert "SkillCommandCog" in cog_names
+
+
+@pytest.mark.asyncio
+async def test_setup_bridge_merges_channel_ids(tmp_path: object) -> None:
+    """Both claude_channel_id and claude_channel_ids should be merged into the full set."""
+    from claude_discord.cogs.claude_chat import ClaudeChatCog
+
+    bot = _make_bot()
+    runner = _make_runner()
+
+    await setup_bridge(
+        bot,
+        runner,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        claude_channel_id=111,
+        claude_channel_ids={222, 333},
+        enable_scheduler=False,
+    )
+
+    chat_cog = next(
+        call.args[0]
+        for call in bot.add_cog.call_args_list
+        if isinstance(call.args[0], ClaudeChatCog)
+    )
+    assert chat_cog._channel_ids == {111, 222, 333}
+
+
+@pytest.mark.asyncio
 async def test_setup_bridge_preserves_existing_runner_api_port(tmp_path: object) -> None:
     """setup_bridge should not overwrite runner.api_port if already set."""
     bot = _make_bot()

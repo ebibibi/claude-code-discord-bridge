@@ -89,12 +89,16 @@ class SkillCommandCog(commands.Cog):
         skills_dir: Path | str | None = None,
         allowed_user_ids: set[int] | None = None,
         registry: SessionRegistry | None = None,
+        claude_channel_ids: set[int] | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
         self.runner = runner
         self.claude_channel_id = claude_channel_id
         self._allowed_user_ids = allowed_user_ids
+        # Full set of claude channel IDs (includes claude_channel_id as primary).
+        # Used to recognise threads from any configured channel.
+        self._channel_ids: set[int] = claude_channel_ids or {claude_channel_id}
         self._registry = registry or getattr(bot, "session_registry", None)
 
         # Default to ~/.claude/skills/
@@ -142,8 +146,8 @@ class SkillCommandCog(commands.Cog):
         return choices
 
     def _is_claude_thread(self, channel: discord.abc.GuildChannel | discord.Thread) -> bool:
-        """Check if the channel is a thread under the configured claude channel."""
-        return isinstance(channel, discord.Thread) and channel.parent_id == self.claude_channel_id
+        """Check if the channel is a thread under any configured claude channel."""
+        return isinstance(channel, discord.Thread) and channel.parent_id in self._channel_ids
 
     @app_commands.command(name="skill", description="Run a Claude Code skill")
     @app_commands.describe(
@@ -212,8 +216,13 @@ class SkillCommandCog(commands.Cog):
             )
             return
 
-        # New-thread mode: create a thread in the claude channel
-        channel = self.bot.get_channel(self.claude_channel_id)
+        # New-thread mode: prefer the channel where the command was invoked when it is
+        # one of the configured claude channels; otherwise fall back to the primary.
+        invoke_ch = interaction.channel
+        if isinstance(invoke_ch, discord.TextChannel) and invoke_ch.id in self._channel_ids:
+            channel = invoke_ch
+        else:
+            channel = self.bot.get_channel(self.claude_channel_id)
         if not isinstance(channel, discord.TextChannel):
             await interaction.followup.send("Claude channel not found.", ephemeral=True)
             return

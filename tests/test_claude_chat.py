@@ -787,3 +787,101 @@ class TestImageOnlyMessage:
         await cog._handle_thread_reply(msg)
 
         cog._run_claude.assert_not_called()
+
+
+class TestMultiChannelSupport:
+    """channel_ids parameter allows the bot to listen on multiple channels."""
+
+    def _make_cog_with_channels(self, channel_ids: set[int]) -> ClaudeChatCog:
+        bot = MagicMock()
+        bot.channel_id = 999  # primary (should be overridden by explicit channel_ids)
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+        runner = MagicMock()
+        runner.clone = MagicMock(return_value=MagicMock())
+        return ClaudeChatCog(bot=bot, repo=repo, runner=runner, channel_ids=channel_ids)
+
+    def _make_message(self, channel_id: int, author_id: int = 42) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = author_id
+        msg.type = discord.MessageType.default
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = channel_id
+        msg.channel = channel
+        msg.content = "hello"
+        msg.attachments = []
+        return msg
+
+    def _make_thread_message(self, parent_id: int, author_id: int = 42) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = author_id
+        msg.type = discord.MessageType.default
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 55555
+        thread.parent_id = parent_id
+        msg.channel = thread
+        msg.content = "reply"
+        msg.attachments = []
+        return msg
+
+    def test_channel_ids_overrides_bot_channel_id(self) -> None:
+        """Explicit channel_ids takes precedence over bot.channel_id."""
+        cog = self._make_cog_with_channels({111, 222})
+        assert cog._channel_ids == {111, 222}
+        assert 999 not in cog._channel_ids  # bot.channel_id is NOT included
+
+    def test_fallback_to_bot_channel_id_when_no_channel_ids(self) -> None:
+        """When channel_ids is None, falls back to {bot.channel_id}."""
+        cog = _make_cog()  # no channel_ids, bot.channel_id = 999
+        assert cog._channel_ids == {999}
+
+    @pytest.mark.asyncio
+    async def test_message_in_secondary_channel_triggers_new_conversation(self) -> None:
+        """Message in a secondary channel (not bot.channel_id) triggers a new session."""
+        cog = self._make_cog_with_channels({111, 222})
+        cog._handle_new_conversation = AsyncMock()
+
+        msg = self._make_message(channel_id=222)
+        await cog.on_message(msg)
+
+        cog._handle_new_conversation.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_message_in_unknown_channel_is_ignored(self) -> None:
+        """Message in a channel not in channel_ids must be silently dropped."""
+        cog = self._make_cog_with_channels({111, 222})
+        cog._handle_new_conversation = AsyncMock()
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_message(channel_id=333)
+        await cog.on_message(msg)
+
+        cog._handle_new_conversation.assert_not_called()
+        cog._handle_thread_reply.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_thread_under_secondary_channel_triggers_reply(self) -> None:
+        """Thread reply under a secondary channel must be handled."""
+        cog = self._make_cog_with_channels({111, 222})
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_thread_message(parent_id=222)
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_thread_under_unknown_channel_is_ignored(self) -> None:
+        """Thread reply under a channel not in channel_ids must be dropped."""
+        cog = self._make_cog_with_channels({111, 222})
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_thread_message(parent_id=333)
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_not_called()
