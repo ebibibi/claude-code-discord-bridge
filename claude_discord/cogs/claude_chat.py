@@ -87,6 +87,7 @@ class ClaudeChatCog(commands.Cog):
         resume_repo: PendingResumeRepository | None = None,
         settings_repo: SettingsRepository | None = None,
         channel_ids: set[int] | None = None,
+        mention_only_channel_ids: set[int] | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -100,6 +101,9 @@ class ClaudeChatCog(commands.Cog):
         else:
             bid = getattr(bot, "channel_id", None)
             self._channel_ids: set[int] = {bid} if bid else set()
+        # Channels where the bot only responds when explicitly @mentioned.
+        # Thread replies are not affected (already in an active session).
+        self._mention_only_channel_ids: set[int] = mention_only_channel_ids or set()
         self._registry = registry or getattr(bot, "session_registry", None)
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, ClaudeRunner] = {}
@@ -187,6 +191,12 @@ class ClaudeChatCog(commands.Cog):
 
         # Check if message is in one of the configured channels (new conversation)
         if message.channel.id in self._channel_ids:
+            # In mention-only channels, only respond when the bot is @mentioned
+            if (
+                message.channel.id in self._mention_only_channel_ids
+                and self.bot.user not in message.mentions
+            ):
+                return
             await self._handle_new_conversation(message)
             return
 

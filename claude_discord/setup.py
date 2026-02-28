@@ -71,6 +71,7 @@ async def setup_bridge(
     allowed_user_ids: set[int] | None = None,
     claude_channel_id: int | None = None,
     claude_channel_ids: set[int] | None = None,
+    mention_only_channel_ids: set[int] | None = None,
     cli_sessions_path: str | None = None,
     enable_scheduler: bool = True,
     task_db_path: str = "data/tasks.db",
@@ -101,6 +102,11 @@ async def setup_bridge(
         claude_channel_ids: Additional channel IDs to listen on.  Combined with
                             ``claude_channel_id`` to form the full set.  Use this
                             to deploy the bot in multiple channels.
+        mention_only_channel_ids: Channel IDs where the bot only responds when
+                                  explicitly @mentioned.  Thread replies are not
+                                  affected (they are already within an active session).
+                                  Defaults to MENTION_ONLY_CHANNEL_IDS env var
+                                  (comma-separated).
         cli_sessions_path: Path to ~/.claude/projects for session sync.
         enable_scheduler: Whether to enable SchedulerCog.
         task_db_path: Path for scheduled tasks SQLite DB.
@@ -136,6 +142,13 @@ async def setup_bridge(
         _all_channel_ids.add(claude_channel_id)
     if claude_channel_ids is not None:
         _all_channel_ids.update(claude_channel_ids)
+
+    # Mention-only channels — fall back to MENTION_ONLY_CHANNEL_IDS env var
+    if mention_only_channel_ids is None:
+        _env_mention = os.getenv("MENTION_ONLY_CHANNEL_IDS", "")
+        mention_only_channel_ids = {
+            int(x.strip()) for x in _env_mention.split(",") if x.strip().isdigit()
+        } or None
 
     # Lounge shares the coordination channel unless explicitly overridden
     if lounge_channel_id is None:
@@ -176,6 +189,7 @@ async def setup_bridge(
         resume_repo=resume_repo,
         settings_repo=settings_repo,
         channel_ids=_all_channel_ids or None,
+        mention_only_channel_ids=mention_only_channel_ids or None,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")

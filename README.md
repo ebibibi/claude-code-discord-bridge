@@ -329,6 +329,47 @@ asyncio.run(bot.start(os.environ["DISCORD_BOT_TOKEN"]))
 uv lock --upgrade-package claude-code-discord-bridge && uv sync
 ```
 
+#### Multi-Channel Setup
+
+To deploy the bot across multiple Discord channels, pass `claude_channel_ids` in addition to (or instead of) `claude_channel_id`:
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_id=int(os.environ["DISCORD_CHANNEL_ID"]),   # primary (fallback for thread creation)
+    claude_channel_ids={
+        int(os.environ["DISCORD_CHANNEL_ID"]),
+        int(os.environ["DISCORD_CHANNEL_ID_2"]),
+    },
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+Each channel is fully independent — messages in any of the configured channels spawn a new Claude session thread, and `/skill` commands work across all of them.  `claude_channel_id` is kept for backward compatibility and is used as the fallback thread-creation target when the `/skill` command is invoked outside a configured channel.
+
+#### Mention-Only Channels
+
+To make the bot respond **only when @mentioned** in specific channels (useful for shared channels where you don't want the bot to react to every message):
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_ids={111, 222},
+    mention_only_channel_ids={222},  # bot ignores messages in #222 unless @mentioned
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+Or via environment variable (comma-separated channel IDs):
+
+```
+MENTION_ONLY_CHANNEL_IDS=222,333
+```
+
+Thread replies are not affected — once a session thread is open, all replies are handled normally regardless of mentions.
+
 ---
 
 ## Configuration

@@ -264,6 +264,47 @@ async def on_ready():
 uv lock --upgrade-package claude-code-discord-bridge && uv sync
 ```
 
+#### マルチチャンネル設定
+
+複数の Discord チャンネルに Bot を展開するには、`claude_channel_id` に加えて（または代わりに）`claude_channel_ids` を指定します:
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_id=YOUR_CHANNEL_ID,       # プライマリ（スレッド作成のフォールバック）
+    claude_channel_ids={
+        YOUR_CHANNEL_ID,
+        YOUR_CHANNEL_ID_2,
+    },
+    allowed_user_ids={YOUR_USER_ID},
+)
+```
+
+設定されたチャンネルはそれぞれ完全に独立して動作します。どのチャンネルへのメッセージも新しい Claude セッションスレッドを起動し、`/skill` コマンドもすべてのチャンネルで機能します。`claude_channel_id` は後方互換性のために残されており、`/skill` コマンドが設定外チャンネルから実行された場合のフォールバック先として使用されます。
+
+#### メンション専用チャンネル
+
+**@メンションされたときだけ**応答するチャンネルを設定できます（共有チャンネルなどで全メッセージに反応させたくない場合に便利）:
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_ids={111, 222},
+    mention_only_channel_ids={222},  # #222 では @メンションされた時だけ応答
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+環境変数でも設定可能（カンマ区切りのチャンネル ID）:
+
+```
+MENTION_ONLY_CHANNEL_IDS=222,333
+```
+
+スレッド内の返信はメンションチェックの対象外です。セッションスレッドが開かれた後は、メンションの有無に関わらず通常通り応答します。
+
 ---
 
 ## 設定
