@@ -30,7 +30,7 @@ class RunConfig:
     """All parameters needed for a single Claude Code execution.
 
     Required fields:
-        thread: Discord thread to post results to.
+        thread: Discord thread (or text channel for inline-reply mode) to post results to.
         runner: A fresh (cloned) ClaudeRunner instance.
         prompt: The user's message or skill invocation.
 
@@ -51,7 +51,7 @@ class RunConfig:
                           (if clean) after the session ends.
     """
 
-    thread: discord.Thread
+    thread: discord.Thread | discord.TextChannel
     runner: ClaudeRunner
     prompt: str
     session_id: str | None = None

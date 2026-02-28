@@ -72,6 +72,7 @@ async def setup_bridge(
     claude_channel_id: int | None = None,
     claude_channel_ids: set[int] | None = None,
     mention_only_channel_ids: set[int] | None = None,
+    inline_reply_channel_ids: set[int] | None = None,
     cli_sessions_path: str | None = None,
     enable_scheduler: bool = True,
     task_db_path: str = "data/tasks.db",
@@ -150,6 +151,13 @@ async def setup_bridge(
             int(x.strip()) for x in _env_mention.split(",") if x.strip().isdigit()
         } or None
 
+    # Inline-reply channels — fall back to INLINE_REPLY_CHANNEL_IDS env var
+    if inline_reply_channel_ids is None:
+        _env_inline = os.getenv("INLINE_REPLY_CHANNEL_IDS", "")
+        inline_reply_channel_ids = {
+            int(x.strip()) for x in _env_inline.split(",") if x.strip().isdigit()
+        } or None
+
     # Lounge shares the coordination channel unless explicitly overridden
     if lounge_channel_id is None:
         ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
@@ -190,6 +198,7 @@ async def setup_bridge(
         settings_repo=settings_repo,
         channel_ids=_all_channel_ids or None,
         mention_only_channel_ids=mention_only_channel_ids or None,
+        inline_reply_channel_ids=inline_reply_channel_ids or None,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")

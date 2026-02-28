@@ -1003,3 +1003,85 @@ class TestMentionOnlyChannels:
         """Without mention_only_channel_ids, the set is empty (all messages handled)."""
         cog = self._make_cog(channel_ids={111})
         assert cog._mention_only_channel_ids == set()
+
+
+class TestInlineReplyChannels:
+    """inline_reply_channel_ids: bot responds directly in channel without creating a thread."""
+
+    def _make_cog(
+        self,
+        channel_ids: set[int],
+        inline_reply_channel_ids: set[int] | None = None,
+    ) -> ClaudeChatCog:
+        bot = MagicMock()
+        bot.channel_id = 999
+        bot.user = MagicMock()
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+        runner = MagicMock()
+        runner.clone = MagicMock(return_value=MagicMock())
+        return ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=runner,
+            channel_ids=channel_ids,
+            inline_reply_channel_ids=inline_reply_channel_ids,
+        )
+
+    def _make_channel_message(self, channel_id: int, author_id: int = 42) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = author_id
+        msg.type = discord.MessageType.default
+        msg.content = "hello"
+        msg.attachments = []
+        msg.mentions = []
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = channel_id
+        msg.channel = channel
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_inline_channel_does_not_create_thread(self) -> None:
+        """In inline-reply mode, _handle_new_conversation must NOT call create_thread."""
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog._run_claude = AsyncMock()
+
+        msg = self._make_channel_message(channel_id=222)
+        await cog._handle_new_conversation(msg)
+
+        # channel.create_thread must NOT have been called
+        msg.create_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_inline_channel_passes_channel_to_run_claude(self) -> None:
+        """In inline-reply mode, _run_claude receives the channel, not a thread."""
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog._run_claude = AsyncMock()
+
+        msg = self._make_channel_message(channel_id=222)
+        await cog._handle_new_conversation(msg)
+
+        cog._run_claude.assert_awaited_once()
+        _, called_thread, *_ = cog._run_claude.call_args.args
+        assert called_thread is msg.channel  # channel itself, not a thread
+
+    @pytest.mark.asyncio
+    async def test_non_inline_channel_still_creates_thread(self) -> None:
+        """Regular channels (not in inline_reply_channel_ids) still create threads."""
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog._run_claude = AsyncMock()
+        mock_thread = MagicMock()
+        msg = self._make_channel_message(channel_id=111)
+        msg.create_thread = AsyncMock(return_value=mock_thread)
+
+        await cog._handle_new_conversation(msg)
+
+        msg.create_thread.assert_awaited_once()
+
+    def test_inline_reply_channel_ids_default_to_empty_set(self) -> None:
+        """Without inline_reply_channel_ids, the set is empty (thread mode for all channels)."""
+        cog = self._make_cog(channel_ids={111})
+        assert cog._inline_reply_channel_ids == set()

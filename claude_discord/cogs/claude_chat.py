@@ -88,6 +88,7 @@ class ClaudeChatCog(commands.Cog):
         settings_repo: SettingsRepository | None = None,
         channel_ids: set[int] | None = None,
         mention_only_channel_ids: set[int] | None = None,
+        inline_reply_channel_ids: set[int] | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -104,6 +105,8 @@ class ClaudeChatCog(commands.Cog):
         # Channels where the bot only responds when explicitly @mentioned.
         # Thread replies are not affected (already in an active session).
         self._mention_only_channel_ids: set[int] = mention_only_channel_ids or set()
+        # Channels where the bot replies directly (no thread created).
+        self._inline_reply_channel_ids: set[int] = inline_reply_channel_ids or set()
         self._registry = registry or getattr(bot, "session_registry", None)
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, ClaudeRunner] = {}
@@ -292,11 +295,20 @@ class ClaudeChatCog(commands.Cog):
             )
 
     async def _handle_new_conversation(self, message: discord.Message) -> None:
-        """Create a new thread and start a Claude Code session."""
-        thread_name = message.content[:100] if message.content else "Claude Chat"
-        thread = await message.create_thread(name=thread_name)
+        """Start a Claude Code session, creating a thread unless inline-reply mode is active."""
         prompt, image_urls = await self._build_prompt_and_images(message)
-        await self._run_claude(message, thread, prompt, session_id=None, image_urls=image_urls)
+        if (
+            isinstance(message.channel, discord.TextChannel)
+            and message.channel.id in self._inline_reply_channel_ids
+        ):
+            # Inline-reply mode: respond directly in the channel without creating a thread.
+            await self._run_claude(
+                message, message.channel, prompt, session_id=None, image_urls=image_urls
+            )
+        else:
+            thread_name = message.content[:100] if message.content else "Claude Chat"
+            thread = await message.create_thread(name=thread_name)
+            await self._run_claude(message, thread, prompt, session_id=None, image_urls=image_urls)
 
     async def spawn_session(
         self,
@@ -507,7 +519,7 @@ class ClaudeChatCog(commands.Cog):
     async def _run_claude(
         self,
         user_message: discord.Message,
-        thread: discord.Thread,
+        thread: discord.Thread | discord.TextChannel,
         prompt: str,
         session_id: str | None,
         image_urls: list[str] | None = None,

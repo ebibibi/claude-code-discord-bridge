@@ -218,7 +218,7 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
 
 
 async def run_claude_in_thread(
-    thread: discord.Thread,
+    thread: discord.Thread | discord.TextChannel,
     runner,
     repo,
     prompt: str,
