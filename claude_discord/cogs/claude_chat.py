@@ -86,12 +86,20 @@ class ClaudeChatCog(commands.Cog):
         lounge_repo: LoungeRepository | None = None,
         resume_repo: PendingResumeRepository | None = None,
         settings_repo: SettingsRepository | None = None,
+        channel_ids: set[int] | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
         self.runner = runner
         self._max_concurrent = max_concurrent
         self._allowed_user_ids = allowed_user_ids
+        # Set of channel IDs to listen on.  When provided, overrides bot.channel_id.
+        # Falls back to {bot.channel_id} for backward compatibility.
+        if channel_ids is not None:
+            self._channel_ids = channel_ids
+        else:
+            bid = getattr(bot, "channel_id", None)
+            self._channel_ids: set[int] = {bid} if bid else set()
         self._registry = registry or getattr(bot, "session_registry", None)
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, ClaudeRunner] = {}
@@ -177,15 +185,15 @@ class ClaudeChatCog(commands.Cog):
         if self._allowed_user_ids is not None and message.author.id not in self._allowed_user_ids:
             return
 
-        # Check if message is in the configured channel (new conversation)
-        if message.channel.id == self.bot.channel_id:
+        # Check if message is in one of the configured channels (new conversation)
+        if message.channel.id in self._channel_ids:
             await self._handle_new_conversation(message)
             return
 
-        # Check if message is in a thread under the configured channel
+        # Check if message is in a thread under one of the configured channels
         if (
             isinstance(message.channel, discord.Thread)
-            and message.channel.parent_id == self.bot.channel_id
+            and message.channel.parent_id in self._channel_ids
         ):
             await self._handle_thread_reply(message)
 
