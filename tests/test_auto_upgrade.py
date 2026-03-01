@@ -966,6 +966,58 @@ class TestUpgradeApprovalView:
         assert not approved.is_set()
         interaction.response.defer.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_bump_reposts_message_at_bottom(self) -> None:
+        """bump() deletes the old message and posts a new one at the bottom."""
+        approved = asyncio.Event()
+        content = "🔔 **Approval needed** — please approve"
+        view = UpgradeApprovalView(approved_event=approved, content=content)
+
+        old_msg = MagicMock(spec=discord.Message)
+        old_msg.delete = AsyncMock()
+        new_msg = MagicMock(spec=discord.Message)
+
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock(return_value=new_msg)
+
+        view.set_message(old_msg)
+        await view.bump(channel)
+
+        channel.send.assert_awaited_once_with(content, view=view)
+        old_msg.delete.assert_awaited_once()
+        assert view._message is new_msg
+
+    @pytest.mark.asyncio
+    async def test_bump_noop_when_already_approved(self) -> None:
+        """bump() does nothing once the event is already set."""
+        approved = asyncio.Event()
+        approved.set()
+        view = UpgradeApprovalView(approved_event=approved, content="test")
+
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+
+        await view.bump(channel)
+
+        channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_bump_no_delete_when_no_previous_message(self) -> None:
+        """bump() posts a new message even when no previous message is stored."""
+        approved = asyncio.Event()
+        content = "🔔 Approval needed"
+        view = UpgradeApprovalView(approved_event=approved, content=content)
+
+        new_msg = MagicMock(spec=discord.Message)
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock(return_value=new_msg)
+
+        # No set_message() called — _message is None
+        await view.bump(channel)
+
+        channel.send.assert_awaited_once_with(content, view=view)
+        assert view._message is new_msg
+
 
 class TestApprovalButton:
     """Integration tests for button-based approval in _wait_for_approval."""
@@ -1082,6 +1134,45 @@ class TestApprovalButton:
         # The channel message should have been deleted
         channel_msg = parent.send.return_value
         channel_msg.delete.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_timeout_bumps_button_in_channel(self, bot: MagicMock) -> None:
+        """When the reaction watch times out, the channel button is re-posted at bottom."""
+        cog = self._make_cog(bot)
+        thread, parent = self._make_thread_with_parent()
+
+        bot.user = MagicMock()
+        bot.user.id = 1
+
+        # Each call to parent.send returns a fresh mock message with delete()
+        bumped_msg = MagicMock(spec=discord.Message, delete=AsyncMock())
+        parent.send = AsyncMock(
+            side_effect=[
+                MagicMock(spec=discord.Message, delete=AsyncMock()),  # initial post
+                bumped_msg,  # bump re-post after timeout
+            ]
+        )
+
+        call_count = 0
+
+        async def wait_for_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise TimeoutError
+            # Second call: approve
+            event = MagicMock()
+            event.message_id = 99999
+            event.emoji = "✅"
+            event.user_id = 42
+            return event
+
+        bot.wait_for = AsyncMock(side_effect=wait_for_side_effect)
+
+        await cog._wait_for_approval(MagicMock(), thread)
+
+        # parent.send called twice: initial post + bump after timeout
+        assert parent.send.call_count == 2
 
     @pytest.mark.asyncio
     async def test_no_parent_channel_still_works(self, bot: MagicMock) -> None:

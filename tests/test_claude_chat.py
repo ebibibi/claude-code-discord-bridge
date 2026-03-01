@@ -787,3 +787,301 @@ class TestImageOnlyMessage:
         await cog._handle_thread_reply(msg)
 
         cog._run_claude.assert_not_called()
+
+
+class TestMultiChannelSupport:
+    """channel_ids parameter allows the bot to listen on multiple channels."""
+
+    def _make_cog_with_channels(self, channel_ids: set[int]) -> ClaudeChatCog:
+        bot = MagicMock()
+        bot.channel_id = 999  # primary (should be overridden by explicit channel_ids)
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+        runner = MagicMock()
+        runner.clone = MagicMock(return_value=MagicMock())
+        return ClaudeChatCog(bot=bot, repo=repo, runner=runner, channel_ids=channel_ids)
+
+    def _make_message(self, channel_id: int, author_id: int = 42) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = author_id
+        msg.type = discord.MessageType.default
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = channel_id
+        msg.channel = channel
+        msg.content = "hello"
+        msg.attachments = []
+        return msg
+
+    def _make_thread_message(self, parent_id: int, author_id: int = 42) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = author_id
+        msg.type = discord.MessageType.default
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 55555
+        thread.parent_id = parent_id
+        msg.channel = thread
+        msg.content = "reply"
+        msg.attachments = []
+        return msg
+
+    def test_channel_ids_overrides_bot_channel_id(self) -> None:
+        """Explicit channel_ids takes precedence over bot.channel_id."""
+        cog = self._make_cog_with_channels({111, 222})
+        assert cog._channel_ids == {111, 222}
+        assert 999 not in cog._channel_ids  # bot.channel_id is NOT included
+
+    def test_fallback_to_bot_channel_id_when_no_channel_ids(self) -> None:
+        """When channel_ids is None, falls back to {bot.channel_id}."""
+        cog = _make_cog()  # no channel_ids, bot.channel_id = 999
+        assert cog._channel_ids == {999}
+
+    @pytest.mark.asyncio
+    async def test_message_in_secondary_channel_triggers_new_conversation(self) -> None:
+        """Message in a secondary channel (not bot.channel_id) triggers a new session."""
+        cog = self._make_cog_with_channels({111, 222})
+        cog._handle_new_conversation = AsyncMock()
+
+        msg = self._make_message(channel_id=222)
+        await cog.on_message(msg)
+
+        cog._handle_new_conversation.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_message_in_unknown_channel_is_ignored(self) -> None:
+        """Message in a channel not in channel_ids must be silently dropped."""
+        cog = self._make_cog_with_channels({111, 222})
+        cog._handle_new_conversation = AsyncMock()
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_message(channel_id=333)
+        await cog.on_message(msg)
+
+        cog._handle_new_conversation.assert_not_called()
+        cog._handle_thread_reply.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_thread_under_secondary_channel_triggers_reply(self) -> None:
+        """Thread reply under a secondary channel must be handled."""
+        cog = self._make_cog_with_channels({111, 222})
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_thread_message(parent_id=222)
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_thread_under_unknown_channel_is_ignored(self) -> None:
+        """Thread reply under a channel not in channel_ids must be dropped."""
+        cog = self._make_cog_with_channels({111, 222})
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_thread_message(parent_id=333)
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_not_called()
+
+
+class TestMentionOnlyChannels:
+    """mention_only_channel_ids: bot only responds when @mentioned in those channels."""
+
+    def _make_cog(
+        self,
+        channel_ids: set[int],
+        mention_only_channel_ids: set[int] | None = None,
+    ) -> ClaudeChatCog:
+        bot = MagicMock()
+        bot.channel_id = 999
+        bot.user = MagicMock()
+        bot.user.id = 1111  # bot's own user ID
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+        runner = MagicMock()
+        runner.clone = MagicMock(return_value=MagicMock())
+        return ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=runner,
+            channel_ids=channel_ids,
+            mention_only_channel_ids=mention_only_channel_ids,
+        )
+
+    def _make_message(
+        self,
+        channel_id: int,
+        mentions: list | None = None,
+        author_id: int = 42,
+    ) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = author_id
+        msg.type = discord.MessageType.default
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = channel_id
+        msg.channel = channel
+        msg.content = "hello"
+        msg.attachments = []
+        msg.mentions = mentions or []
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_mention_only_channel_without_mention_is_ignored(self) -> None:
+        """Message in a mention-only channel without @bot mention must be dropped."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+        )
+        cog._handle_new_conversation = AsyncMock()
+
+        msg = self._make_message(channel_id=222, mentions=[])  # no bot mention
+        await cog.on_message(msg)
+
+        cog._handle_new_conversation.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_mention_only_channel_with_mention_triggers_conversation(self) -> None:
+        """Message in a mention-only channel WITH @bot mention must start a session."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+        )
+        cog._handle_new_conversation = AsyncMock()
+
+        bot_user = cog.bot.user
+        msg = self._make_message(channel_id=222, mentions=[bot_user])
+        await cog.on_message(msg)
+
+        cog._handle_new_conversation.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_non_mention_only_channel_responds_to_all_messages(self) -> None:
+        """Messages in regular channels (not mention-only) are handled as before."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},  # 111 is NOT mention-only
+        )
+        cog._handle_new_conversation = AsyncMock()
+
+        msg = self._make_message(channel_id=111, mentions=[])  # no mention, still works
+        await cog.on_message(msg)
+
+        cog._handle_new_conversation.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_thread_under_mention_only_channel_bypasses_mention_check(self) -> None:
+        """Thread replies are always handled (already in an active session)."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+        )
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = 42
+        msg.type = discord.MessageType.default
+        msg.mentions = []  # no bot mention in thread reply
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 55555
+        thread.parent_id = 222  # parent is mention-only channel
+        msg.channel = thread
+        msg.content = "reply"
+        msg.attachments = []
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_awaited_once_with(msg)
+
+    def test_mention_only_channel_ids_default_to_empty_set(self) -> None:
+        """Without mention_only_channel_ids, the set is empty (all messages handled)."""
+        cog = self._make_cog(channel_ids={111})
+        assert cog._mention_only_channel_ids == set()
+
+
+class TestInlineReplyChannels:
+    """inline_reply_channel_ids: bot responds directly in channel without creating a thread."""
+
+    def _make_cog(
+        self,
+        channel_ids: set[int],
+        inline_reply_channel_ids: set[int] | None = None,
+    ) -> ClaudeChatCog:
+        bot = MagicMock()
+        bot.channel_id = 999
+        bot.user = MagicMock()
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+        runner = MagicMock()
+        runner.clone = MagicMock(return_value=MagicMock())
+        return ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=runner,
+            channel_ids=channel_ids,
+            inline_reply_channel_ids=inline_reply_channel_ids,
+        )
+
+    def _make_channel_message(self, channel_id: int, author_id: int = 42) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = author_id
+        msg.type = discord.MessageType.default
+        msg.content = "hello"
+        msg.attachments = []
+        msg.mentions = []
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = channel_id
+        msg.channel = channel
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_inline_channel_does_not_create_thread(self) -> None:
+        """In inline-reply mode, _handle_new_conversation must NOT call create_thread."""
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog._run_claude = AsyncMock()
+
+        msg = self._make_channel_message(channel_id=222)
+        await cog._handle_new_conversation(msg)
+
+        # channel.create_thread must NOT have been called
+        msg.create_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_inline_channel_passes_channel_to_run_claude(self) -> None:
+        """In inline-reply mode, _run_claude receives the channel, not a thread."""
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog._run_claude = AsyncMock()
+
+        msg = self._make_channel_message(channel_id=222)
+        await cog._handle_new_conversation(msg)
+
+        cog._run_claude.assert_awaited_once()
+        _, called_thread, *_ = cog._run_claude.call_args.args
+        assert called_thread is msg.channel  # channel itself, not a thread
+
+    @pytest.mark.asyncio
+    async def test_non_inline_channel_still_creates_thread(self) -> None:
+        """Regular channels (not in inline_reply_channel_ids) still create threads."""
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog._run_claude = AsyncMock()
+        mock_thread = MagicMock()
+        msg = self._make_channel_message(channel_id=111)
+        msg.create_thread = AsyncMock(return_value=mock_thread)
+
+        await cog._handle_new_conversation(msg)
+
+        msg.create_thread.assert_awaited_once()
+
+    def test_inline_reply_channel_ids_default_to_empty_set(self) -> None:
+        """Without inline_reply_channel_ids, the set is empty (thread mode for all channels)."""
+        cog = self._make_cog(channel_ids={111})
+        assert cog._inline_reply_channel_ids == set()

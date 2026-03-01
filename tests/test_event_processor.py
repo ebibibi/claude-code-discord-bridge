@@ -305,7 +305,7 @@ class TestOnToolResult:
 
 
 class TestToolResultCollapse:
-    """Tool results with >3 lines are shown collapsed with an expand button."""
+    """Tool results with >1 line are shown collapsed with an expand button."""
 
     def _plant_tool_msg(self, p: EventProcessor, tool_id: str) -> MagicMock:
         fake_embed = MagicMock(spec=discord.Embed)
@@ -316,7 +316,7 @@ class TestToolResultCollapse:
         p._state.active_tools[tool_id] = fake_msg
         return fake_msg
 
-    def _make_result_event(self, tool_id: str, content: str) -> StreamEvent:
+    def _make_result_event(self, tool_id: str, content: str | None) -> StreamEvent:
         return StreamEvent(
             message_type=MessageType.USER,
             tool_result_id=tool_id,
@@ -324,24 +324,41 @@ class TestToolResultCollapse:
         )
 
     @pytest.mark.asyncio
-    async def test_short_result_no_expand_button(
+    async def test_single_line_result_no_expand_button(
         self, thread: MagicMock, runner: MagicMock
     ) -> None:
-        """3 lines or fewer → full embed shown, no expand button."""
+        """Single-line result → full embed shown inline, no expand button."""
         config = _make_config(thread, runner)
         p = EventProcessor(config)
         fake_msg = self._plant_tool_msg(p, "t1")
 
-        await p.process(self._make_result_event("t1", "line1\nline2\nline3"))
+        await p.process(self._make_result_event("t1", "ok"))
 
         call_kwargs = fake_msg.edit.call_args.kwargs
         assert "view" not in call_kwargs
 
     @pytest.mark.asyncio
+    async def test_two_line_result_adds_expand_button(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Two or more lines → ToolResultView attached to the message."""
+        from claude_discord.discord_ui.views import ToolResultView
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        fake_msg = self._plant_tool_msg(p, "t1")
+
+        await p.process(self._make_result_event("t1", "line1\nline2"))
+
+        call_kwargs = fake_msg.edit.call_args.kwargs
+        assert "view" in call_kwargs
+        assert isinstance(call_kwargs["view"], ToolResultView)
+
+    @pytest.mark.asyncio
     async def test_long_result_adds_expand_button(
         self, thread: MagicMock, runner: MagicMock
     ) -> None:
-        """More than 3 lines → ToolResultView attached to the message."""
+        """Many lines → ToolResultView attached to the message."""
         from claude_discord.discord_ui.views import ToolResultView
 
         config = _make_config(thread, runner)
@@ -372,6 +389,24 @@ class TestToolResultCollapse:
         assert "line2" in embed.description
         assert "line3" not in embed.description
         assert "+7" in embed.description  # 10 total - 3 shown = 7 hidden
+
+    @pytest.mark.asyncio
+    async def test_empty_result_still_updates_embed(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Tool with no output still clears the in-progress indicator."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        fake_msg = self._plant_tool_msg(p, "t1")
+
+        await p.process(self._make_result_event("t1", None))
+
+        fake_msg.edit.assert_called_once()
+        call_kwargs = fake_msg.edit.call_args.kwargs
+        assert "view" not in call_kwargs
+        # Embed title should strip the trailing "..."
+        embed = call_kwargs["embed"]
+        assert "..." not in embed.title
 
 
 class TestAskUserQuestion:
@@ -668,3 +703,166 @@ class TestTodoWrite:
         await p.process(self._make_todo_event())
 
         assert p._state.todo_message is None
+
+
+class TestCcdbAttachmentsDelivery:
+    """_on_complete() reads .ccdb-attachments and sends listed files."""
+
+    @pytest.mark.asyncio
+    async def test_sends_files_listed_in_marker(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        f = tmp_path / "out.py"
+        f.write_text("result = 42", encoding="utf-8")
+        (tmp_path / ".ccdb-attachments").write_text(str(f) + "\n", encoding="utf-8")
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with patch(
+            "claude_discord.cogs.event_processor.send_files",
+            new_callable=AsyncMock,
+        ) as mock_send:
+            await p.process(_make_result_event(session_id="s1"))
+
+        mock_send.assert_called_once_with(thread, [str(f)], str(tmp_path))
+
+    @pytest.mark.asyncio
+    async def test_marker_file_deleted_after_send(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        f = tmp_path / "out.py"
+        f.write_text("x = 1", encoding="utf-8")
+        marker = tmp_path / ".ccdb-attachments"
+        marker.write_text(str(f) + "\n", encoding="utf-8")
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with patch("claude_discord.cogs.event_processor.send_files", new_callable=AsyncMock):
+            await p.process(_make_result_event(session_id="s1"))
+
+        assert not marker.exists()
+
+    @pytest.mark.asyncio
+    async def test_no_marker_no_send(self, thread: MagicMock, runner: MagicMock, tmp_path) -> None:
+        """When .ccdb-attachments is absent nothing is sent."""
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with patch(
+            "claude_discord.cogs.event_processor.send_files",
+            new_callable=AsyncMock,
+        ) as mock_send:
+            await p.process(_make_result_event(session_id="s1"))
+
+        mock_send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_not_sent_on_error(self, thread: MagicMock, runner: MagicMock, tmp_path) -> None:
+        """Files are not sent when the session ends with an error."""
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        f = tmp_path / "out.py"
+        f.write_text("x = 1", encoding="utf-8")
+        (tmp_path / ".ccdb-attachments").write_text(str(f) + "\n", encoding="utf-8")
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with patch(
+            "claude_discord.cogs.event_processor.send_files",
+            new_callable=AsyncMock,
+        ) as mock_send:
+            await p.process(_make_result_event(error="Claude crashed"))
+
+        mock_send.assert_not_called()
+
+
+class TestRequesterMention:
+    """User mention after significant work (>= _MENTION_TOOL_THRESHOLD tool calls)."""
+
+    async def _dispatch_tools(self, p: EventProcessor, count: int) -> None:
+        """Fire `count` tool-use events through the processor."""
+        for i in range(count):
+            await p.process(_make_tool_event(tool_id=f"tool{i}"))
+
+    @pytest.mark.asyncio
+    async def test_mention_sent_after_threshold_tool_calls(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """requester_id set + >=3 tool uses -> mention is sent after session complete."""
+        config = _make_config(thread, runner, requester_id=123456789)
+        p = EventProcessor(config)
+
+        await self._dispatch_tools(p, 3)
+        await p.process(_make_result_event(session_id="s1"))
+
+        all_sends = [c.args[0] for c in thread.send.call_args_list if c.args]
+        mention_sends = [s for s in all_sends if "<@123456789>" in s]
+        assert len(mention_sends) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_mention_below_threshold(self, thread: MagicMock, runner: MagicMock) -> None:
+        """Fewer than 3 tool uses -> no mention, even with requester_id set."""
+        config = _make_config(thread, runner, requester_id=123456789)
+        p = EventProcessor(config)
+
+        await self._dispatch_tools(p, 2)
+        await p.process(_make_result_event(session_id="s1"))
+
+        all_sends = [c.args[0] for c in thread.send.call_args_list if c.args]
+        mention_sends = [s for s in all_sends if "<@123456789>" in s]
+        assert len(mention_sends) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_mention_without_requester_id(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """requester_id is None (bot-spawned session) -> no mention even with many tools."""
+        config = _make_config(thread, runner, requester_id=None)
+        p = EventProcessor(config)
+
+        await self._dispatch_tools(p, 5)
+        await p.process(_make_result_event(session_id="s1"))
+
+        all_sends = [c.args[0] for c in thread.send.call_args_list if c.args]
+        mention_sends = [s for s in all_sends if s.startswith("<@")]
+        assert len(mention_sends) == 0
+
+    @pytest.mark.asyncio
+    async def test_no_mention_on_error_completion(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Error session -> no mention even if threshold was reached."""
+        config = _make_config(thread, runner, requester_id=123456789)
+        p = EventProcessor(config)
+
+        await self._dispatch_tools(p, 3)
+        await p.process(
+            StreamEvent(message_type=MessageType.RESULT, is_complete=True, error="Oops")
+        )
+
+        all_sends = [c.args[0] for c in thread.send.call_args_list if c.args]
+        mention_sends = [s for s in all_sends if "<@123456789>" in s]
+        assert len(mention_sends) == 0
+
+    @pytest.mark.asyncio
+    async def test_tool_use_count_increments(self, thread: MagicMock, runner: MagicMock) -> None:
+        """Each tool-use event increments the session's tool_use_count."""
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        assert p._state.tool_use_count == 0
+        await self._dispatch_tools(p, 4)
+        assert p._state.tool_use_count == 4

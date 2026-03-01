@@ -70,6 +70,9 @@ async def setup_bridge(
     session_db_path: str = "data/sessions.db",
     allowed_user_ids: set[int] | None = None,
     claude_channel_id: int | None = None,
+    claude_channel_ids: set[int] | None = None,
+    mention_only_channel_ids: set[int] | None = None,
+    inline_reply_channel_ids: set[int] | None = None,
     cli_sessions_path: str | None = None,
     enable_scheduler: bool = True,
     task_db_path: str = "data/tasks.db",
@@ -94,7 +97,17 @@ async def setup_bridge(
                     runner.api_port so CCDB_API_URL is available to Claude.
         session_db_path: Path for session SQLite DB.
         allowed_user_ids: Set of Discord user IDs allowed to use Claude.
-        claude_channel_id: Channel ID for Claude chat (needed for SkillCommandCog).
+        claude_channel_id: Primary channel ID for Claude chat.  Kept for
+                           backward compatibility.  Also used as the fallback
+                           thread-creation target in SkillCommandCog.
+        claude_channel_ids: Additional channel IDs to listen on.  Combined with
+                            ``claude_channel_id`` to form the full set.  Use this
+                            to deploy the bot in multiple channels.
+        mention_only_channel_ids: Channel IDs where the bot only responds when
+                                  explicitly @mentioned.  Thread replies are not
+                                  affected (they are already within an active session).
+                                  Defaults to MENTION_ONLY_CHANNEL_IDS env var
+                                  (comma-separated).
         cli_sessions_path: Path to ~/.claude/projects for session sync.
         enable_scheduler: Whether to enable SchedulerCog.
         task_db_path: Path for scheduled tasks SQLite DB.
@@ -123,6 +136,27 @@ async def setup_bridge(
     from .database.settings_repo import SettingsRepository
     from .database.task_repo import TaskRepository
     from .worktree import WorktreeManager
+
+    # Build the full set of claude channel IDs from both parameters
+    _all_channel_ids: set[int] = set()
+    if claude_channel_id is not None:
+        _all_channel_ids.add(claude_channel_id)
+    if claude_channel_ids is not None:
+        _all_channel_ids.update(claude_channel_ids)
+
+    # Mention-only channels — fall back to MENTION_ONLY_CHANNEL_IDS env var
+    if mention_only_channel_ids is None:
+        _env_mention = os.getenv("MENTION_ONLY_CHANNEL_IDS", "")
+        mention_only_channel_ids = {
+            int(x.strip()) for x in _env_mention.split(",") if x.strip().isdigit()
+        } or None
+
+    # Inline-reply channels — fall back to INLINE_REPLY_CHANNEL_IDS env var
+    if inline_reply_channel_ids is None:
+        _env_inline = os.getenv("INLINE_REPLY_CHANNEL_IDS", "")
+        inline_reply_channel_ids = {
+            int(x.strip()) for x in _env_inline.split(",") if x.strip().isdigit()
+        } or None
 
     # Lounge shares the coordination channel unless explicitly overridden
     if lounge_channel_id is None:
@@ -162,6 +196,9 @@ async def setup_bridge(
         lounge_repo=lounge_repo,
         resume_repo=resume_repo,
         settings_repo=settings_repo,
+        channel_ids=_all_channel_ids or None,
+        mention_only_channel_ids=mention_only_channel_ids or None,
+        inline_reply_channel_ids=inline_reply_channel_ids or None,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")
@@ -176,13 +213,16 @@ async def setup_bridge(
     await bot.add_cog(session_manage_cog)
     logger.info("Registered SessionManageCog")
 
-    # --- SkillCommandCog (requires channel ID) ---
-    if claude_channel_id is not None:
+    # --- SkillCommandCog (requires at least one channel ID) ---
+    if _all_channel_ids:
+        # Primary channel: prefer the explicit claude_channel_id, else pick from set
+        _primary_channel_id = claude_channel_id or next(iter(_all_channel_ids))
         skill_cog = SkillCommandCog(
             bot,
             repo=session_repo,
             runner=runner,
-            claude_channel_id=claude_channel_id,
+            claude_channel_id=_primary_channel_id,
+            claude_channel_ids=_all_channel_ids,
             allowed_user_ids=allowed_user_ids,
         )
         await bot.add_cog(skill_cog)

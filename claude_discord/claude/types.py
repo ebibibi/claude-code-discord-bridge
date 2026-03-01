@@ -203,3 +203,5 @@ class SessionState:
     active_timers: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     # TodoWrite: reference to the live todo embed message (edited in-place on each update)
     todo_message: discord.Message | None = None
+    # Number of tool calls dispatched this session (used to detect significant work)
+    tool_use_count: int = 0

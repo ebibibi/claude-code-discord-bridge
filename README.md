@@ -139,9 +139,10 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 #### 📡 Real-time Feedback
 - **Real-time status** — Emoji reactions: 🧠 thinking, 🛠️ reading files, 💻 editing, 🌐 web search
 - **Streaming text** — Intermediate assistant text appears as Claude works
-- **Tool result embeds** — Live tool call results with elapsed time ticking up every 10s
+- **Tool result embeds** — Live tool call results with elapsed time ticking up every 10s; single-line outputs shown inline, multi-line outputs collapsed behind an expand button
 - **Extended thinking** — Reasoning shown as spoiler-tagged embeds (click to reveal)
 - **Thread dashboard** — Live pinned embed showing which threads are active vs. waiting; owner @-mentioned when input is needed
+- **Completion mention** — After significant work (≥ 3 tool calls), the requester is @-mentioned when the session completes; simple Q&A sessions skip the ping
 
 #### 🤝 Human-in-the-Loop
 - **Interactive questions** — `AskUserQuestion` renders as Discord Buttons or Select Menu; session resumes with your answer; buttons survive bot restarts
@@ -159,6 +160,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 
 #### 🔌 Input & Skills
 - **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images sent as Discord CDN URLs via `--input-format stream-json` (up to 4 × 5 MB)
+- **On-demand file delivery** — Ask Claude to "send me" or "attach" a file and it writes the path to `.ccdb-attachments`; the bot reads it and delivers the file as a Discord attachment when the session completes
 - **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume
 - **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
 
@@ -181,10 +183,11 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Auto-upgrade** — Automatically update the bot when upstream packages are released
 - **DrainAware restart** — Waits for active sessions to finish before restarting
 - **Auto-resume marking** — Active sessions are automatically marked for resume on any shutdown (upgrade restart via `AutoUpgradeCog`, or any other shutdown via `ClaudeChatCog.cog_unload()`); they pick up where they left off after the bot comes back online
-- **Restart approval** — Optional gate to confirm upgrades; approve via ✅ reaction in the upgrade thread or via button posted to the parent channel
+- **Restart approval** — Optional gate to confirm upgrades; approve via ✅ reaction in the upgrade thread or via button posted to the parent channel; the button re-posts itself at the bottom as new messages arrive so it stays visible
 - **Manual upgrade trigger** — `/upgrade` slash command lets authorised users trigger the upgrade pipeline directly from Discord (opt-in via `slash_command_enabled=True`)
 
 ### Session Management
+- **Built-in help** — `/help` shows all available slash commands and basic usage (ephemeral, only visible to the caller)
 - **Session sync** — Import CLI sessions as Discord threads (`/sync-sessions`)
 - **Session list** — `/sessions` with filtering by origin (Discord / CLI / all) and time window
 - **Resume info** — `/resume-info` shows the CLI command to continue the current session in a terminal
@@ -325,6 +328,47 @@ asyncio.run(bot.start(os.environ["DISCORD_BOT_TOKEN"]))
 ```bash
 uv lock --upgrade-package claude-code-discord-bridge && uv sync
 ```
+
+#### Multi-Channel Setup
+
+To deploy the bot across multiple Discord channels, pass `claude_channel_ids` in addition to (or instead of) `claude_channel_id`:
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_id=int(os.environ["DISCORD_CHANNEL_ID"]),   # primary (fallback for thread creation)
+    claude_channel_ids={
+        int(os.environ["DISCORD_CHANNEL_ID"]),
+        int(os.environ["DISCORD_CHANNEL_ID_2"]),
+    },
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+Each channel is fully independent — messages in any of the configured channels spawn a new Claude session thread, and `/skill` commands work across all of them.  `claude_channel_id` is kept for backward compatibility and is used as the fallback thread-creation target when the `/skill` command is invoked outside a configured channel.
+
+#### Mention-Only Channels
+
+To make the bot respond **only when @mentioned** in specific channels (useful for shared channels where you don't want the bot to react to every message):
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_ids={111, 222},
+    mention_only_channel_ids={222},  # bot ignores messages in #222 unless @mentioned
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+Or via environment variable (comma-separated channel IDs):
+
+```
+MENTION_ONLY_CHANNEL_IDS=222,333
+```
+
+Thread replies are not affected — once a session thread is open, all replies are handled normally regardless of mentions.
 
 ---
 

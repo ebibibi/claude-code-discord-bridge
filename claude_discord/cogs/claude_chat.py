@@ -33,13 +33,40 @@ from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.views import StopView
 from ._run_helper import run_claude_with_config
-from .prompt_builder import build_prompt_and_images
+from .prompt_builder import build_prompt_and_images, wants_file_attachment
 from .run_config import RunConfig
 
 if TYPE_CHECKING:
     from ..bot import ClaudeDiscordBot
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# /help command metadata
+#
+# _HELP_CATEGORY maps every slash-command name to its display section.
+# Use None to exclude a command from the embed (e.g. "help" itself).
+# Commands missing from this dict fall through to "🔧 Advanced" at runtime,
+# but the test_help_sync.py CI test will fail — forcing explicit categorisation.
+# ---------------------------------------------------------------------------
+_HELP_CATEGORY: dict[str, str | None] = {
+    "help": None,  # the help command doesn't list itself
+    "stop": "📌 Session",
+    "clear": "📌 Session",
+    "sessions": "📌 Session",
+    "resume-info": "📌 Session",
+    "sync-sessions": "📌 Session",
+    "sync-settings": "📌 Session",
+    "model-show": "🤖 Model",
+    "model-set": "🤖 Model",
+    "skill": "🔧 Advanced",
+    "worktree-list": "🔧 Advanced",
+    "worktree-cleanup": "🔧 Advanced",
+    "upgrade": "🔧 Advanced",
+}
+
+# Section display order in the embed.
+_HELP_SECTION_ORDER: list[str] = ["📌 Session", "🤖 Model", "🔧 Advanced"]
 
 
 class ClaudeChatCog(commands.Cog):
@@ -59,12 +86,27 @@ class ClaudeChatCog(commands.Cog):
         lounge_repo: LoungeRepository | None = None,
         resume_repo: PendingResumeRepository | None = None,
         settings_repo: SettingsRepository | None = None,
+        channel_ids: set[int] | None = None,
+        mention_only_channel_ids: set[int] | None = None,
+        inline_reply_channel_ids: set[int] | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
         self.runner = runner
         self._max_concurrent = max_concurrent
         self._allowed_user_ids = allowed_user_ids
+        # Set of channel IDs to listen on.  When provided, overrides bot.channel_id.
+        # Falls back to {bot.channel_id} for backward compatibility.
+        if channel_ids is not None:
+            self._channel_ids = channel_ids
+        else:
+            bid = getattr(bot, "channel_id", None)
+            self._channel_ids: set[int] = {bid} if bid else set()
+        # Channels where the bot only responds when explicitly @mentioned.
+        # Thread replies are not affected (already in an active session).
+        self._mention_only_channel_ids: set[int] = mention_only_channel_ids or set()
+        # Channels where the bot replies directly (no thread created).
+        self._inline_reply_channel_ids: set[int] = inline_reply_channel_ids or set()
         self._registry = registry or getattr(bot, "session_registry", None)
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, ClaudeRunner] = {}
@@ -150,17 +192,57 @@ class ClaudeChatCog(commands.Cog):
         if self._allowed_user_ids is not None and message.author.id not in self._allowed_user_ids:
             return
 
-        # Check if message is in the configured channel (new conversation)
-        if message.channel.id == self.bot.channel_id:
+        # Check if message is in one of the configured channels (new conversation)
+        if message.channel.id in self._channel_ids:
+            # In mention-only channels, only respond when the bot is @mentioned
+            if (
+                message.channel.id in self._mention_only_channel_ids
+                and self.bot.user not in message.mentions
+            ):
+                return
             await self._handle_new_conversation(message)
             return
 
-        # Check if message is in a thread under the configured channel
+        # Check if message is in a thread under one of the configured channels
         if (
             isinstance(message.channel, discord.Thread)
-            and message.channel.parent_id == self.bot.channel_id
+            and message.channel.parent_id in self._channel_ids
         ):
             await self._handle_thread_reply(message)
+
+    @app_commands.command(name="help", description="Show available commands and how to use the bot")
+    async def help_command(self, interaction: discord.Interaction) -> None:
+        """Display a categorised embed of all slash commands.
+
+        Command names and descriptions are read dynamically from the live
+        command tree so they can never drift from the actual definitions.
+        Category assignments live in _HELP_CATEGORY; CI (test_help_sync.py)
+        ensures every registered command is listed there.
+        """
+        sections: dict[str, list[str]] = {s: [] for s in _HELP_SECTION_ORDER}
+
+        for cmd in sorted(interaction.client.tree.get_commands(), key=lambda c: c.name):  # type: ignore[attr-defined]
+            section = _HELP_CATEGORY.get(cmd.name, "🔧 Advanced")
+            if section is None:
+                continue  # excluded (e.g. the help command itself)
+            sections.setdefault(section, []).append(f"`/{cmd.name}` — {cmd.description}")
+
+        embed = discord.Embed(
+            title="🤖 Claude Code Bot — Help",
+            description=(
+                "**Getting started**: type a message in the configured channel.\n"
+                "A new thread is created and Claude Code begins working.\n\n"
+                "**In a thread**: reply to continue the conversation, "
+                "or use the slash commands below."
+            ),
+            color=0x5865F2,  # Discord blurple
+        )
+        for section_name in _HELP_SECTION_ORDER:
+            lines = sections.get(section_name, [])
+            if lines:
+                embed.add_field(name=section_name, value="\n".join(lines), inline=False)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="stop", description="Stop the active session (session is preserved)")
     async def stop_session(self, interaction: discord.Interaction) -> None:
@@ -213,11 +295,20 @@ class ClaudeChatCog(commands.Cog):
             )
 
     async def _handle_new_conversation(self, message: discord.Message) -> None:
-        """Create a new thread and start a Claude Code session."""
-        thread_name = message.content[:100] if message.content else "Claude Chat"
-        thread = await message.create_thread(name=thread_name)
+        """Start a Claude Code session, creating a thread unless inline-reply mode is active."""
         prompt, image_urls = await self._build_prompt_and_images(message)
-        await self._run_claude(message, thread, prompt, session_id=None, image_urls=image_urls)
+        if (
+            isinstance(message.channel, discord.TextChannel)
+            and message.channel.id in self._inline_reply_channel_ids
+        ):
+            # Inline-reply mode: respond directly in the channel without creating a thread.
+            await self._run_claude(
+                message, message.channel, prompt, session_id=None, image_urls=image_urls
+            )
+        else:
+            thread_name = message.content[:100] if message.content else "Claude Chat"
+            thread = await message.create_thread(name=thread_name)
+            await self._run_claude(message, thread, prompt, session_id=None, image_urls=image_urls)
 
     async def spawn_session(
         self,
@@ -428,7 +519,7 @@ class ClaudeChatCog(commands.Cog):
     async def _run_claude(
         self,
         user_message: discord.Message,
-        thread: discord.Thread,
+        thread: discord.Thread | discord.TextChannel,
         prompt: str,
         session_id: str | None,
         image_urls: list[str] | None = None,
@@ -492,6 +583,8 @@ class ClaudeChatCog(commands.Cog):
                         stop_view=stop_view,
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
                         image_urls=image_urls,
+                        attach_on_request=wants_file_attachment(prompt),
+                        requester_id=(None if user_message.author.bot else user_message.author.id),
                     )
                 )
             finally:

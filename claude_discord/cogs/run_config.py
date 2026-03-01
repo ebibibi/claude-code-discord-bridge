@@ -30,7 +30,7 @@ class RunConfig:
     """All parameters needed for a single Claude Code execution.
 
     Required fields:
-        thread: Discord thread to post results to.
+        thread: Discord thread (or text channel for inline-reply mode) to post results to.
         runner: A fresh (cloned) ClaudeRunner instance.
         prompt: The user's message or skill invocation.
 
@@ -51,7 +51,7 @@ class RunConfig:
                           (if clean) after the session ends.
     """
 
-    thread: discord.Thread
+    thread: discord.Thread | discord.TextChannel
     runner: ClaudeRunner
     prompt: str
     session_id: str | None = None
@@ -65,6 +65,13 @@ class RunConfig:
     # HTTPS URLs of image attachments to pass as stream-json url-type image blocks.
     # Claude Code CLI silently drops base64 image blocks; URL type is required.
     image_urls: list[str] | None = None
+    # When True, inject a system-prompt instruction telling Claude to write
+    # requested file paths to .ccdb-attachments so the bot can send them.
+    attach_on_request: bool = False
+    # Discord user ID of the person who triggered this session.
+    # When set, the user is mentioned after significant work (≥ threshold tool calls).
+    # None for bot-spawned sessions (no user to ping).
+    requester_id: int | None = None
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

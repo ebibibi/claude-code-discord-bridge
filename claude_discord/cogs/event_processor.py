@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from pathlib import Path
 
 from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent
 from ..discord_ui.chunker import chunk_message
@@ -28,6 +29,7 @@ from ..discord_ui.embeds import (
     tool_result_preview_embed,
     tool_use_embed,
 )
+from ..discord_ui.file_sender import send_files
 from ..discord_ui.permission_view import PermissionView
 from ..discord_ui.plan_view import PlanApprovalView
 from ..discord_ui.streaming_manager import StreamingMessageManager
@@ -36,12 +38,43 @@ from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
 
+# Marker file written by Claude when the user asks to receive specific files.
+_ATTACHMENT_MARKER = ".ccdb-attachments"
+
+
+async def _send_attachment_requests(
+    thread: object,
+    working_dir: str | None,
+) -> None:
+    """Read .ccdb-attachments and send listed files to Discord.
+
+    If the marker file does not exist or is empty, this is a no-op.
+    The marker file is deleted after sending so it does not persist into
+    future sessions.  Any error (missing file, Discord API failure, etc.)
+    is suppressed — file attachment is non-fatal.
+    """
+    if not working_dir:
+        return
+    marker = Path(working_dir) / _ATTACHMENT_MARKER
+    if not marker.exists():
+        return
+    with contextlib.suppress(OSError):
+        paths = [p.strip() for p in marker.read_text(encoding="utf-8").splitlines() if p.strip()]
+        marker.unlink(missing_ok=True)
+        if paths:
+            await send_files(thread, paths, working_dir)  # type: ignore[arg-type]
+
+
 # Max characters for tool result display.
 # Sized to show ~30 lines of typical output (100 chars/line × 30 = 3000).
 # The embed description limit is 4096, so this leaves room for code block markers.
 _TOOL_RESULT_MAX_CHARS = 3000
-# Lines of output shown before the "展開 ▼" button appears.
-_COLLAPSED_LINES = 3
+# Lines of output shown inline before the "展開 ▼" button appears.
+# 1 means single-line results are shown flat; 2+ lines get a collapse button.
+_COLLAPSED_LINES = 1
+# Minimum tool calls in a session before the requester is mentioned on completion.
+# Sessions with fewer tool calls are considered simple Q&A — no ping needed.
+_MENTION_TOOL_THRESHOLD = 3
 
 
 def _truncate_result(content: str) -> str:
@@ -230,9 +263,12 @@ class EventProcessor:
 
         # Update the tool embed with result content.
         tool_msg = self._state.active_tools.get(event.tool_result_id)
-        if tool_msg and event.tool_result_content:
+        if tool_msg is None:
+            return
+
+        title = tool_msg.embeds[0].title or ""
+        if event.tool_result_content:
             truncated = _truncate_result(event.tool_result_content)
-            title = tool_msg.embeds[0].title or ""
             if len(truncated.split("\n")) > _COLLAPSED_LINES:
                 from ..discord_ui.views import ToolResultView
 
@@ -243,6 +279,10 @@ class EventProcessor:
             else:
                 with contextlib.suppress(Exception):
                     await tool_msg.edit(embed=tool_result_embed(title, truncated))
+        else:
+            # Tool completed with no output — remove the in-progress indicator.
+            with contextlib.suppress(Exception):
+                await tool_msg.edit(embed=tool_result_embed(title, ""))
 
     async def _on_progress(self, event: StreamEvent) -> None:
         """Handle PROGRESS events — reset stall timer (compact in progress)."""
@@ -273,6 +313,12 @@ class EventProcessor:
                 for chunk in chunk_message(response_text):
                     await self._config.thread.send(chunk)
 
+            # Send files listed in the .ccdb-attachments marker file, if present.
+            await _send_attachment_requests(
+                self._config.thread,
+                self._config.runner.working_dir,
+            )
+
             await self._config.thread.send(
                 embed=session_complete_embed(
                     event.cost_usd,
@@ -286,6 +332,14 @@ class EventProcessor:
             )
             if self._config.status:
                 await self._config.status.set_done()
+
+            # Mention the requester when significant work (≥ threshold tool calls) was done.
+            if (
+                self._config.requester_id is not None
+                and self._state.tool_use_count >= _MENTION_TOOL_THRESHOLD
+            ):
+                with contextlib.suppress(Exception):
+                    await self._config.thread.send(f"<@{self._config.requester_id}>")
 
         if event.session_id:
             if self._config.repo:
@@ -334,6 +388,8 @@ class EventProcessor:
             await self._streamer.finalize()
             self._streamer = StreamingMessageManager(self._config.thread)
         self._state.partial_text = ""
+
+        self._state.tool_use_count += 1
 
         if self._config.status:
             await self._config.status.set_tool(event.tool_use.category)

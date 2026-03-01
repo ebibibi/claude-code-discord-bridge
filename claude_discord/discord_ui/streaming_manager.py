@@ -48,8 +48,11 @@ class StreamingMessageManager:
 
         self._buffer += text
 
-        # If buffer exceeds limit, finalize current message and start new one
-        if len(self._buffer) > STREAM_MAX_CHARS and self._current_message:
+        # Drain overflow: finalize completed streaming messages until buffer fits.
+        # Use a while loop (not if) to handle multi-overflow (e.g. a single 5000-char
+        # chunk), and drop the `and self._current_message` guard so the first message
+        # is also split correctly when a large chunk arrives before any message exists.
+        while len(self._buffer) > STREAM_MAX_CHARS:
             await self._flush()
             self._current_message = None
             self._buffer = self._buffer[STREAM_MAX_CHARS:]
@@ -78,13 +81,18 @@ class StreamingMessageManager:
             await self._flush()
 
     async def _flush(self) -> None:
-        """Send or edit the current message with buffer contents."""
+        """Send or edit the current message with buffer contents.
+
+        The buffer is always kept ≤ STREAM_MAX_CHARS (1900) by append(), so
+        it fits well within Discord's 2000-char limit.  The [:STREAM_MAX_CHARS]
+        slice is a defense-in-depth guard — it should never actually trim anything
+        in normal operation, but prevents a Discord API error if called directly
+        with an oversized buffer.
+        """
         if not self._buffer:
             return
 
-        display_text = self._buffer
-        if len(display_text) > 2000:
-            display_text = display_text[:1997] + "..."
+        display_text = self._buffer[:STREAM_MAX_CHARS]
 
         try:
             if self._current_message is None:
