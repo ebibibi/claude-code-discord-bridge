@@ -29,7 +29,7 @@ class StreamingMessageManager:
     When text exceeds Discord's limit, starts a new message.
     """
 
-    def __init__(self, thread: discord.Thread) -> None:
+    def __init__(self, thread: discord.Thread | discord.TextChannel) -> None:
         self._thread = thread
         self._current_message: discord.Message | None = None
         self._buffer: str = ""
