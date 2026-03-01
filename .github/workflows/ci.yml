@@ -45,3 +45,29 @@ jobs:
 
       - name: Test
         run: uv run pytest tests/ -v --cov=claude_discord --cov-report=term-missing
+
+  notify-failure:
+    needs: [test]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post CI failure to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          REF="${{ github.ref_name }}"
+          EVENT="${{ github.event_name }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          COMMIT="${{ github.sha }}"
+          SHORT_SHA="${COMMIT:0:7}"
+
+          if [ "$EVENT" = "pull_request" ]; then
+            CONTEXT="PR #${{ github.event.pull_request.number }} \`${{ github.event.pull_request.title }}\`"
+          else
+            CONTEXT="push to \`${REF}\` (\`${SHORT_SHA}\`)"
+          fi
+
+          curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\": \"❌ **CI failed** — ${CONTEXT}\n${RUN_URL}\"}" \
+            "$DISCORD_WEBHOOK_URL"
