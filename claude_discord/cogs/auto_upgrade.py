@@ -72,7 +72,7 @@ class UpgradeApprovalView(discord.ui.View):
                 child.label = label
                 break
 
-    def set_message(self, message: discord.Message) -> None:
+    def set_message(self, message: discord.Message | None) -> None:
         """Store the message this view is attached to for use by bump()."""
         self._message = message
 

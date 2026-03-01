@@ -47,7 +47,7 @@ class StopView(discord.ui.View):
         """
         self._runner = runner
 
-    async def bump(self, thread: discord.Thread) -> None:
+    async def bump(self, thread: discord.Thread | discord.TextChannel) -> None:
         """Re-post the Stop button as the latest message in the thread.
 
         Deletes the old stop message and sends a new one at the bottom so the

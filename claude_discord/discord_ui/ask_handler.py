@@ -29,7 +29,7 @@ ASK_ANSWER_TIMEOUT = 86_400  # 24 h
 
 
 async def collect_ask_answers(
-    thread: discord.Thread,
+    thread: discord.Thread | discord.TextChannel,
     questions: list[AskQuestion],
     session_id: str,
     ask_repo: PendingAskRepository | None = None,

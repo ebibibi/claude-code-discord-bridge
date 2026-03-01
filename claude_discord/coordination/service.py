@@ -44,7 +44,7 @@ class CoordinationService:
             logger.warning("Coordination channel %d not found in bot cache", self._channel_id)
         return channel  # type: ignore[return-value]
 
-    async def post_session_end(self, thread: discord.Thread) -> None:
+    async def post_session_end(self, thread: discord.Thread | discord.TextChannel) -> None:
         """Post a session-ended notice to the coordination channel."""
         channel = self._get_channel()
         if channel is None:

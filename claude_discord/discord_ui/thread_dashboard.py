@@ -107,7 +107,7 @@ class ThreadStatusDashboard:
         thread_id: int,
         state: ThreadState,
         description: str,
-        thread: discord.Thread | None = None,
+        thread: discord.Thread | discord.TextChannel | None = None,
     ) -> None:
         """Update a thread's state and refresh the dashboard embed.
 
