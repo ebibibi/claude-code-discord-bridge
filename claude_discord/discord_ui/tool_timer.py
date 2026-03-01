@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 
 # How often to update in-progress tool embeds with elapsed time (seconds).
 # Gives users visibility into long-running commands (builds, auth flows, etc.).
-TOOL_TIMER_INTERVAL = 10
+# Discord rate limit is 5 edits/5s per channel; 5s interval stays well within it.
+TOOL_TIMER_INTERVAL = 5
 
 
 class LiveToolTimer:
@@ -31,7 +32,7 @@ class LiveToolTimer:
     the timer fires zero times, so there is no overhead for fast tools.
 
     This provides basic visibility into long-running operations — the user can
-    see "🔧 Running: az login... (10s)" ticking up rather than a frozen embed.
+    see "🔧 Running: az login... (5s)" ticking up rather than a frozen embed.
     Note: intermediate stdout from Bash is not exposed by the stream-json
     protocol, so only elapsed time (not actual output) is available here.
     """
@@ -47,6 +48,11 @@ class LiveToolTimer:
 
     async def _loop(self) -> None:
         try:
+            # Show 0s immediately so the user sees the timer as soon as the tool starts.
+            with contextlib.suppress(discord.HTTPException):
+                await self._msg.edit(
+                    embed=tool_use_embed(self._tool, in_progress=True, elapsed_s=0)
+                )
             while True:
                 await asyncio.sleep(TOOL_TIMER_INTERVAL)
                 elapsed = int(time.monotonic() - self._start)
