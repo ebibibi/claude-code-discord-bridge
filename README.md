@@ -370,6 +370,28 @@ MENTION_ONLY_CHANNEL_IDS=222,333
 
 Thread replies are not affected — once a session thread is open, all replies are handled normally regardless of mentions.
 
+#### Inline-Reply Channels
+
+To make the bot respond **directly in the channel** (without creating a thread) for specific channels (useful for personal command channels where threads add unnecessary clutter):
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_ids={111, 333},
+    inline_reply_channel_ids={333},  # bot replies inline in #333, no thread created
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+Or via environment variable (comma-separated channel IDs):
+
+```
+INLINE_REPLY_CHANNEL_IDS=333,444
+```
+
+In inline-reply mode, Claude's response is sent directly as a message in the channel rather than spawning a new thread. Sessions are still tracked internally, so follow-up messages in the channel continue the same Claude session.
+
 ---
 
 ## Configuration
@@ -387,6 +409,8 @@ Thread replies are not affected — once a session thread is open, all replies a
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
 | `COORDINATION_CHANNEL_ID` | Channel ID for cross-session event broadcasts | (optional) |
 | `CCDB_COORDINATION_CHANNEL_NAME` | Auto-create coordination channel by name | (optional) |
+| `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot only responds when @mentioned | (optional) |
+| `INLINE_REPLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot replies inline (no thread created) | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
 
 ---

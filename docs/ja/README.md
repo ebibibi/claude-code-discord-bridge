@@ -305,6 +305,28 @@ MENTION_ONLY_CHANNEL_IDS=222,333
 
 スレッド内の返信はメンションチェックの対象外です。セッションスレッドが開かれた後は、メンションの有無に関わらず通常通り応答します。
 
+#### インライン返信チャンネル
+
+特定のチャンネルで**スレッドを作らずにチャンネル内に直接返信**させることができます（個人コマンドチャンネルなど、スレッドが煩わしい場合に便利）:
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_ids={111, 333},
+    inline_reply_channel_ids={333},  # #333 ではスレッドを作らずインライン返信
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+環境変数でも設定可能（カンマ区切りのチャンネル ID）:
+
+```
+INLINE_REPLY_CHANNEL_IDS=333,444
+```
+
+インライン返信モードでは、Claude の返信は新しいスレッドではなくチャンネル内のメッセージとして直接送信されます。セッションは内部で追跡されているため、その後のメッセージも同じ Claude セッションとして継続します。
+
 ---
 
 ## 設定
@@ -322,6 +344,8 @@ MENTION_ONLY_CHANNEL_IDS=222,333
 | `DISCORD_OWNER_ID` | Claude が入力待ちのとき @mention する Discord ユーザー ID | （オプション） |
 | `COORDINATION_CHANNEL_ID` | セッション間イベントブロードキャスト用チャンネル ID | （オプション） |
 | `CCDB_COORDINATION_CHANNEL_NAME` | 協調チャンネルを名前で自動作成 | （オプション） |
+| `MENTION_ONLY_CHANNEL_IDS` | @メンション時のみ応答するチャンネル ID（カンマ区切り） | （オプション） |
+| `INLINE_REPLY_CHANNEL_IDS` | インライン返信チャンネル ID（カンマ区切り、スレッドを作成しない） | （オプション） |
 | `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
 
 ---
