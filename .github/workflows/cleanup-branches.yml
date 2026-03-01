@@ -1,0 +1,46 @@
+name: Cleanup merged branches
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'  # 毎週日曜3:00 UTC
+  workflow_dispatch:       # 手動実行も可能
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete merged remote branches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # main にマージ済みのリモートブランチを一括削除
+          # 保護ブランチ (main, master, develop, release/*) は除外
+          PROTECTED="^(main|master|develop|release/)$"
+
+          git fetch --prune origin
+
+          DELETED=0
+          for branch in $(git branch -r --merged origin/main \
+                          | grep 'origin/' \
+                          | sed 's|origin/||' \
+                          | grep -vE "$PROTECTED"); do
+            echo "Deleting merged branch: $branch"
+            gh api repos/${{ github.repository }}/git/refs/heads/$branch \
+              --method DELETE && DELETED=$((DELETED + 1))
+          done
+
+          echo "Deleted $DELETED merged branch(es)."
+
+          if [ "$DELETED" -gt 0 ]; then
+            curl -s -o /dev/null -w "%{http_code}" \
+              -H "Content-Type: application/json" \
+              -d "{\"content\": \"🧹 **Branch cleanup** — ${DELETED} merged branch(es) deleted.\"}" \
+              "${{ secrets.DISCORD_WEBHOOK_URL }}"
+          fi
