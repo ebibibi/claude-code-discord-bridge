@@ -1010,7 +1010,8 @@ class TestLiveToolTimer:
 
     @pytest.mark.asyncio
     async def test_timer_cancelled_stops_updates(self) -> None:
-        """After cancellation, no further edits should occur."""
+        """After cancellation before the first interval tick, only the immediate
+        0s edit (posted on start) should have been called — no further tick edits."""
         import claude_discord.discord_ui.tool_timer as tt
 
         msg = self._make_msg()
@@ -1027,7 +1028,9 @@ class TestLiveToolTimer:
         finally:
             tt.TOOL_TIMER_INTERVAL = original_interval
 
-        msg.edit.assert_not_called()
+        # The timer now shows 0s elapsed immediately on start (one edit),
+        # then stops — so exactly 1 edit call is expected, not 0.
+        assert msg.edit.call_count == 1
 
     @pytest.mark.asyncio
     async def test_run_claude_cancels_timer_on_tool_result(self) -> None:
