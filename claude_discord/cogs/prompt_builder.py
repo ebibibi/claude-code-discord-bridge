@@ -76,9 +76,11 @@ _IMAGE_EXTENSIONS: frozenset[str] = frozenset(
         ".svg",
     }
 )
-MAX_ATTACHMENT_BYTES = 50_000  # 50 KB per file
+MAX_ATTACHMENT_BYTES = (
+    200_000  # 200 KB per file — Discord auto-converted messages can exceed 100 KB
+)
 MAX_IMAGE_BYTES = 5_000_000  # 5 MB per image
-MAX_TOTAL_BYTES = 100_000  # 100 KB across all text attachments
+MAX_TOTAL_BYTES = 500_000  # 500 KB across all text attachments
 MAX_ATTACHMENTS = 5
 MAX_IMAGES = 4  # Claude supports up to 4 images per prompt
 
@@ -164,13 +166,6 @@ async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[s
             continue
 
         # ---- Text attachments → inline in prompt ----
-        if attachment.size > MAX_ATTACHMENT_BYTES:
-            logger.debug(
-                "Skipping attachment %s: too large (%d bytes)",
-                attachment.filename,
-                attachment.size,
-            )
-            continue
         if not content_type.startswith(ALLOWED_MIME_PREFIXES):
             logger.debug(
                 "Skipping attachment %s: unsupported type %s",
@@ -178,13 +173,26 @@ async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[s
                 content_type,
             )
             continue
-        total_bytes += attachment.size
+        total_bytes += min(attachment.size, MAX_ATTACHMENT_BYTES)
         if total_bytes > MAX_TOTAL_BYTES:
             logger.debug("Stopping attachment processing: total size exceeded")
             break
         try:
             data = await attachment.read()
             text = data.decode("utf-8", errors="replace")
+            if len(text) > MAX_ATTACHMENT_BYTES:
+                truncated_chars = MAX_ATTACHMENT_BYTES
+                notice = (
+                    f"\n... [truncated: showing first {truncated_chars // 1000}KB"
+                    f" of {len(text) // 1000}KB]"
+                )
+                text = text[:truncated_chars] + notice
+                logger.debug(
+                    "Truncated attachment %s from %d to %d chars",
+                    attachment.filename,
+                    len(data),
+                    truncated_chars,
+                )
             sections.append(f"\n\n--- Attached file: {attachment.filename} ---\n{text}")
         except Exception:
             logger.debug("Failed to read attachment %s", attachment.filename, exc_info=True)
