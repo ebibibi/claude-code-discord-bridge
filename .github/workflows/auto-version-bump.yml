@@ -83,9 +83,11 @@ jobs:
           echo "Committed version bump to main"
 
       - name: Create tag and GitHub Release
+        # Uses ADMIN_PAT so the release event triggers docs-translate.yml.
+        # GITHUB_TOKEN-created releases do NOT fire on.release events (GitHub anti-recursion).
         if: steps.mode.outputs.mode == 'release'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ADMIN_PAT }}
           RELEASE_TAG: ${{ steps.read.outputs.release_tag }}
         run: |
           TAG_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/refs/heads/main" --jq '.object.sha')
