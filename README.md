@@ -159,7 +159,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
 
 #### 🔌 Input & Skills
-- **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images sent as Discord CDN URLs via `--input-format stream-json` (up to 4 × 5 MB)
+- **Attachment support** — Text files auto-appended to prompt (up to 5 × 50 KB); images sent as Discord CDN URLs via `--input-format stream-json` (up to 4 × 5 MB); long pasted messages that Discord auto-converts to file attachments (without `content_type`) are handled via extension-based detection
 - **On-demand file delivery** — Ask Claude to "send me" or "attach" a file and it writes the path to `.ccdb-attachments`; the bot reads it and delivers the file as a Discord attachment when the session completes
 - **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume
 - **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
