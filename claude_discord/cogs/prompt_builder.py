@@ -8,6 +8,7 @@ Cog or Bot state.
 from __future__ import annotations
 
 import logging
+import os.path
 
 import discord
 
@@ -20,6 +21,61 @@ ALLOWED_MIME_PREFIXES = (
     "application/xml",
 )
 IMAGE_MIME_PREFIXES = ("image/",)
+
+# File extensions treated as text when content_type is absent.
+# Discord converts long pasted text to "message.txt" without a content_type.
+_TEXT_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".txt",
+        ".md",
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".csv",
+        ".log",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".html",
+        ".css",
+        ".xml",
+        ".rst",
+        ".sql",
+        ".graphql",
+        ".tf",
+        ".go",
+        ".rs",
+        ".java",
+        ".c",
+        ".cpp",
+        ".h",
+        ".cs",
+        ".rb",
+        ".php",
+    }
+)
+
+# Image file extensions used as fallback when content_type is absent.
+_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".svg",
+    }
+)
 MAX_ATTACHMENT_BYTES = 50_000  # 50 KB per file
 MAX_IMAGE_BYTES = 5_000_000  # 5 MB per image
 MAX_TOTAL_BYTES = 100_000  # 100 KB across all text attachments
@@ -81,6 +137,15 @@ async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[s
 
     for attachment in message.attachments[:MAX_ATTACHMENTS]:
         content_type = attachment.content_type or ""
+
+        # When Discord auto-converts a long pasted message to a file, the
+        # content_type may be absent.  Fall back to extension-based detection.
+        if not content_type:
+            ext = os.path.splitext(attachment.filename.lower())[1]
+            if ext in _IMAGE_EXTENSIONS:
+                content_type = "image/png"  # triggers CDN URL path below
+            elif ext in _TEXT_EXTENSIONS:
+                content_type = "text/plain"
 
         # ---- Image attachments → collect CDN URL for stream-json input ----
         if content_type.startswith(IMAGE_MIME_PREFIXES):
