@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-03-02
+
+### Added
+- **Custom Cog loader** — load external Cog files from any directory via `CUSTOM_COGS_DIR` env or `--cogs-dir` CLI flag; each `.py` file exposes `async def setup(bot, runner, components)`; fault-isolated (one Cog failure doesn't block others) (#220)
+- **EbiBot example** (`examples/ebibot/`) — real-world reference implementation with 4 self-contained custom Cogs: ReminderCog, WatchdogCog, AutoUpgradeCog, DocsSyncCog (#220)
+- **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` env var** — skip all CLI permission checks without code changes; recommended for ccdb deployments where access is already gated via `allowed_user_ids` (#215)
+- **Permission Modes documentation** — README section explaining how `-p` mode interacts with permission modes and why `DANGEROUSLY_SKIP_PERMISSIONS` is the practical choice for ccdb (#218, #219)
+- **systemd service file** — production-ready `discord-bot.service` and `scripts/pre-start.sh` for deploying ccdb as a systemd service with auto-update on restart
+
+### Changed
+- **`main.py` rewritten** — now uses `setup_bridge()` for full Cog auto-setup instead of manual registration; supports all env vars including `CUSTOM_COGS_DIR`, `CLAUDE_CHANNEL_IDS`, `API_HOST`, `API_PORT`, `CLAUDE_ALLOWED_TOOLS`
+- **`cli.py` updated** — `ccdb start` accepts `--cogs-dir` argument
+
+### Fixed
+- **Silent exception suppression** — replaced `contextlib.suppress(Exception)` with proper logging + narrowed exception types so errors are visible in logs (#216)
+
 ## [1.7.5] - 2026-03-02
 
 ### Added
@@ -203,7 +219,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI pipeline: Python 3.10/3.11/3.12, ruff, pytest
 - Branch protection and PR workflow
 
-[Unreleased]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.7.5...v1.8.0
+[1.7.5]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.6.0...v1.7.5
+[1.6.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/ebibibi/claude-code-discord-bridge/compare/v1.3.0...v1.4.0
