@@ -260,6 +260,23 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CCDB_COORDINATION_CHANNEL_NAME` | 이름으로 조율 채널 자동 생성 | (선택) |
 | `WORKTREE_BASE_DIR` | 세션 worktree 스캔 기본 디렉토리 (자동 정리 활성화) | (선택) |
 
+### 권한 모드 — `-p` 모드에서 작동하는 기능
+
+ccdb를 통해 사용할 때 Claude Code CLI는 **`-p`(비대화형) 모드**로 실행됩니다. 이 모드에서 CLI는 **권한 확인을 요청할 수 없으며** — 승인이 필요한 도구는 즉시 거부됩니다. 이는 ccdb의 제한이 아니라 [CLI의 설계 제약](https://code.claude.com/docs/en/headless)입니다.
+
+| 모드 | `-p` 모드에서의 동작 | 권장 |
+|------|----------------------|----------------|
+| `default` | ❌ **모든 도구 거부** — 사용 불가 | 사용하지 않음 |
+| `acceptEdits` | ⚠️ Edit/Write 자동 승인, Bash 거부 (Claude가 파일 작업에 Write로 폴백) | 최소 동작 옵션 |
+| `bypassPermissions` | ✅ 모든 도구 승인 | 작동하나, 아래 플래그 권장 |
+| **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`** | ✅ **모든 도구 승인** | **권장** — ccdb가 이미 `allowed_user_ids`로 접근 제한 |
+
+**권장 설정:** `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`를 설정하세요. ccdb가 `allowed_user_ids`를 통해 Claude와의 상호작용을 제어하므로, CLI 수준의 권한 검사는 실질적인 보안 이점 없이 마찰만 추가합니다. 이름의 「dangerously」는 CLI의 범용 경고를 반영한 것이며, 접근이 이미 게이팅된 ccdb 컨텍스트에서는 실용적인 선택입니다.
+
+더 세밀한 제어를 원한다면 `CLAUDE_ALLOWED_TOOLS` 지원이 계획되어 있습니다 ([#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)).
+
+> **Discord에 권한 버튼이 나타나지 않는 이유?** CLI의 `-p` 모드는 `permission_request` 이벤트를 발생시키지 않으므로 ccdb에 표시할 내용이 없습니다. 표시되는 `AskUserQuestion` 버튼(Claude의 선택 프롬프트)은 다른 메커니즘으로 정상 작동합니다. 자세한 조사는 [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210)을 참조하세요.
+
 ---
 
 ## Discord 봇 설정

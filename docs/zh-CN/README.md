@@ -280,6 +280,23 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CCDB_COORDINATION_CHANNEL_NAME` | 按名称自动创建协调频道 | （可选） |
 | `WORKTREE_BASE_DIR` | 扫描会话 worktree 的基础目录（启用自动清理） | （可选） |
 
+### 权限模式 — `-p` 模式下的功能说明
+
+通过 ccdb 使用时，Claude Code CLI 以 **`-p`（非交互式）模式** 运行。在此模式下，CLI **无法请求权限确认** — 需要审批的工具会被立即拒绝。这是 [CLI 的设计约束](https://code.claude.com/docs/en/headless)，而非 ccdb 的限制。
+
+| 模式 | `-p` 模式下的行为 | 推荐 |
+|------|----------------------|----------------|
+| `default` | ❌ **所有工具被拒绝** — 无法使用 | 不要使用 |
+| `acceptEdits` | ⚠️ Edit/Write 自动批准，Bash 被拒绝（Claude 回退到 Write 进行文件操作） | 最低可用选项 |
+| `bypassPermissions` | ✅ 所有工具均被批准 | 可用，但建议使用下方的环境变量 |
+| **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`** | ✅ **所有工具均被批准** | **推荐** — ccdb 已通过 `allowed_user_ids` 限制访问 |
+
+**我们的推荐：** 设置 `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`。由于 ccdb 通过 `allowed_user_ids` 控制与 Claude 的交互，CLI 级别的权限检查只会增加摩擦而没有实质性的安全收益。名称中的「dangerously」体现了 CLI 的通用警告；在 ccdb 已限制访问的上下文中，这是实际可行的选择。
+
+如需精细控制，`CLAUDE_ALLOWED_TOOLS` 的支持已在计划中（[#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)）。
+
+> **为什么 Discord 中不显示权限按钮？** CLI 的 `-p` 模式不会发出 `permission_request` 事件，因此 ccdb 无内容可显示。您看到的 `AskUserQuestion` 按钮（Claude 的选择提示）是不同的机制，可以正常工作。详细调查请参阅 [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210)。
+
 ---
 
 ## Discord Bot 设置

@@ -260,6 +260,23 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CCDB_COORDINATION_CHANNEL_NAME` | Criar automaticamente canal de coordenação por nome | (opcional) |
 | `WORKTREE_BASE_DIR` | Diretório base para escanear worktrees de sessão (ativa limpeza automática) | (opcional) |
 
+### Modos de Permissão — O Que Funciona no Modo `-p`
+
+O Claude Code CLI é executado em **modo `-p` (não-interativo)** quando usado através do ccdb. Neste modo, o CLI **não pode solicitar permissões** — ferramentas que requerem aprovação são rejeitadas imediatamente. Esta é uma [restrição de design do CLI](https://code.claude.com/docs/en/headless), não uma limitação do ccdb.
+
+| Modo | Comportamento no modo `-p` | Recomendação |
+|------|----------------------|----------------|
+| `default` | ❌ **Todas as ferramentas rejeitadas** — inutilizável | Não usar |
+| `acceptEdits` | ⚠️ Edit/Write aprovados automaticamente, Bash rejeitado (Claude usa Write para operações de arquivo) | Opção mínima viável |
+| `bypassPermissions` | ✅ Todas as ferramentas aprovadas | Funciona, mas prefira a opção abaixo |
+| **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`** | ✅ **Todas as ferramentas aprovadas** | **Recomendado** — ccdb já restringe o acesso via `allowed_user_ids` |
+
+**Nossa recomendação:** Configure `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`. Como o ccdb controla quem pode interagir com o Claude via `allowed_user_ids`, as verificações de permissão no nível do CLI adicionam fricção sem benefício real de segurança. O «dangerously» no nome reflete o aviso geral do CLI; no contexto do ccdb onde o acesso já é controlado, é a escolha prática.
+
+Se preferir controle granular, o suporte a `CLAUDE_ALLOWED_TOOLS` está planejado ([#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)).
+
+> **Por que os botões de permissão não aparecem no Discord?** O modo `-p` do CLI nunca emite eventos `permission_request`, então não há nada para o ccdb exibir. Os botões `AskUserQuestion` que você vê (prompts de seleção do Claude) são um mecanismo diferente que funciona corretamente. Veja [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) para a investigação completa.
+
 ---
 
 ## Configuração do Bot Discord

@@ -260,6 +260,23 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CCDB_COORDINATION_CHANNEL_NAME` | Créer automatiquement un canal de coordination par nom | (optionnel) |
 | `WORKTREE_BASE_DIR` | Répertoire de base pour scanner les worktrees de session (active le nettoyage automatique) | (optionnel) |
 
+### Modes d'autorisation — Ce qui fonctionne en mode `-p`
+
+Le CLI Claude Code s'exécute en **mode `-p` (non interactif)** lorsqu'il est utilisé via ccdb. Dans ce mode, le CLI **ne peut pas demander d'autorisation** — les outils nécessitant une approbation sont immédiatement rejetés. Il s'agit d'une [contrainte de conception du CLI](https://code.claude.com/docs/en/headless), pas d'une limitation de ccdb.
+
+| Mode | Comportement en mode `-p` | Recommandation |
+|------|----------------------|----------------|
+| `default` | ❌ **Tous les outils rejetés** — inutilisable | Ne pas utiliser |
+| `acceptEdits` | ⚠️ Edit/Write approuvés automatiquement, Bash rejeté (Claude utilise Write pour les opérations sur fichiers) | Option minimale viable |
+| `bypassPermissions` | ✅ Tous les outils approuvés | Fonctionne, mais préférer l'option ci-dessous |
+| **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`** | ✅ **Tous les outils approuvés** | **Recommandé** — ccdb restreint déjà l'accès via `allowed_user_ids` |
+
+**Notre recommandation :** Définissez `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`. Puisque ccdb contrôle qui peut interagir avec Claude via `allowed_user_ids`, les vérifications d'autorisation au niveau du CLI ajoutent des frictions sans bénéfice sécuritaire réel. Le «dangerously» dans le nom reflète l'avertissement général du CLI ; dans le contexte de ccdb où l'accès est déjà contrôlé, c'est le choix pratique.
+
+Si vous préférez un contrôle plus fin, le support de `CLAUDE_ALLOWED_TOOLS` est prévu ([#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)).
+
+> **Pourquoi les boutons d'autorisation n'apparaissent-ils pas dans Discord ?** Le mode `-p` du CLI n'émet jamais d'événements `permission_request`, donc il n'y a rien à afficher pour ccdb. Les boutons `AskUserQuestion` que vous voyez (invites de sélection de Claude) sont un mécanisme différent qui fonctionne correctement. Voir [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) pour l'investigation complète.
+
 ---
 
 ## Configuration du Bot Discord

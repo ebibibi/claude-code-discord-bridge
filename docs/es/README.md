@@ -260,6 +260,23 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CCDB_COORDINATION_CHANNEL_NAME` | Crear automáticamente canal de coordinación por nombre | (opcional) |
 | `WORKTREE_BASE_DIR` | Directorio base para escanear worktrees de sesión (activa limpieza automática) | (opcional) |
 
+### Modos de Permiso — Qué Funciona en el Modo `-p`
+
+Claude Code CLI se ejecuta en **modo `-p` (no interactivo)** cuando se usa a través de ccdb. En este modo, el CLI **no puede solicitar permisos** — las herramientas que requieren aprobación son rechazadas de inmediato. Esta es una [restricción de diseño del CLI](https://code.claude.com/docs/en/headless), no una limitación de ccdb.
+
+| Modo | Comportamiento en modo `-p` | Recomendación |
+|------|----------------------|----------------|
+| `default` | ❌ **Todas las herramientas rechazadas** — inutilizable | No usar |
+| `acceptEdits` | ⚠️ Edit/Write aprobados automáticamente, Bash rechazado (Claude usa Write para operaciones de archivo) | Opción mínima viable |
+| `bypassPermissions` | ✅ Todas las herramientas aprobadas | Funciona, pero preferir la opción abajo |
+| **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`** | ✅ **Todas las herramientas aprobadas** | **Recomendado** — ccdb ya restringe el acceso con `allowed_user_ids` |
+
+**Nuestra recomendación:** Configura `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`. Como ccdb controla quién puede interactuar con Claude mediante `allowed_user_ids`, las verificaciones de permisos a nivel del CLI añaden fricción sin beneficio de seguridad real. El «dangerously» en el nombre refleja la advertencia general del CLI; en el contexto de ccdb donde el acceso ya está restringido, es la elección práctica.
+
+Si prefieres control granular, el soporte de `CLAUDE_ALLOWED_TOOLS` está planificado ([#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)).
+
+> **¿Por qué no aparecen botones de permisos en Discord?** El modo `-p` del CLI nunca emite eventos `permission_request`, por lo que no hay nada que ccdb pueda mostrar. Los botones `AskUserQuestion` que ves (prompts de selección de Claude) son un mecanismo diferente que funciona correctamente. Consulta [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) para la investigación completa.
+
 ---
 
 ## Configuración del Bot de Discord
