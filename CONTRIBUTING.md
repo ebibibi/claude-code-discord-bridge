@@ -94,8 +94,8 @@ uv run ruff format claude_discord/
 
 This project uses automatic versioning — **you never need to manually bump the version** for regular contributions.
 
-- **Automatic patch bump**: Every PR merged to `main` triggers an automatic patch version increment (e.g., `1.3.0` → `1.3.1`) and creates a GitHub Release.
-- **Manual minor/major release**: To cut a minor or major release (e.g., `1.4.0`), update `pyproject.toml` and `CHANGELOG.md` manually, then include `[release]` in your PR title. This tags the current version as-is without bumping the patch.
+- **Automatic patch bump**: Every PR merged to `main` triggers an automatic patch version increment (e.g., `1.3.0` → `1.3.1`). No release tag is created — the version is committed directly to `main`.
+- **Manual minor/major release**: To cut a minor or major release (e.g., `1.4.0`), update `pyproject.toml` and `CHANGELOG.md` manually, then include `[release]` in your PR title. This tags and publishes the current version as a GitHub Release without bumping the patch.
 
 ## Adding a New Cog
 
