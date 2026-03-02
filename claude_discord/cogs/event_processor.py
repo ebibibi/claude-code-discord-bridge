@@ -14,6 +14,8 @@ import contextlib
 import logging
 from pathlib import Path
 
+import discord
+
 from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent
 from ..discord_ui.chunker import chunk_message
 from ..discord_ui.elicitation_view import ElicitationFormView, ElicitationUrlView
@@ -192,7 +194,7 @@ class EventProcessor:
             label = f"\U0001f5dc\ufe0f Context compacted ({trigger})"
             if pre:
                 label += f" \u2014 was {pre:,} tokens"
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(discord.HTTPException):
                 await self._config.thread.send(f"-# {label}")
 
         # Permission request — show Allow/Deny buttons
@@ -274,15 +276,21 @@ class EventProcessor:
 
                 embed = tool_result_preview_embed(title, truncated)
                 view = ToolResultView(title, truncated)
-                with contextlib.suppress(Exception):
+                try:
                     await tool_msg.edit(embed=embed, view=view)
+                except Exception:
+                    logger.warning("Failed to update tool result embed", exc_info=True)
             else:
-                with contextlib.suppress(Exception):
+                try:
                     await tool_msg.edit(embed=tool_result_embed(title, truncated))
+                except Exception:
+                    logger.warning("Failed to update tool result embed", exc_info=True)
         else:
             # Tool completed with no output — remove the in-progress indicator.
-            with contextlib.suppress(Exception):
+            try:
                 await tool_msg.edit(embed=tool_result_embed(title, ""))
+            except Exception:
+                logger.warning("Failed to clear tool in-progress indicator", exc_info=True)
 
     async def _on_progress(self, event: StreamEvent) -> None:
         """Handle PROGRESS events — reset stall timer (compact in progress)."""
@@ -338,7 +346,7 @@ class EventProcessor:
                 self._config.requester_id is not None
                 and self._state.tool_use_count >= _MENTION_TOOL_THRESHOLD
             ):
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(discord.HTTPException):
                     await self._config.thread.send(f"<@{self._config.requester_id}>")
 
         if event.session_id:
@@ -415,8 +423,7 @@ class EventProcessor:
         # we use the session_id as a stable identifier for the inject payload.
         request_id = self._state.session_id or "plan"
         view = PlanApprovalView(self._config.runner, request_id)
-        with contextlib.suppress(Exception):
-            await self._config.thread.send(embed=embed, view=view)
+        await self._config.thread.send(embed=embed, view=view)
         logger.info("Plan approval prompt posted (session=%s)", request_id)
 
     async def _handle_permission_request(self, event: StreamEvent) -> None:
@@ -424,8 +431,7 @@ class EventProcessor:
         assert event.permission_request is not None
         embed = permission_embed(event.permission_request)
         view = PermissionView(self._config.runner, event.permission_request)
-        with contextlib.suppress(Exception):
-            await self._config.thread.send(embed=embed, view=view)
+        await self._config.thread.send(embed=embed, view=view)
         logger.info(
             "Permission request posted: %s (request_id=%s)",
             event.permission_request.tool_name,
@@ -441,8 +447,7 @@ class EventProcessor:
             view = ElicitationUrlView(self._config.runner, req)
         else:
             view = ElicitationFormView(self._config.runner, req)
-        with contextlib.suppress(Exception):
-            await self._config.thread.send(embed=embed, view=view)
+        await self._config.thread.send(embed=embed, view=view)
         logger.info(
             "Elicitation posted: %s (%s, request_id=%s)",
             req.server_name,
@@ -462,13 +467,19 @@ class EventProcessor:
 
         # Delete the previous todo message so we can repost at the bottom.
         if self._state.todo_message is not None:
-            with contextlib.suppress(Exception):
+            try:
                 await self._state.todo_message.delete()
+            except Exception:
+                logger.warning("Failed to delete previous todo embed", exc_info=True)
             self._state.todo_message = None
 
         # Post a fresh message at the bottom of the thread.
-        with contextlib.suppress(Exception):
+        try:
             self._state.todo_message = await self._config.thread.send(embed=embed)
+        except Exception:
+            logger.warning(
+                "Failed to post todo embed; will retry on next TodoWrite call", exc_info=True
+            )
 
     async def _bump_stop(self) -> None:
         """Move the Stop button to the bottom of the thread if configured."""
