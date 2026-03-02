@@ -349,6 +349,23 @@ INLINE_REPLY_CHANNEL_IDS=333,444
 | `INLINE_REPLY_CHANNEL_IDS` | インライン返信チャンネル ID（カンマ区切り、スレッドを作成しない） | （オプション） |
 | `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
 
+### パーミッションモード — `-p` モードで動作するもの
+
+ccdb を通じて使用する場合、Claude Code CLI は **`-p`（非インタラクティブ）モード** で動作します。このモードでは、CLI は **権限の確認ができない** ため、承認が必要なツールは即座に拒否されます。これは ccdb の制限ではなく、[CLI の設計上の制約](https://code.claude.com/docs/en/headless)です。
+
+| モード | `-p` モードでの動作 | 推奨 |
+|------|----------------------|----------------|
+| `default` | ❌ **すべてのツールが拒否される** — 使用不可 | 使用しないこと |
+| `acceptEdits` | ⚠️ Edit/Write は自動承認、Bash は拒否（Claude はファイル操作に Write にフォールバック） | 最低限動作するオプション |
+| `bypassPermissions` | ✅ すべてのツールが承認される | 動作するが、以下のフラグを推奨 |
+| **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`** | ✅ **すべてのツールが承認される** | **推奨** — ccdb が `allowed_user_ids` でアクセスを制限済み |
+
+**推奨設定:** `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true` を設定してください。ccdb が `allowed_user_ids` で Claude との対話を制御しているため、CLI レベルのパーミッションチェックは意味のあるセキュリティ上の利点なしに摩擦を生むだけです。名前に含まれる「dangerously（危険）」は CLI の汎用的な警告を反映したものですが、アクセスがすでにゲートされている ccdb の文脈では、実用的な選択肢です。
+
+より細かい制御を好む場合、`CLAUDE_ALLOWED_TOOLS` のサポートが計画されています（[#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)）。
+
+> **Discord にパーミッションボタンが表示されないのはなぜ？** CLI の `-p` モードは `permission_request` イベントを発行しないため、ccdb に表示するものがありません。表示される `AskUserQuestion` ボタン（Claude からの選択プロンプト）は別のメカニズムであり、正常に動作します。詳細な調査は [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) を参照してください。
+
 ---
 
 ## Discord Bot のセットアップ
