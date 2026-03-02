@@ -308,7 +308,6 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `SESSION_TIMEOUT_SECONDS` | 会话非活动超时 | `300` |
 | `DISCORD_OWNER_ID` | Claude 需要输入时 @提及的用户 ID | （可选） |
 | `COORDINATION_CHANNEL_ID` | 跨会话事件广播的频道 ID | （可选） |
-| `CCDB_COORDINATION_CHANNEL_NAME` | 按名称自动创建协调频道 | （可选） |
 | `WORKTREE_BASE_DIR` | 扫描会话 worktree 的基础目录（启用自动清理） | （可选） |
 
 ### 权限模式 — `-p` 模式下的功能说明
@@ -536,14 +535,22 @@ curl -X POST http://localhost:8080/api/tasks \
 
 ```
 claude_discord/
-  main.py                  # 独立入口点
+  main.py                  # 独立入口点（setup_bridge + 自定义 Cog 加载器）
+  cli.py                   # CLI 入口点（ccdb setup/start 命令）
   setup.py                 # setup_bridge() — 一键 Cog 连接
+  cog_loader.py            # 动态自定义 Cog 加载器（CUSTOM_COGS_DIR）
   bot.py                   # Discord Bot 类
+  protocols.py             # 共享协议（DrainAware）
   concurrency.py           # Worktree 指令 + 活跃会话注册表
+  lounge.py                # AI Lounge 提示构建器
+  session_sync.py          # CLI 会话发现和导入
+  worktree.py              # WorktreeManager — 安全 git worktree 生命周期
   cogs/
     claude_chat.py         # 交互式聊天（线程创建，消息处理）
     skill_command.py       # /skill 斜杠命令，含自动补全
     session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_sync.py        # sync-sessions 的线程创建和消息发布逻辑
+    prompt_builder.py      # build_prompt_and_images() — 纯函数，无 Cog/Bot 状态
     scheduler.py           # 定期 Claude Code 任务执行器
     webhook_trigger.py     # Webhook → Claude Code 任务（CI/CD）
     auto_upgrade.py        # Webhook → 包升级 + 感知排空重启
@@ -562,12 +569,15 @@ claude_discord/
     task_repo.py           # 计划任务 CRUD
     ask_repo.py            # 待处理 AskUserQuestion CRUD
     notification_repo.py   # 计划通知 CRUD
+    lounge_repo.py         # AI Lounge 消息 CRUD
     resume_repo.py         # 启动恢复 CRUD（跨 bot 重启的待恢复记录）
     settings_repo.py       # 每公会设置
   discord_ui/
     status.py              # 表情反应管理器（防抖）
     chunker.py             # 感知代码块和表格的消息分割
     embeds.py              # Discord embed 构建器
+    views.py               # 停止按钮和共享 UI 组件
+    ask_bus.py             # AskUserQuestion 通信事件总线
     ask_view.py            # AskUserQuestion 的按钮/下拉菜单
     ask_handler.py         # collect_ask_answers() — AskUserQuestion UI + DB 生命周期
     streaming_manager.py   # StreamingMessageManager — 防抖就地消息编辑
@@ -576,8 +586,7 @@ claude_discord/
     plan_view.py           # Plan Mode 批准/取消按钮（ExitPlanMode）
     permission_view.py     # 工具权限请求允许/拒绝按钮
     elicitation_view.py    # MCP Elicitation 的 Discord UI（Modal 表单或 URL 按钮）
-  session_sync.py          # CLI 会话发现和导入
-  worktree.py              # WorktreeManager — 安全 git worktree 生命周期（会话结束和启动时清理）
+    file_sender.py         # 通过 .ccdb-attachments 传送文件
   ext/
     api_server.py          # REST API（可选，需要 aiohttp）
   utils/

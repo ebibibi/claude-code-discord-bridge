@@ -375,7 +375,6 @@ INLINE_REPLY_CHANNEL_IDS=333,444
 | `SESSION_TIMEOUT_SECONDS` | セッション非アクティブタイムアウト | `300` |
 | `DISCORD_OWNER_ID` | Claude が入力待ちのとき @mention する Discord ユーザー ID | （オプション） |
 | `COORDINATION_CHANNEL_ID` | セッション間イベントブロードキャスト用チャンネル ID | （オプション） |
-| `CCDB_COORDINATION_CHANNEL_NAME` | 協調チャンネルを名前で自動作成 | （オプション） |
 | `MENTION_ONLY_CHANNEL_IDS` | @メンション時のみ応答するチャンネル ID（カンマ区切り） | （オプション） |
 | `INLINE_REPLY_CHANNEL_IDS` | インライン返信チャンネル ID（カンマ区切り、スレッドを作成しない） | （オプション） |
 | `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
@@ -612,15 +611,21 @@ curl -X POST http://localhost:8080/api/tasks \
 
 ```
 claude_discord/
-  main.py                  # スタンドアロンエントリーポイント
+  main.py                  # スタンドアロンエントリーポイント（setup_bridge + カスタム Cog ローダー）
+  cli.py                   # CLI エントリーポイント（ccdb setup/start コマンド）
   setup.py                 # setup_bridge() — 1 行で Cog を配線
+  cog_loader.py            # 動的カスタム Cog ローダー（CUSTOM_COGS_DIR）
   bot.py                   # Discord Bot クラス
+  protocols.py             # 共有プロトコル（DrainAware）
   concurrency.py           # Worktree 指示 + アクティブセッションレジストリ
+  lounge.py                # AI Lounge プロンプトビルダー
+  session_sync.py          # CLI セッションの検出とインポート
+  worktree.py              # WorktreeManager — git worktree の安全なライフサイクル管理
   cogs/
     claude_chat.py         # インタラクティブチャット（スレッド作成、メッセージ処理）
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
     session_manage.py      # /sessions, /sync-sessions, /resume-info
-    session_sync.py        # sync-sessions のスレッド作成・メッセージ投稿ロジック（SessionManageCog から抽出）
+    session_sync.py        # sync-sessions のスレッド作成・メッセージ投稿ロジック
     prompt_builder.py      # build_prompt_and_images() — 純粋関数、Cog/Bot 状態に非依存
     scheduler.py           # 定期 Claude Code タスク実行エンジン
     webhook_trigger.py     # Webhook → Claude Code タスク実行（CI/CD）
@@ -640,12 +645,15 @@ claude_discord/
     task_repo.py           # スケジュールタスク CRUD
     ask_repo.py            # 保留中 AskUserQuestion CRUD
     notification_repo.py   # スケジュール通知 CRUD
+    lounge_repo.py         # AI Lounge メッセージ CRUD
     resume_repo.py         # スタートアップリジューム CRUD（Bot 再起動をまたいだ保留リジューム）
     settings_repo.py       # ギルドごとの設定
   discord_ui/
     status.py              # 絵文字リアクションステータスマネージャー（デバウンス付き）
     chunker.py             # フェンス・テーブル対応メッセージ分割
     embeds.py              # Discord embed ビルダー
+    views.py               # 停止ボタンと共有 UI コンポーネント
+    ask_bus.py             # AskUserQuestion 通信用イベントバス
     ask_view.py            # AskUserQuestion 用 Discord ボタン / Select Menu
     ask_handler.py         # collect_ask_answers() — AskUserQuestion UI + DB ライフサイクル
     streaming_manager.py   # StreamingMessageManager — デバウンス付きインプレース編集
@@ -654,8 +662,7 @@ claude_discord/
     plan_view.py           # Plan Mode 承認ボタン（Approve/Cancel）
     permission_view.py     # ツール実行許可ボタン（Allow/Deny）
     elicitation_view.py    # MCP Elicitation 用 Discord UI（Modal フォームまたは URL ボタン）
-  session_sync.py          # CLI セッションの検出とインポート
-  worktree.py              # WorktreeManager — git worktree の安全なライフサイクル管理（セッション終了・起動時のクリーンアップ）
+    file_sender.py         # .ccdb-attachments 経由のファイル配信
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）
   utils/

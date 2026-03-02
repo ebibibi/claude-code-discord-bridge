@@ -288,7 +288,6 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `SESSION_TIMEOUT_SECONDS` | Timeout de inatividade da sessão | `300` |
 | `DISCORD_OWNER_ID` | ID do usuário para @mencionar quando o Claude precisa de input | (opcional) |
 | `COORDINATION_CHANNEL_ID` | ID do canal para transmissões de eventos entre sessões | (opcional) |
-| `CCDB_COORDINATION_CHANNEL_NAME` | Criar automaticamente canal de coordenação por nome | (opcional) |
 | `WORKTREE_BASE_DIR` | Diretório base para escanear worktrees de sessão (ativa limpeza automática) | (opcional) |
 
 ### Modos de Permissão — O Que Funciona no Modo `-p`
@@ -514,14 +513,22 @@ curl -X POST http://localhost:8080/api/tasks \
 
 ```
 claude_discord/
-  main.py                  # Ponto de entrada autônomo
+  main.py                  # Ponto de entrada autônomo (setup_bridge + carregador de Cogs personalizados)
+  cli.py                   # Ponto de entrada CLI (comandos ccdb setup/start)
   setup.py                 # setup_bridge() — conexão de Cogs com uma chamada
+  cog_loader.py            # Carregador dinâmico de Cogs personalizados (CUSTOM_COGS_DIR)
   bot.py                   # Classe Discord Bot
+  protocols.py             # Protocolos compartilhados (DrainAware)
   concurrency.py           # Instruções de worktree + registro de sessões ativas
+  lounge.py                # Construtor de prompts para AI Lounge
+  session_sync.py          # Descoberta e importação de sessões CLI
+  worktree.py              # WorktreeManager — ciclo de vida seguro de git worktree
   cogs/
     claude_chat.py         # Chat interativo (criação de threads, manipulação de mensagens)
     skill_command.py       # Comando slash /skill com autocomplete
     session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_sync.py        # Lógica de criação de threads e publicação para sync-sessions
+    prompt_builder.py      # build_prompt_and_images() — função pura, sem estado Cog/Bot
     scheduler.py           # Executor de tarefas periódicas do Claude Code
     webhook_trigger.py     # Webhook → tarefa do Claude Code (CI/CD)
     auto_upgrade.py        # Webhook → atualização de pacote + reinício com drenagem
@@ -540,12 +547,15 @@ claude_discord/
     task_repo.py           # CRUD de tarefas agendadas
     ask_repo.py            # CRUD de AskUserQuestion pendentes
     notification_repo.py   # CRUD de notificações agendadas
+    lounge_repo.py         # CRUD de mensagens do AI Lounge
     resume_repo.py         # CRUD de retomada ao iniciar
     settings_repo.py       # Configurações por servidor
   discord_ui/
     status.py              # Gerenciador de reações emoji (com debounce)
     chunker.py             # Divisão de mensagens com conhecimento de blocos e tabelas
     embeds.py              # Construtores de embeds do Discord
+    views.py               # Botão de parada e componentes UI compartilhados
+    ask_bus.py             # Bus de eventos para comunicação AskUserQuestion
     ask_view.py            # Botões/Menus de Seleção para AskUserQuestion
     ask_handler.py         # collect_ask_answers() — UI + ciclo de vida DB de AskUserQuestion
     streaming_manager.py   # StreamingMessageManager — edições de mensagem in-place com debounce
@@ -554,8 +564,7 @@ claude_discord/
     plan_view.py           # Botões Aprovar/Cancelar para Plan Mode (ExitPlanMode)
     permission_view.py     # Botões Permitir/Negar para solicitações de permissão de ferramenta
     elicitation_view.py    # Interface Discord para MCP Elicitation (formulário Modal ou botão URL)
-  session_sync.py          # Descoberta e importação de sessões CLI
-  worktree.py              # WorktreeManager — ciclo de vida seguro de git worktree
+    file_sender.py         # Entrega de arquivos via .ccdb-attachments
   ext/
     api_server.py          # REST API (opcional, requer aiohttp)
   utils/

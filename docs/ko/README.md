@@ -288,7 +288,6 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `SESSION_TIMEOUT_SECONDS` | 세션 비활성 시간 초과 | `300` |
 | `DISCORD_OWNER_ID` | Claude가 입력이 필요할 때 @멘션할 사용자 ID | (선택) |
 | `COORDINATION_CHANNEL_ID` | 세션 간 이벤트 브로드캐스트 채널 ID | (선택) |
-| `CCDB_COORDINATION_CHANNEL_NAME` | 이름으로 조율 채널 자동 생성 | (선택) |
 | `WORKTREE_BASE_DIR` | 세션 worktree 스캔 기본 디렉토리 (자동 정리 활성화) | (선택) |
 
 ### 권한 모드 — `-p` 모드에서 작동하는 기능
