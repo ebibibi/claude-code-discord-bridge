@@ -94,18 +94,23 @@ class TestBuildPromptAndImages:
         att.read.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_oversized_attachment_skipped(self) -> None:
+    async def test_oversized_attachment_truncated(self) -> None:
+        """MAX_ATTACHMENT_BYTES 超のファイルはスキップせず切り詰めて含める。"""
+        big_content = b"HEADER" + b"x" * MAX_ATTACHMENT_BYTES
         att = _make_attachment(
             filename="huge.txt",
             content_type="text/plain",
-            size=MAX_ATTACHMENT_BYTES + 1,
+            content=big_content,
+            size=len(big_content),
         )
         msg = _make_message(content="big file", attachments=[att])
 
         prompt, _ = await build_prompt_and_images(msg)
 
-        assert prompt == "big file"
-        att.read.assert_not_called()
+        assert "huge.txt" in prompt
+        assert "HEADER" in prompt
+        assert "truncated" in prompt.lower()
+        att.read.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_empty_content_with_attachment(self) -> None:
@@ -255,3 +260,45 @@ class TestNoContentType:
 
         assert len(image_urls) == 1
         assert "screenshot.png" in image_urls[0]
+
+
+class TestLargeTextAttachment:
+    """大きいテキスト添付ファイル（Discord ロングテキスト自動変換等）の動作。"""
+
+    @pytest.mark.asyncio
+    async def test_large_text_attachment_truncated_not_skipped(self) -> None:
+        """107 KB のテキストファイルはスキップではなく切り詰めて含める。"""
+        big_content = b"x" * 300_000
+        att = _make_attachment(
+            filename="message.txt",
+            content_type="text/plain",
+            content=big_content,
+            size=300_000,
+        )
+        msg = _make_message(content="", attachments=[att])
+
+        prompt, _ = await build_prompt_and_images(msg)
+
+        # スキップされず、ファイル名が含まれる
+        assert "message.txt" in prompt
+        # 切り詰め通知が入る
+        assert "truncated" in prompt.lower() or "省略" in prompt
+
+    @pytest.mark.asyncio
+    async def test_large_text_attachment_shows_first_n_bytes(self) -> None:
+        """切り詰め時は先頭部分のコンテンツが含まれる。"""
+        content = b"START" + b"a" * 200_000 + b"END"
+        att = _make_attachment(
+            filename="big.txt",
+            content_type="text/plain",
+            content=content,
+            size=len(content),
+        )
+        msg = _make_message(content="read this", attachments=[att])
+
+        prompt, _ = await build_prompt_and_images(msg)
+
+        assert "big.txt" in prompt
+        assert "START" in prompt
+        # 末尾の END は切り詰められて含まれない
+        assert "END" not in prompt
