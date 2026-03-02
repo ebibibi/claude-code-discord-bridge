@@ -137,7 +137,7 @@ async def _cleanup_session_worktree(config: RunConfig) -> None:
             )
             # Notify the Discord thread if there are uncommitted changes
             if "uncommitted changes" in result.reason:
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(discord.HTTPException):
                     await config.thread.send(
                         f"⚠️ **Worktree not cleaned up** — `{result.path}` has uncommitted "
                         f"changes. Please commit or stash them, then run:\n"

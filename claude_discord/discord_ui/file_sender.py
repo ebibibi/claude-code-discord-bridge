@@ -139,8 +139,15 @@ async def send_files(
 
     for i in range(0, len(files), _MAX_FILES_PER_MESSAGE):
         batch = files[i : i + _MAX_FILES_PER_MESSAGE]
-        with contextlib.suppress(Exception):
+        try:
             await thread.send(
                 content="-# 📎 Files attached" if i == 0 else None,
                 files=batch,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to send file attachment batch %d/%d to Discord",
+                i // _MAX_FILES_PER_MESSAGE + 1,
+                -(-len(files) // _MAX_FILES_PER_MESSAGE),
+                exc_info=True,
             )

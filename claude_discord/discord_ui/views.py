@@ -82,7 +82,7 @@ class StopView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         await self._runner.interrupt()
 
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(discord.HTTPException):
             await interaction.followup.send(embed=stopped_embed())
 
     async def disable(self, message: discord.Message | None = None) -> None:
