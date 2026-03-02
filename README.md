@@ -473,7 +473,6 @@ In inline-reply mode, Claude's response is sent directly as a message in the cha
 | `SESSION_TIMEOUT_SECONDS` | Session inactivity timeout | `300` |
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
 | `COORDINATION_CHANNEL_ID` | Channel ID for cross-session event broadcasts | (optional) |
-| `CCDB_COORDINATION_CHANNEL_NAME` | Auto-create coordination channel by name | (optional) |
 | `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot only responds when @mentioned | (optional) |
 | `INLINE_REPLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot replies inline (no thread created) | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
@@ -716,15 +715,20 @@ curl -X POST http://localhost:8080/api/tasks \
 ```
 claude_discord/
   main.py                  # Standalone entry point (setup_bridge + custom cog loader)
+  cli.py                   # CLI entry point (ccdb setup/start commands)
   setup.py                 # setup_bridge() — one-call Cog wiring
   cog_loader.py            # Dynamic custom Cog loader (CUSTOM_COGS_DIR)
   bot.py                   # Discord Bot class
+  protocols.py             # Shared protocols (DrainAware)
   concurrency.py           # Worktree instructions + active session registry
+  lounge.py                # AI Lounge prompt builder
+  session_sync.py          # CLI session discovery and import
+  worktree.py              # WorktreeManager — safe git worktree lifecycle
   cogs/
     claude_chat.py         # Interactive chat (thread creation, message handling)
     skill_command.py       # /skill slash command with autocomplete
     session_manage.py      # /sessions, /sync-sessions, /resume-info
-    session_sync.py        # Thread-creation and message-posting logic for sync-sessions (extracted from SessionManageCog)
+    session_sync.py        # Thread-creation and message-posting logic for sync-sessions
     prompt_builder.py      # build_prompt_and_images() — pure function, no Cog/Bot state
     scheduler.py           # Periodic Claude Code task executor
     webhook_trigger.py     # Webhook → Claude Code task execution (CI/CD)
@@ -744,12 +748,15 @@ claude_discord/
     task_repo.py           # Scheduled task CRUD
     ask_repo.py            # Pending AskUserQuestion CRUD
     notification_repo.py   # Scheduled notification CRUD
+    lounge_repo.py         # AI Lounge message CRUD
     resume_repo.py         # Startup resume CRUD (pending resumes across bot restarts)
     settings_repo.py       # Per-guild settings
   discord_ui/
     status.py              # Emoji reaction manager (debounced)
     chunker.py             # Fence- and table-aware message splitting
     embeds.py              # Discord embed builders
+    views.py               # Stop button and shared UI components
+    ask_bus.py             # Event bus for AskUserQuestion communication
     ask_view.py            # Buttons/Select Menus for AskUserQuestion
     ask_handler.py         # collect_ask_answers() — AskUserQuestion UI + DB lifecycle
     streaming_manager.py   # StreamingMessageManager — debounced in-place message edits
@@ -758,8 +765,7 @@ claude_discord/
     plan_view.py           # Approve/Cancel buttons for Plan Mode (ExitPlanMode)
     permission_view.py     # Allow/Deny buttons for tool permission requests
     elicitation_view.py    # Discord UI for MCP elicitation (Modal form or URL button)
-  session_sync.py          # CLI session discovery and import
-  worktree.py              # WorktreeManager — safe git worktree lifecycle (cleanup at session end + startup)
+    file_sender.py         # File delivery via .ccdb-attachments
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
   utils/

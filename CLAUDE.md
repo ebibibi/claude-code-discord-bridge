@@ -142,33 +142,60 @@ See `.claude/skills/tdd/SKILL.md` for detailed patterns per module type.
 ```
 claude_discord/          # Installable Python package
   __init__.py            # Public API exports
-  protocols.py           # Shared protocols (DrainAware)
+  cli.py                 # CLI entry point (ccdb setup/start commands)
   main.py                # Standalone entry point (setup_bridge + custom cog loader)
+  setup.py               # setup_bridge() — one-call Cog wiring
   cog_loader.py          # Dynamic custom Cog loader (CUSTOM_COGS_DIR / --cogs-dir)
   bot.py                 # Discord Bot class
+  protocols.py           # Shared protocols (DrainAware)
+  concurrency.py         # Worktree instructions + active session registry
+  lounge.py              # AI Lounge prompt builder
+  session_sync.py        # CLI session discovery and import
+  worktree.py            # WorktreeManager — safe git worktree lifecycle
   cogs/
     claude_chat.py       # Main chat Cog (thread creation, message handling)
     skill_command.py     # /skill slash command with autocomplete
+    session_manage.py    # /sessions, /sync-sessions, /resume-info
+    session_sync.py      # Thread-creation and message-posting for sync-sessions
+    prompt_builder.py    # build_prompt_and_images() — pure function
     webhook_trigger.py   # Webhook → Claude Code task execution (CI/CD)
-    auto_upgrade.py      # Webhook → package upgrade + restart
+    auto_upgrade.py      # Webhook → package upgrade + drain-aware restart
     scheduler.py         # Scheduled task executor (SQLite-backed, master loop)
-    _run_helper.py       # Shared Claude CLI execution logic (DRY)
+    event_processor.py   # EventProcessor — state machine for stream-json events
+    run_config.py        # RunConfig dataclass — bundles all CLI execution params
+    _run_helper.py       # Thin orchestration layer (run_claude_with_config)
   claude/
     runner.py            # Claude CLI subprocess manager
     parser.py            # stream-json event parser
     types.py             # Type definitions for SDK messages
+  coordination/
+    service.py           # Posts session lifecycle events to shared channel
   database/
     models.py            # SQLite schema
     repository.py        # Session CRUD operations
-    notification_repo.py # Scheduled notification CRUD (REST API)
     task_repo.py         # Scheduled task CRUD (SchedulerCog)
+    ask_repo.py          # Pending AskUserQuestion CRUD
+    notification_repo.py # Scheduled notification CRUD (REST API)
+    lounge_repo.py       # AI Lounge message CRUD
+    resume_repo.py       # Startup resume CRUD (pending resumes)
+    settings_repo.py     # Per-guild settings
   discord_ui/
     status.py            # Emoji reaction status manager (debounced)
-    chunker.py           # Fence-aware message splitting
+    chunker.py           # Fence- and table-aware message splitting
     embeds.py            # Discord embed builders
+    views.py             # Stop button and shared UI components
+    ask_bus.py           # Event bus for AskUserQuestion communication
+    ask_view.py          # Buttons/Select Menus for AskUserQuestion
+    ask_handler.py       # collect_ask_answers() — AskUserQuestion UI + DB lifecycle
+    streaming_manager.py # StreamingMessageManager — debounced message edits
+    tool_timer.py        # LiveToolTimer — elapsed time counter
+    thread_dashboard.py  # Live pinned embed showing session states
+    plan_view.py         # Approve/Cancel buttons for Plan Mode
+    permission_view.py   # Allow/Deny buttons for tool permission requests
+    elicitation_view.py  # Discord UI for MCP elicitation
+    file_sender.py       # File delivery via .ccdb-attachments
   ext/
     api_server.py        # REST API server (optional, requires aiohttp)
-                         # Includes /api/tasks endpoints for SchedulerCog
   utils/
     logger.py            # Logging setup
 tests/                   # pytest test suite

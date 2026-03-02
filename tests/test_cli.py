@@ -262,3 +262,33 @@ class TestMain:
         assert exc_info.value.code != 0
         captured = capsys.readouterr()
         assert "setup" in captured.out or "setup" in captured.err
+
+    def test_start_cogs_dir_sets_env(self) -> None:
+        """--cogs-dir flag sets CUSTOM_COGS_DIR environment variable."""
+        from claude_discord.cli import main
+
+        with (
+            patch("sys.argv", ["ccdb", "start", "--cogs-dir", "/tmp/my-cogs"]),
+            patch("claude_discord.cli.cmd_start") as mock_start,
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            import os
+
+            main()
+            assert os.environ.get("CUSTOM_COGS_DIR") == "/tmp/my-cogs"
+            mock_start.assert_called_once()
+
+    def test_start_without_cogs_dir_no_env(self) -> None:
+        """Without --cogs-dir, CUSTOM_COGS_DIR is not set."""
+        import os
+
+        from claude_discord.cli import main
+
+        os.environ.pop("CUSTOM_COGS_DIR", None)
+        with (
+            patch("sys.argv", ["ccdb", "start"]),
+            patch("claude_discord.cli.cmd_start") as mock_start,
+        ):
+            main()
+            assert "CUSTOM_COGS_DIR" not in os.environ or os.environ["CUSTOM_COGS_DIR"] == ""
+            mock_start.assert_called_once()
