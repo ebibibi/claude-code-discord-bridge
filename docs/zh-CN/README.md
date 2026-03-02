@@ -227,6 +227,37 @@ cp .env.example .env
 uv run python -m claude_discord.main
 ```
 
+### 作为 systemd 服务运行（生产环境）
+
+在生产环境中，建议通过 systemd 管理，以实现开机自启和故障自动重启。
+
+仓库提供了模板文件 `discord-bot.service` 和 `scripts/pre-start.sh`，复制后修改路径和用户名即可：
+
+```bash
+# 1. 编辑服务文件 — 将 /home/ebi 和 User=ebi 替换为你的路径/用户
+sudo cp discord-bot.service /etc/systemd/system/mybot.service
+sudo nano /etc/systemd/system/mybot.service
+
+# 2. 启用并启动
+sudo systemctl daemon-reload
+sudo systemctl enable mybot.service
+sudo systemctl start mybot.service
+
+# 3. 查看状态
+sudo systemctl status mybot.service
+journalctl -u mybot.service -f
+```
+
+**`scripts/pre-start.sh` 的功能**（在机器人进程启动前作为 `ExecStartPre` 运行）：
+
+1. **`git pull --ff-only`** — 从 `origin main` 拉取最新代码
+2. **`uv sync`** — 根据 `uv.lock` 同步依赖
+3. **导入验证** — 验证 `claude_discord.main` 可以正常导入
+4. **自动回滚** — 导入失败时回退到上一个提交并重试；通过 Discord webhook 发送通知
+5. **Worktree 清理** — 删除崩溃会话遗留的 git worktree
+
+在 `.env` 中设置 `DISCORD_WEBHOOK_URL` 可接收故障通知（可选）。
+
 ### 作为包安装
 
 如果你已有运行中的 discord.py Bot（Discord 每个 token 只允许一个 Gateway 连接）：

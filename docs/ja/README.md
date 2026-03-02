@@ -231,6 +231,37 @@ cp .env.example .env
 uv run python -m claude_discord.main
 ```
 
+### systemd サービスとして運用（本番環境）
+
+本番環境では systemd 管理下で動かすと、起動時の自動開始と障害時の自動再起動が得られます。
+
+リポジトリにはテンプレートとして `discord-bot.service`（サービスファイル）と `scripts/pre-start.sh`（起動前スクリプト）が同梱されています。コピーしてパスやユーザー名を書き換えてください:
+
+```bash
+# 1. サービスファイルを編集 — /home/ebi と User=ebi をご自身のパス/ユーザーに変更
+sudo cp discord-bot.service /etc/systemd/system/mybot.service
+sudo nano /etc/systemd/system/mybot.service
+
+# 2. 有効化して起動
+sudo systemctl daemon-reload
+sudo systemctl enable mybot.service
+sudo systemctl start mybot.service
+
+# 3. 状態確認
+sudo systemctl status mybot.service
+journalctl -u mybot.service -f
+```
+
+**`scripts/pre-start.sh` の動作**（ボットプロセス起動前に `ExecStartPre` として実行）:
+
+1. **`git pull --ff-only`** — `origin main` から最新コードを取得
+2. **`uv sync`** — `uv.lock` に従って依存関係を最新の状態に同期
+3. **インポート検証** — `claude_discord.main` が正常にインポートできるか確認
+4. **自動ロールバック** — インポートに失敗した場合は前のコミットに戻して再試行。Discord webhook に成功/失敗を通知
+5. **Worktree クリーンアップ** — クラッシュしたセッションが残した git worktree を削除
+
+`.env` に `DISCORD_WEBHOOK_URL` を設定すると障害通知が届きます（任意）。
+
 ### パッケージとしてインストール
 
 すでに discord.py Bot を動かしている場合（Discord はトークンごとに 1 Gateway 接続のみ許可）:

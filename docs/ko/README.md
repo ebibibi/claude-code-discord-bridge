@@ -207,6 +207,37 @@ cp .env.example .env
 uv run python -m claude_discord.main
 ```
 
+### systemd 서비스로 실행 (프로덕션)
+
+프로덕션 환경에서는 systemd로 관리하면 부팅 시 자동 시작과 장애 시 자동 재시작이 가능합니다.
+
+리포지토리에는 템플릿 파일 `discord-bot.service`와 `scripts/pre-start.sh`가 포함되어 있습니다. 복사 후 경로와 사용자명을 수정하세요:
+
+```bash
+# 1. 서비스 파일 편집 — /home/ebi와 User=ebi를 본인의 경로/사용자로 변경
+sudo cp discord-bot.service /etc/systemd/system/mybot.service
+sudo nano /etc/systemd/system/mybot.service
+
+# 2. 활성화 및 시작
+sudo systemctl daemon-reload
+sudo systemctl enable mybot.service
+sudo systemctl start mybot.service
+
+# 3. 상태 확인
+sudo systemctl status mybot.service
+journalctl -u mybot.service -f
+```
+
+**`scripts/pre-start.sh` 동작** (봇 프로세스 시작 전 `ExecStartPre`로 실행):
+
+1. **`git pull --ff-only`** — `origin main`에서 최신 코드 가져오기
+2. **`uv sync`** — `uv.lock`에 따라 의존성 동기화
+3. **임포트 검증** — `claude_discord.main`이 정상적으로 임포트되는지 확인
+4. **자동 롤백** — 임포트 실패 시 이전 커밋으로 되돌리고 재시도. Discord webhook으로 성공/실패 알림 전송
+5. **Worktree 정리** — 충돌된 세션이 남긴 git worktree 삭제
+
+`.env`에 `DISCORD_WEBHOOK_URL`을 설정하면 장애 알림을 받을 수 있습니다 (선택사항).
+
 ### 패키지로 설치
 
 이미 discord.py 봇이 있는 경우 (Discord는 토큰당 하나의 Gateway 연결만 허용):

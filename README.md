@@ -280,6 +280,37 @@ ccdb start --env /path/to/.env   # custom .env location
 
 Send a message in the configured channel — Claude will reply in a new thread.
 
+### Running as a systemd Service (Production)
+
+For production deployments, run the bot under systemd so it starts on boot and auto-restarts on failure.
+
+The repo ships a ready-to-adapt template (`discord-bot.service`) and a pre-start script (`scripts/pre-start.sh`). Copy and customize them:
+
+```bash
+# 1. Edit the service file — replace /home/ebi and User=ebi with your paths/user
+sudo cp discord-bot.service /etc/systemd/system/mybot.service
+sudo nano /etc/systemd/system/mybot.service
+
+# 2. Enable and start
+sudo systemctl daemon-reload
+sudo systemctl enable mybot.service
+sudo systemctl start mybot.service
+
+# 3. Check status
+sudo systemctl status mybot.service
+journalctl -u mybot.service -f
+```
+
+**What `scripts/pre-start.sh` does** (runs as `ExecStartPre` before the bot process):
+
+1. **`git pull --ff-only`** — pulls the latest code from `origin main`
+2. **`uv sync`** — keeps dependencies in sync with `uv.lock`
+3. **Import validation** — verifies that `claude_discord.main` imports cleanly
+4. **Auto-rollback** — if import fails, reverts to the previous commit and retries; posts a Discord webhook notification on failure or success
+5. **Worktree cleanup** — removes stale git worktrees left by crashed sessions
+
+The script requires the `DISCORD_WEBHOOK_URL` variable in `.env` for failure notifications (optional — the script works without it).
+
 ### Custom Cogs (Extend Without Forking)
 
 Add your own features by dropping Python files into a directory — no fork, no subclass, no package needed:

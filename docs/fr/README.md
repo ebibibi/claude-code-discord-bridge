@@ -207,6 +207,37 @@ cp .env.example .env
 uv run python -m claude_discord.main
 ```
 
+### Exécuter comme service systemd (production)
+
+En production, gérer le bot via systemd permet le démarrage automatique au boot et le redémarrage automatique en cas de panne.
+
+Le dépôt fournit des modèles prêts à l'emploi : `discord-bot.service` et `scripts/pre-start.sh`. Copiez-les et adaptez les chemins et l'utilisateur :
+
+```bash
+# 1. Éditez le fichier de service — remplacez /home/ebi et User=ebi par votre chemin/utilisateur
+sudo cp discord-bot.service /etc/systemd/system/mybot.service
+sudo nano /etc/systemd/system/mybot.service
+
+# 2. Activer et démarrer
+sudo systemctl daemon-reload
+sudo systemctl enable mybot.service
+sudo systemctl start mybot.service
+
+# 3. Vérifier le statut
+sudo systemctl status mybot.service
+journalctl -u mybot.service -f
+```
+
+**Ce que fait `scripts/pre-start.sh`** (exécuté comme `ExecStartPre` avant le processus du bot) :
+
+1. **`git pull --ff-only`** — récupère le code le plus récent depuis `origin main`
+2. **`uv sync`** — synchronise les dépendances selon `uv.lock`
+3. **Validation des imports** — vérifie que `claude_discord.main` s'importe correctement
+4. **Rollback automatique** — en cas d'échec de l'import, revient au commit précédent et réessaie ; envoie une notification via Discord webhook
+5. **Nettoyage des worktrees** — supprime les git worktrees orphelins laissés par des sessions qui ont planté
+
+Configurez `DISCORD_WEBHOOK_URL` dans `.env` pour recevoir des notifications d'échec (optionnel).
+
 ### Installer comme paquet
 
 Si vous avez déjà un bot discord.py en fonctionnement (Discord n'autorise qu'une connexion Gateway par token) :
