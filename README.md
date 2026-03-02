@@ -495,7 +495,7 @@ Claude Code CLI runs in **`-p` (non-interactive) mode** when used through ccdb. 
 
 **Our recommendation:** Set `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`. Since ccdb controls who can interact with Claude via `allowed_user_ids`, the CLI-level permission checks add friction without meaningful security benefit. The "dangerously" in the name reflects the CLI's general-purpose warning; in the ccdb context where access is already gated, it's the practical choice.
 
-If you prefer fine-grained control, `CLAUDE_ALLOWED_TOOLS` support is planned ([#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)).
+If you prefer fine-grained control, set `CLAUDE_ALLOWED_TOOLS` to a comma-separated list of tool names (e.g. `Bash,Read,Write`). Tools not in the list will be rejected by Claude CLI.
 
 > **Why don't permission buttons appear in Discord?** The CLI's `-p` mode never emits `permission_request` events, so there's nothing for ccdb to display. The `AskUserQuestion` buttons you see (choice prompts from Claude) are a different mechanism that works correctly. See [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) for the full investigation.
 

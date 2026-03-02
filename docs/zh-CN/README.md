@@ -323,7 +323,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 
 **我们的推荐：** 设置 `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`。由于 ccdb 通过 `allowed_user_ids` 控制与 Claude 的交互，CLI 级别的权限检查只会增加摩擦而没有实质性的安全收益。名称中的「dangerously」体现了 CLI 的通用警告；在 ccdb 已限制访问的上下文中，这是实际可行的选择。
 
-如需精细控制，`CLAUDE_ALLOWED_TOOLS` 的支持已在计划中（[#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)）。
+如需精细控制，可将 `CLAUDE_ALLOWED_TOOLS` 设置为逗号分隔的工具名称列表（例如：`Bash,Read,Write`）。不在列表中的工具将被 Claude CLI 拒绝。
 
 > **为什么 Discord 中不显示权限按钮？** CLI 的 `-p` 模式不会发出 `permission_request` 事件，因此 ccdb 无内容可显示。您看到的 `AskUserQuestion` 按钮（Claude 的选择提示）是不同的机制，可以正常工作。详细调查请参阅 [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210)。
 

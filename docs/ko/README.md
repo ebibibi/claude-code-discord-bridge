@@ -303,7 +303,7 @@ ccdb를 통해 사용할 때 Claude Code CLI는 **`-p`(비대화형) 모드**로
 
 **권장 설정:** `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`를 설정하세요. ccdb가 `allowed_user_ids`를 통해 Claude와의 상호작용을 제어하므로, CLI 수준의 권한 검사는 실질적인 보안 이점 없이 마찰만 추가합니다. 이름의 「dangerously」는 CLI의 범용 경고를 반영한 것이며, 접근이 이미 게이팅된 ccdb 컨텍스트에서는 실용적인 선택입니다.
 
-더 세밀한 제어를 원한다면 `CLAUDE_ALLOWED_TOOLS` 지원이 계획되어 있습니다 ([#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)).
+더 세밀한 제어를 원한다면 `CLAUDE_ALLOWED_TOOLS`에 쉼표로 구분된 도구 이름 목록을 설정하세요 (예: `Bash,Read,Write`). 목록에 없는 도구는 Claude CLI에 의해 거부됩니다.
 
 > **Discord에 권한 버튼이 나타나지 않는 이유?** CLI의 `-p` 모드는 `permission_request` 이벤트를 발생시키지 않으므로 ccdb에 표시할 내용이 없습니다. 표시되는 `AskUserQuestion` 버튼(Claude의 선택 프롬프트)은 다른 메커니즘으로 정상 작동합니다. 자세한 조사는 [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210)을 참조하세요.
 
