@@ -50,8 +50,7 @@ def load_config() -> dict[str, str]:
         "timeout": os.getenv("SESSION_TIMEOUT_SECONDS", "300"),
         "owner_id": os.getenv("DISCORD_OWNER_ID", ""),
         "coordination_channel_id": os.getenv("COORDINATION_CHANNEL_ID", ""),
-        "dangerously_skip_permissions": os.getenv("CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS", "").lower()
-        in ("true", "1", "yes"),
+        "dangerously_skip_permissions": os.getenv("CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS", ""),
         # Additional config for custom cogs and multi-channel
         "claude_channel_ids": os.getenv("CLAUDE_CHANNEL_IDS", ""),
         "api_host": os.getenv("API_HOST", "127.0.0.1"),
@@ -87,7 +86,8 @@ async def main() -> None:
         permission_mode=config["claude_permission_mode"],
         working_dir=config["claude_working_dir"] or None,
         timeout_seconds=int(config["timeout"]),
-        dangerously_skip_permissions=config["dangerously_skip_permissions"],
+        dangerously_skip_permissions=config["dangerously_skip_permissions"].lower()
+        in ("true", "1", "yes"),
         allowed_tools=allowed_tools,
     )
 
