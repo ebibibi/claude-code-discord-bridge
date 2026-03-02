@@ -414,6 +414,23 @@ In inline-reply mode, Claude's response is sent directly as a message in the cha
 | `INLINE_REPLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot replies inline (no thread created) | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
 
+### Permission Modes — What Works in `-p` Mode
+
+Claude Code CLI runs in **`-p` (non-interactive) mode** when used through ccdb. In this mode, the CLI **cannot prompt for permission** — tools that require approval are immediately rejected. This is a [CLI design constraint](https://code.claude.com/docs/en/headless), not a ccdb limitation.
+
+| Mode | Behavior in `-p` mode | Recommendation |
+|------|----------------------|----------------|
+| `default` | ❌ **All tools rejected** — unusable | Do not use |
+| `acceptEdits` | ⚠️ Edit/Write auto-approved, Bash rejected (Claude falls back to Write for file ops) | Minimum viable option |
+| `bypassPermissions` | ✅ All tools approved | Works, but prefer the flag below |
+| **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`** | ✅ **All tools approved** | **Recommended** — ccdb already restricts access via `allowed_user_ids` |
+
+**Our recommendation:** Set `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`. Since ccdb controls who can interact with Claude via `allowed_user_ids`, the CLI-level permission checks add friction without meaningful security benefit. The "dangerously" in the name reflects the CLI's general-purpose warning; in the ccdb context where access is already gated, it's the practical choice.
+
+If you prefer fine-grained control, `CLAUDE_ALLOWED_TOOLS` support is planned ([#217](https://github.com/ebibibi/claude-code-discord-bridge/issues/217)).
+
+> **Why don't permission buttons appear in Discord?** The CLI's `-p` mode never emits `permission_request` events, so there's nothing for ccdb to display. The `AskUserQuestion` buttons you see (choice prompts from Claude) are a different mechanism that works correctly. See [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) for the full investigation.
+
 ---
 
 ## Discord Bot Setup
