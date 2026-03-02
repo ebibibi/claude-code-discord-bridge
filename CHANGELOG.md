@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`/tools` slash commands** — `/tools-show`, `/tools-set`, `/tools-reset` for runtime tool permission management from Discord; no bot restart required
+
 ## [1.8.0] - 2026-03-02
 
 ### Added

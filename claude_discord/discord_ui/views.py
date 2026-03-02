@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from typing import TYPE_CHECKING
 
 import discord
 
 from ..claude.runner import ClaudeRunner
-from .embeds import stopped_embed, tool_result_embed, tool_result_preview_embed
+from .embeds import COLOR_SUCCESS, stopped_embed, tool_result_embed, tool_result_preview_embed
+
+if TYPE_CHECKING:
+    from ..database.settings_repo import SettingsRepository
 
 logger = logging.getLogger(__name__)
 
@@ -130,3 +134,56 @@ class ToolResultView(discord.ui.View):
             button.label = "展開 ▼"
             embed = tool_result_preview_embed(self._tool_title, self._full_content)
         await interaction.response.edit_message(embed=embed, view=self)
+
+
+class ToolSelectView(discord.ui.View):
+    """Multi-select menu for choosing which Claude tools are allowed.
+
+    Displays all known tools as options. Tools that are currently enabled
+    are pre-selected.  On submit, the selection is persisted to settings_repo.
+    """
+
+    def __init__(
+        self,
+        known_tools: list[str],
+        current_tools: list[str] | None,
+        settings_repo: SettingsRepository,
+        setting_key: str,
+    ) -> None:
+        super().__init__(timeout=120)
+        self._settings_repo = settings_repo
+        self._setting_key = setting_key
+
+        current_set = set(current_tools) if current_tools else set()
+
+        options = [
+            discord.SelectOption(
+                label=tool,
+                value=tool,
+                default=tool in current_set,
+            )
+            for tool in known_tools
+        ]
+
+        self._select = discord.ui.Select(
+            placeholder="Select tools to allow...",
+            min_values=0,
+            max_values=len(known_tools),
+            options=options,
+        )
+        self._select.callback = self._on_select
+        self.add_item(self._select)
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        """Persist the selected tools to settings_repo."""
+        selected = sorted(self._select.values)
+        if selected:
+            await self._settings_repo.set(self._setting_key, ",".join(selected))
+            desc = "Allowed tools updated:\n" + ", ".join(f"`{t}`" for t in selected)
+        else:
+            await self._settings_repo.delete(self._setting_key)
+            desc = "All tool restrictions removed — all tools are now allowed."
+
+        embed = discord.Embed(title="✅ Tools Updated", description=desc, color=COLOR_SUCCESS)
+        await interaction.response.edit_message(content=None, embed=embed, view=None)
+        self.stop()

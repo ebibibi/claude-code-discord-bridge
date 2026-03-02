@@ -183,7 +183,7 @@ claude_discord/          # Installable Python package
     status.py            # Emoji reaction status manager (debounced)
     chunker.py           # Fence- and table-aware message splitting
     embeds.py            # Discord embed builders
-    views.py             # Stop button and shared UI components
+    views.py             # Stop button, ToolSelectView, and shared UI components
     ask_bus.py           # Event bus for AskUserQuestion communication
     ask_view.py          # Buttons/Select Menus for AskUserQuestion
     ask_handler.py       # collect_ask_answers() — AskUserQuestion UI + DB lifecycle

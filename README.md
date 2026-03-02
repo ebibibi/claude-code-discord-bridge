@@ -198,6 +198,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Thread ID injection** — `DISCORD_THREAD_ID` env var is passed to every Claude subprocess, enabling sessions to spawn child sessions via `$CCDB_API_URL/api/spawn`
 - **Worktree management** — `/worktree-list` shows all active session worktrees with clean/dirty status; `/worktree-cleanup` removes orphaned clean worktrees (supports `dry_run` preview)
 - **Runtime model switching** — `/model-show` displays the current global model and per-thread session model; `/model-set` changes the model for all new sessions without restart
+- **Runtime tool permissions** — `/tools-show` displays the current allowed tools; `/tools-set` opens a select menu to toggle tools on/off; `/tools-reset` reverts to `.env` default — all without restart
 
 ### Security
 - **No shell injection** — `asyncio.create_subprocess_exec` only, never `shell=True`
@@ -506,6 +507,8 @@ CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep
 ```
 
 Common tool names: `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `NotebookEdit`. Set `CLAUDE_PERMISSION_MODE=default` when using this (other modes may override).
+
+**Runtime changes via Discord:** Use `/tools-set` to change allowed tools at runtime without restarting the bot. The setting is persisted and takes effect for all new sessions immediately. Use `/tools-show` to see the current configuration, or `/tools-reset` to revert to the `.env` default.
 
 > **Why don't permission buttons appear in Discord?** The CLI's `-p` mode never emits `permission_request` events, so there's nothing for ccdb to display. The `AskUserQuestion` buttons you see (choice prompts from Claude) are a different mechanism that works correctly. See [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) for the full investigation.
 

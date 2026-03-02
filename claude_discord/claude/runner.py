@@ -25,6 +25,9 @@ from .types import MessageType, StreamEvent
 
 logger = logging.getLogger(__name__)
 
+# Sentinel to distinguish "not provided" from None (which means "no tool restrictions").
+_UNSET = object()
+
 
 def _resolve_windows_cmd(cmd_path: Path) -> list[str] | None:
     """Resolve a Windows npm .cmd/.bat wrapper to ``[node, cli_js]``.
@@ -172,6 +175,7 @@ class ClaudeRunner:
         thread_id: int | None = None,
         model: str | None = None,
         append_system_prompt: str | None = None,
+        allowed_tools: list[str] | None | object = _UNSET,
     ) -> ClaudeRunner:
         """Create a fresh runner with the same configuration but no active process.
 
@@ -185,6 +189,10 @@ class ClaudeRunner:
                    Overrides the instance-level value if provided.
                    Use this for ephemeral context (e.g. lounge state, concurrency
                    notices) that should NOT accumulate in session history.
+            allowed_tools: Tool whitelist for --allowedTools.
+                   ``_UNSET`` (default) inherits from the parent runner.
+                   ``None`` means no tool restrictions.
+                   A list of tool names restricts to those tools.
         """
         return ClaudeRunner(
             command=self.command,
@@ -192,7 +200,9 @@ class ClaudeRunner:
             permission_mode=self.permission_mode,
             working_dir=self.working_dir,
             timeout_seconds=self.timeout_seconds,
-            allowed_tools=self.allowed_tools,
+            allowed_tools=(
+                self.allowed_tools if allowed_tools is _UNSET else allowed_tools  # type: ignore[arg-type]
+            ),
             dangerously_skip_permissions=self.dangerously_skip_permissions,
             include_partial_messages=self.include_partial_messages,
             api_port=self.api_port,

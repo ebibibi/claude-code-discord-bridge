@@ -392,6 +392,25 @@ class TestSignalKillSuppression:
         cloned = runner.clone()
         assert cloned.model == "haiku"
 
+    def test_clone_allowed_tools_override(self) -> None:
+        """clone(allowed_tools=[...]) overrides the parent's tool list."""
+        runner = ClaudeRunner(allowed_tools=["Bash", "Read"])
+        cloned = runner.clone(allowed_tools=["Write"])
+        assert cloned.allowed_tools == ["Write"]
+        assert runner.allowed_tools == ["Bash", "Read"]  # original unchanged
+
+    def test_clone_allowed_tools_unset_inherits(self) -> None:
+        """clone() without allowed_tools inherits from the parent."""
+        runner = ClaudeRunner(allowed_tools=["Bash", "Read"])
+        cloned = runner.clone()
+        assert cloned.allowed_tools == ["Bash", "Read"]
+
+    def test_clone_allowed_tools_none_clears(self) -> None:
+        """clone(allowed_tools=None) sets no restrictions (different from _UNSET)."""
+        runner = ClaudeRunner(allowed_tools=["Bash", "Read"])
+        cloned = runner.clone(allowed_tools=None)
+        assert cloned.allowed_tools is None
+
 
 class TestImageStreamJson:
     """Tests for --input-format stream-json image attachment support.

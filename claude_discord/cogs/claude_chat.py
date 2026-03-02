@@ -59,6 +59,9 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "sync-settings": "📌 Session",
     "model-show": "🤖 Model",
     "model-set": "🤖 Model",
+    "tools-show": "🔧 Advanced",
+    "tools-set": "🔧 Advanced",
+    "tools-reset": "🔧 Advanced",
     "skill": "🔧 Advanced",
     "worktree-list": "🔧 Advanced",
     "worktree-cleanup": "🔧 Advanced",
@@ -155,6 +158,22 @@ class ClaudeChatCog(commands.Cog):
         from .session_manage import SETTING_CLAUDE_MODEL
 
         return await self._settings_repo.get(SETTING_CLAUDE_MODEL)
+
+    async def _get_allowed_tools(self) -> list[str] | None:
+        """Return the tool override from settings_repo, or None to use runner default.
+
+        When /tools-set has been used to change the allowed tools, this returns
+        the parsed list.  Returns None if no override is set or settings_repo
+        is unavailable (meaning: inherit from the base runner).
+        """
+        if self._settings_repo is None:
+            return None
+        from .session_manage import SETTING_ALLOWED_TOOLS
+
+        stored = await self._settings_repo.get(SETTING_ALLOWED_TOOLS)
+        if stored is None:
+            return None
+        return [t.strip() for t in stored.split(",") if t.strip()]
 
     def _get_coordination(self) -> CoordinationService:
         """Return the coordination service (zero-config: auto-creates from env if needed).
@@ -561,7 +580,14 @@ class ClaudeChatCog(commands.Cog):
             await status.set_thinking()
 
             model_override = await self._get_current_model()
-            runner = self.runner.clone(thread_id=thread.id, model=model_override)
+            tools_override = await self._get_allowed_tools()
+            from ..claude.runner import _UNSET
+
+            runner = self.runner.clone(
+                thread_id=thread.id,
+                model=model_override,
+                allowed_tools=tools_override if tools_override is not None else _UNSET,
+            )
             self._active_runners[thread.id] = runner
 
             stop_view = StopView(runner)

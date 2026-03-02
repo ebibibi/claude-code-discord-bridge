@@ -19,6 +19,7 @@ from discord.ext import commands
 from ..database.repository import SessionRepository
 from ..database.settings_repo import SettingsRepository
 from ..discord_ui.embeds import COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
+from ..discord_ui.views import ToolSelectView
 from ..worktree import WorktreeManager
 from .session_sync import sync_cli_sessions
 
@@ -60,6 +61,20 @@ _MODEL_CHOICES = [
     app_commands.Choice(name="Haiku 4.5 (fast, cost-effective)", value="haiku"),
     app_commands.Choice(name="Sonnet 4.6 (balanced, default)", value="sonnet"),
     app_commands.Choice(name="Opus 4.6 (powerful, deep reasoning)", value="opus"),
+]
+
+# Tool permission management
+SETTING_ALLOWED_TOOLS = "allowed_tools"
+KNOWN_TOOLS: list[str] = [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "WebFetch",
+    "WebSearch",
+    "NotebookEdit",
 ]
 
 
@@ -196,6 +211,100 @@ class SessionManageCog(commands.Cog):
             description=f"Global model set to **`{model}`**.\nAll new sessions will use this model.",  # noqa: E501
             color=COLOR_SUCCESS,
         )
+        await interaction.response.send_message(embed=embed)
+
+    # ── Tool permission commands ──────────────────────────────────────────────
+
+    async def _get_effective_tools(self) -> list[str] | None:
+        """Return the effective allowed tools: settings_repo override or runner default.
+
+        Returns None when no tool restrictions are configured.
+        """
+        if self.settings_repo is not None:
+            stored = await self.settings_repo.get(SETTING_ALLOWED_TOOLS)
+            if stored is not None:
+                return [t.strip() for t in stored.split(",") if t.strip()]
+        runner = self._get_runner()
+        if runner is not None and hasattr(runner, "allowed_tools"):
+            return runner.allowed_tools  # type: ignore[return-value]
+        return None
+
+    @app_commands.command(name="tools-show", description="Show current allowed tools")
+    async def tools_show(self, interaction: discord.Interaction) -> None:
+        """Display the current tool whitelist."""
+        tools = await self._get_effective_tools()
+
+        embed = discord.Embed(
+            title="🔧 Allowed Tools",
+            color=COLOR_INFO,
+        )
+        if tools:
+            embed.description = "\n".join(f"• `{t}`" for t in tools)
+        else:
+            embed.description = (
+                "**No restrictions** — all tools are available.\n"
+                "Use `/tools-set` to restrict tools."
+            )
+
+        # Show source (override vs default)
+        stored = await self.settings_repo.get(SETTING_ALLOWED_TOOLS) if self.settings_repo else None
+        runner = self._get_runner()
+        runner_tools = getattr(runner, "allowed_tools", None) if runner else None
+        if stored is not None:
+            embed.set_footer(text="Source: /tools-set override")
+        elif runner_tools:
+            embed.set_footer(text="Source: .env default (CLAUDE_ALLOWED_TOOLS)")
+        else:
+            embed.set_footer(text="No tool restrictions configured")
+
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="tools-set", description="Change allowed tools via select menu")
+    async def tools_set(self, interaction: discord.Interaction) -> None:
+        """Show a multi-select menu to pick which tools to enable."""
+        if self.settings_repo is None:
+            await interaction.response.send_message(
+                "❌ Settings repository is unavailable — tools cannot be persisted.",
+                ephemeral=True,
+            )
+            return
+
+        current_tools = await self._get_effective_tools()
+        view = ToolSelectView(
+            known_tools=KNOWN_TOOLS,
+            current_tools=current_tools,
+            settings_repo=self.settings_repo,
+            setting_key=SETTING_ALLOWED_TOOLS,
+        )
+        await interaction.response.send_message(
+            "Select the tools to allow:", view=view, ephemeral=True
+        )
+
+    @app_commands.command(name="tools-reset", description="Reset allowed tools to .env default")
+    async def tools_reset(self, interaction: discord.Interaction) -> None:
+        """Remove the settings_repo override, reverting to .env default."""
+        if self.settings_repo is None:
+            await interaction.response.send_message(
+                "❌ Settings repository is unavailable.", ephemeral=True
+            )
+            return
+
+        deleted = await self.settings_repo.delete(SETTING_ALLOWED_TOOLS)
+        runner = self._get_runner()
+        runner_tools = getattr(runner, "allowed_tools", None) if runner else None
+
+        if deleted:
+            if runner_tools:
+                desc = "Reverted to `.env` default:\n" + ", ".join(f"`{t}`" for t in runner_tools)
+            else:
+                desc = "Reverted to `.env` default: **no restrictions**."
+            embed = discord.Embed(title="🔧 Tools Reset", description=desc, color=COLOR_SUCCESS)
+        else:
+            embed = discord.Embed(
+                title="🔧 Tools Reset",
+                description="No override was set — already using defaults.",
+                color=COLOR_INFO,
+            )
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(
