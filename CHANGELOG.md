@@ -7,11 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-03-02
+
+### Added
+- **File attachment delivery** — when Claude writes files during a session, listing their absolute paths in `.ccdb-attachments` (one per line) causes the bot to upload them to Discord on session complete; opt-in, zero config for consumers (#195, #196)
+- **`/help` slash command** — lists all registered slash commands dynamically; CI guard prevents stale command lists from being merged (#199, #200)
+- **Mention requester after significant work** — when `requester_id` is set and Claude uses ≥ 3 tool calls, the requesting user is mentioned in the session-complete message so they notice the result in busy servers (#198)
+- **Multi-channel support (`claude_channel_ids`)** — accepts a comma-separated list of channel IDs so one bot instance can serve multiple channels (#204)
+- **Mention-only channel mode** — a channel can be configured to only respond when the bot is directly @-mentioned, leaving other messages alone (#204)
+- **Inline-reply channel mode** — a channel can be configured to reply inline (no thread created), suitable for simple one-off commands (#204)
+- **Real-time tool timer** — in-progress tool embeds now show elapsed seconds updated every 5 s so long-running commands are visually trackable (#194)
+- **CI failure Discord notification** — GitHub Actions posts a Discord message when any CI job fails, with branch name and run URL (#208)
+- **Weekly stale branch cleanup** — a scheduled GitHub Actions workflow deletes branches from closed PRs using the GitHub API (handles squash-merge branches correctly) (#208, #209)
+
 ### Changed
 - **Tool result collapse threshold** — single-line tool outputs are now shown flat (no expand button); multi-line results (2+ lines) collapse behind an expand button. Previously, only outputs with 4+ lines were collapsed.
+- **UpgradeApprovalView re-post** — the upgrade approval button is deleted and re-sent after each upgrade step so it stays at the bottom of the channel and remains visible (#201)
+- **Text attachment size limit raised** — per-file limit increased from 50 KB to 200 KB; total limit from 100 KB to 500 KB, matching Discord's auto-conversion of long pastes (#213)
 
 ### Fixed
 - **Empty tool output stuck embed** — tool calls that complete with no output (e.g. a command that exits silently) now properly clear the in-progress indicator on the embed instead of leaving it stuck.
+- **Coordination channel session-end message** — now uses thread ID instead of title to identify sessions, preventing confusion when threads are renamed.
+- **Streaming message truncation** — long streaming messages are no longer cut off with `...`; the full content is always forwarded (#203).
+- **Pyright type errors for `Thread | TextChannel`** — inline-reply mode introduced `TextChannel` as a valid thread target; type annotations in six internal modules updated to reflect this (#206).
+- **Text attachments with missing `content_type`** — Discord auto-converts long pastes to `.txt` files with `content_type=None`; the bot now falls back to file-extension detection so these attachments are read correctly (#211).
+- **Large text attachments silently dropped** — text attachments exceeding the old 50 KB limit were skipped without notifying Claude; they are now truncated with a visible notice so Claude always sees the content (#213).
 
 ## [1.6.0] - 2026-02-26
 
