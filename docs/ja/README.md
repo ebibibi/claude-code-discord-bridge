@@ -199,6 +199,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **スレッド ID 注入** — すべての Claude サブプロセスに `DISCORD_THREAD_ID` 環境変数を渡し、セッションから `$CCDB_API_URL/api/spawn` で子セッションを起動可能
 - **Worktree 管理** — `/worktree-list` でアクティブなセッション Worktree を clean/dirty ステータス付きで表示、`/worktree-cleanup` で孤立した clean な Worktree を削除（`dry_run` プレビューあり）
 - **実行時モデル切り替え** — `/model-show` で現在のグローバルモデルとスレッドごとのセッションモデルを表示、`/model-set` で再起動不要のまま全新規セッションのモデルを変更
+- **実行時ツールパーミッション** — `/tools-show` で現在の許可ツールを表示、`/tools-set` でトグルメニューからツールのオン/オフを切り替え、`/tools-reset` で `.env` デフォルト設定に戻す — すべて再起動不要
 
 ### セキュリティ
 - **シェルインジェクション防止** — `asyncio.create_subprocess_exec` のみ使用、`shell=True` は一切なし
@@ -403,6 +404,8 @@ CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep
 ```
 
 主なツール名：`Bash`、`Read`、`Write`、`Edit`、`Glob`、`Grep`、`WebFetch`、`WebSearch`、`NotebookEdit`。この設定を使用する場合は `CLAUDE_PERMISSION_MODE=default` にしてください（他のモードではオーバーライドされる場合があります）。
+
+**Discord からの実行時変更：** `/tools-set` を使用すると、Bot を再起動せずに実行時に許可ツールを変更できます。設定は永続化され、以降のすべての新規セッションに即座に反映されます。現在の設定を確認するには `/tools-show`、`.env` デフォルトに戻すには `/tools-reset` を使用してください。
 
 > **Discord にパーミッションボタンが表示されないのはなぜ？** CLI の `-p` モードは `permission_request` イベントを発行しないため、ccdb に表示するものがありません。表示される `AskUserQuestion` ボタン（Claude からの選択プロンプト）は別のメカニズムであり、正常に動作します。詳細な調査は [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) を参照してください。
 
