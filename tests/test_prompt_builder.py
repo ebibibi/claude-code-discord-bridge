@@ -184,3 +184,74 @@ class TestBuildPromptAndImages:
         assert "alpha" in prompt
         assert "b.md" in prompt
         assert "beta" in prompt
+
+
+class TestNoContentType:
+    """content_type が None のとき（Discord のロングテキスト自動変換等）の動作。"""
+
+    @pytest.mark.asyncio
+    async def test_no_content_type_txt_extension_treated_as_text(self) -> None:
+        """Discord がロングテキストを message.txt に自動変換するとき content_type が
+        None になる。拡張子 .txt なら text/plain として扱うべき。"""
+        att = _make_attachment(
+            filename="message.txt",
+            content_type=None,
+            content=b"This is a long message that Discord converted to a file.",
+        )
+        att.content_type = None  # content_type を明示的に None に
+        msg = _make_message(content="", attachments=[att])
+
+        prompt, image_urls = await build_prompt_and_images(msg)
+
+        assert "message.txt" in prompt
+        assert "long message" in prompt
+        assert image_urls == []
+
+    @pytest.mark.asyncio
+    async def test_no_content_type_py_extension_treated_as_text(self) -> None:
+        """コードファイル（.py）も content_type なしでテキストとして読まれるべき。"""
+        att = _make_attachment(
+            filename="script.py",
+            content_type=None,
+            content=b"print('hello')",
+        )
+        att.content_type = None
+        msg = _make_message(content="fix this", attachments=[att])
+
+        prompt, _ = await build_prompt_and_images(msg)
+
+        assert "script.py" in prompt
+        assert "print('hello')" in prompt
+
+    @pytest.mark.asyncio
+    async def test_no_content_type_unknown_extension_skipped(self) -> None:
+        """content_type もなく拡張子も不明なら安全のためスキップ。"""
+        att = _make_attachment(
+            filename="data.bin",
+            content_type=None,
+            content=b"\x00\x01\x02binary",
+        )
+        att.content_type = None
+        msg = _make_message(content="what is this", attachments=[att])
+
+        prompt, image_urls = await build_prompt_and_images(msg)
+
+        assert "data.bin" not in prompt
+        assert image_urls == []
+
+    @pytest.mark.asyncio
+    async def test_no_content_type_png_extension_not_sent_as_image(self) -> None:
+        """content_type なし＋.png 拡張子でも、CDN URL が image_urls に入るべき。"""
+        att = _make_attachment(
+            filename="screenshot.png",
+            content_type=None,
+            url="https://cdn.discordapp.com/attachments/1/2/screenshot.png",
+            content=b"",
+        )
+        att.content_type = None
+        msg = _make_message(content="see this", attachments=[att])
+
+        _, image_urls = await build_prompt_and_images(msg)
+
+        assert len(image_urls) == 1
+        assert "screenshot.png" in image_urls[0]
