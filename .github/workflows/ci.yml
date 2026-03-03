@@ -54,6 +54,9 @@ jobs:
       - name: Post CI failure to Discord
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # Security: untrusted user input must go through env vars, not inline ${{ }} expansion
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           REF="${{ github.ref_name }}"
           EVENT="${{ github.event_name }}"
@@ -62,7 +65,7 @@ jobs:
           SHORT_SHA="${COMMIT:0:7}"
 
           if [ "$EVENT" = "pull_request" ]; then
-            CONTEXT="PR #${{ github.event.pull_request.number }} \`${{ github.event.pull_request.title }}\`"
+            CONTEXT="PR #${PR_NUMBER} \`${PR_TITLE}\`"
           else
             CONTEXT="push to \`${REF}\` (\`${SHORT_SHA}\`)"
           fi
