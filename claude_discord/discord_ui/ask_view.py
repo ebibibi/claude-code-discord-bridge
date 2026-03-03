@@ -22,6 +22,7 @@ custom_id format:  ``ask_{thread_id}_{q_idx}_{slot}``
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -149,18 +150,38 @@ class AskView(discord.ui.View):
         await self._deliver(interaction, values)
 
     async def _other_callback(self, interaction: discord.Interaction) -> None:
+        # Save the original message reference before send_modal() consumes the
+        # interaction response — we need it to update the Ask embed afterward.
+        original_message = interaction.message
         modal = AskModal(title="Your answer")
         await interaction.response.send_modal(modal)
         timed_out = await modal.wait()
         if not timed_out and modal.answer:
             delivered = self._bus.post_answer(self._thread_id, [modal.answer])
-            if not delivered:
+            if delivered:
+                # Mirror the button-click UX: edit the Ask message to confirm
+                # the submission so the user sees immediate visual feedback.
+                if original_message is not None:
+                    with contextlib.suppress(discord.HTTPException):
+                        await original_message.edit(
+                            content=f"-# ✅ **Selected:** {modal.answer}",
+                            embed=None,
+                            view=None,
+                        )
+            else:
                 if self._ask_repo is not None:
                     await self._ask_repo.delete(self._thread_id)
                 logger.warning(
                     "AskView._other_callback: session gone for thread %d after restart",
                     self._thread_id,
                 )
+                if original_message is not None:
+                    with contextlib.suppress(discord.HTTPException):
+                        await original_message.edit(
+                            content=_RESTART_MSG,
+                            embed=None,
+                            view=None,
+                        )
             self.stop()
 
 

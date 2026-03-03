@@ -318,3 +318,104 @@ class TestCollectAskAnswersTimeout:
             result = await collect_ask_answers(thread, [q], session_id="abc123")
 
         assert result is None  # timeout → no answer → returns None
+
+
+# ---------------------------------------------------------------------------
+# AskView._other_callback — visual feedback after modal submission
+# ---------------------------------------------------------------------------
+
+
+class TestAskViewOtherCallback:
+    """Tests that 'Other' modal submission gives immediate visual feedback.
+
+    Before this fix, the original Ask message was never updated after the modal
+    was submitted, leaving the user uncertain whether their answer was received.
+    """
+
+    def _make_question(self) -> AskQuestion:
+        return AskQuestion(
+            question="Which style?",
+            options=[AskOption(label="A"), AskOption(label="B")],
+        )
+
+    @pytest.mark.asyncio
+    async def test_other_callback_edits_original_message_on_success(self) -> None:
+        """After modal submission the original Ask message is replaced with
+        '✅ Selected: <answer>' so the user sees immediate feedback."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from claude_discord.discord_ui.ask_bus import AskAnswerBus
+        from claude_discord.discord_ui.ask_view import AskModal, AskView
+
+        bus = AskAnswerBus()
+        bus.register(thread_id=42)
+
+        question = self._make_question()
+        view = AskView(question, thread_id=42, q_idx=0, bus=bus)
+
+        # Simulate the original Discord message that holds the Ask embed.
+        original_msg = MagicMock()
+        original_msg.edit = AsyncMock()
+
+        # Simulate the button interaction that opens the modal.
+        interaction = MagicMock()
+        interaction.message = original_msg
+        interaction.response = MagicMock()
+        interaction.response.send_modal = AsyncMock()
+
+        # Patch AskModal so wait() resolves immediately with an answer.
+        async def fake_wait():
+            return False  # not timed out
+
+        mock_modal = MagicMock(spec=AskModal)
+        mock_modal.wait = fake_wait
+        mock_modal.answer = "My custom answer"
+
+        with patch("claude_discord.discord_ui.ask_view.AskModal", return_value=mock_modal):
+            await view._other_callback(interaction)
+
+        # The original message must be edited to confirm the submission.
+        original_msg.edit.assert_awaited_once()
+        call_kwargs = original_msg.edit.call_args.kwargs
+        assert "✅" in call_kwargs["content"]
+        assert "My custom answer" in call_kwargs["content"]
+        assert call_kwargs["view"] is None  # buttons removed
+
+    @pytest.mark.asyncio
+    async def test_other_callback_edits_original_message_when_session_gone(self) -> None:
+        """If the session is gone (bot restarted), the original message is updated
+        with the restart warning instead of silently leaving the ask message."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from claude_discord.discord_ui.ask_bus import AskAnswerBus
+        from claude_discord.discord_ui.ask_view import _RESTART_MSG, AskModal, AskView
+
+        bus = AskAnswerBus()
+        # No register() call → post_answer returns False (session gone).
+
+        question = self._make_question()
+        view = AskView(question, thread_id=99, q_idx=0, bus=bus)
+
+        original_msg = MagicMock()
+        original_msg.edit = AsyncMock()
+
+        interaction = MagicMock()
+        interaction.message = original_msg
+        interaction.response = MagicMock()
+        interaction.response.send_modal = AsyncMock()
+
+        async def fake_wait():
+            return False
+
+        mock_modal = MagicMock(spec=AskModal)
+        mock_modal.wait = fake_wait
+        mock_modal.answer = "Some answer"
+
+        with patch("claude_discord.discord_ui.ask_view.AskModal", return_value=mock_modal):
+            await view._other_callback(interaction)
+
+        # Must edit the original message to show the restart warning.
+        original_msg.edit.assert_awaited_once()
+        call_kwargs = original_msg.edit.call_args.kwargs
+        assert _RESTART_MSG in call_kwargs["content"]
+        assert call_kwargs["view"] is None
