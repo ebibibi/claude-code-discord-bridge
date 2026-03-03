@@ -74,9 +74,6 @@ _TOOL_RESULT_MAX_CHARS = 3000
 # Lines of output shown inline before the "展開 ▼" button appears.
 # 1 means single-line results are shown flat; 2+ lines get a collapse button.
 _COLLAPSED_LINES = 1
-# Minimum tool calls in a session before the requester is mentioned on completion.
-# Sessions with fewer tool calls are considered simple Q&A — no ping needed.
-_MENTION_TOOL_THRESHOLD = 3
 
 
 def _truncate_result(content: str) -> str:
@@ -340,14 +337,6 @@ class EventProcessor:
             )
             if self._config.status:
                 await self._config.status.set_done()
-
-            # Mention the requester when significant work (≥ threshold tool calls) was done.
-            if (
-                self._config.requester_id is not None
-                and self._state.tool_use_count >= _MENTION_TOOL_THRESHOLD
-            ):
-                with contextlib.suppress(discord.HTTPException):
-                    await self._config.thread.send(f"<@{self._config.requester_id}>")
 
         if event.session_id:
             if self._config.repo:
