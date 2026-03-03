@@ -144,7 +144,6 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Tool result embeds** — Live tool call results with elapsed time shown immediately (0s) and ticking up every 5s; single-line outputs shown inline, multi-line outputs collapsed behind an expand button
 - **Extended thinking** — Reasoning shown as spoiler-tagged embeds (click to reveal)
 - **Thread dashboard** — Live pinned embed showing which threads are active vs. waiting; owner @-mentioned when input is needed
-- **Completion mention** — After significant work (≥ 3 tool calls), the requester is @-mentioned when the session completes; simple Q&A sessions skip the ping
 
 #### 🤝 Human-in-the-Loop
 - **Interactive questions** — `AskUserQuestion` renders as Discord Buttons or Select Menu; session resumes with your answer; buttons survive bot restarts
