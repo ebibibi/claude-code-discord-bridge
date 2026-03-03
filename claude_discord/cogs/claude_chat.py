@@ -53,6 +53,8 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "help": None,  # the help command doesn't list itself
     "stop": "📌 Session",
     "clear": "📌 Session",
+    "rewind": "📌 Session",
+    "fork": "📌 Session",
     "sessions": "📌 Session",
     "resume-info": "📌 Session",
     "sync-sessions": "📌 Session",
@@ -312,6 +314,99 @@ class ClaudeChatCog(commands.Cog):
             await interaction.response.send_message(
                 "No active session found for this thread.", ephemeral=True
             )
+
+    @app_commands.command(
+        name="rewind",
+        description="Reset the conversation while keeping your working files",
+    )
+    async def rewind_session(self, interaction: discord.Interaction) -> None:
+        """Reset conversation history, preserving working files in the thread's directory.
+
+        Unlike /clear, this command emphasises that **files created by Claude are kept** —
+        only the conversation context is erased.  The thread remains open and the next
+        message will start a fresh Claude session in the same working directory.
+
+        Useful when Claude has gone off-track and you want to restart the conversation
+        without losing the code or files it already wrote.
+        """
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message(
+                "This command can only be used in a Claude chat thread.", ephemeral=True
+            )
+            return
+
+        # Kill active runner if any — same as /clear.
+        runner = self._active_runners.get(interaction.channel.id)
+        if runner:
+            await runner.kill()
+            del self._active_runners[interaction.channel.id]
+
+        deleted = await self.repo.delete(interaction.channel.id)
+        if not deleted:
+            await interaction.response.send_message(
+                "No active session found for this thread.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            "🔄 **Conversation reset.** "
+            "Working files are preserved — only the conversation history was cleared. "
+            "Send a new message to start a fresh session."
+        )
+
+    @app_commands.command(
+        name="fork",
+        description="Branch this conversation into a new thread",
+    )
+    async def fork_session(self, interaction: discord.Interaction) -> None:
+        """Create a new thread that continues this conversation from the current point.
+
+        The new thread starts a fresh Claude process that resumes the **same session**
+        via ``--resume``, giving you a copy of the conversation history so you can
+        explore a different direction without affecting the original thread.
+
+        Useful when you want to try an alternative approach while keeping the current
+        thread intact.
+        """
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message(
+                "This command can only be used in a Claude chat thread.", ephemeral=True
+            )
+            return
+
+        record = await self.repo.get(interaction.channel.id)
+        if record is None:
+            await interaction.response.send_message(
+                "No active session found for this thread. "
+                "Start a conversation first, then use /fork to branch it.",
+                ephemeral=True,
+            )
+            return
+
+        parent_channel = getattr(interaction.channel, "parent", None)
+        if not isinstance(parent_channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Cannot create a fork: unable to find the parent channel.", ephemeral=True
+            )
+            return
+
+        # Defer so we have time to create the thread before Discord's 3-second limit.
+        await interaction.response.defer(ephemeral=False)
+
+        fork_name = f"🔀 Fork of {interaction.channel.name}"[:100]
+        new_thread = await self.spawn_session(
+            channel=parent_channel,
+            prompt=(
+                "This thread is a fork of the previous conversation. "
+                "Continue from where we left off."
+            ),
+            thread_name=fork_name,
+            session_id=record.session_id,
+        )
+
+        await interaction.followup.send(
+            f"🔀 Forked! Continue in {new_thread.mention} — this thread is unchanged."
+        )
 
     async def _handle_new_conversation(self, message: discord.Message) -> None:
         """Start a Claude Code session, creating a thread unless inline-reply mode is active."""
