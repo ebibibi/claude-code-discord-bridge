@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -33,6 +34,15 @@ if TYPE_CHECKING:
     from ..database.task_repo import TaskRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_log(value: object) -> str:
+    """Sanitize user-provided values before writing to logs.
+
+    Strips newline and carriage-return characters to prevent log injection
+    attacks where an attacker embeds fake log entries in a single field.
+    """
+    return re.sub(r"[\r\n]", " ", str(value))
 
 
 class ApiServer:
@@ -283,7 +293,7 @@ class ApiServer:
             logger.warning("Failed to create task: %s", exc)
             return web.json_response({"error": "Task name already exists"}, status=409)
 
-        logger.info("Task registered via API: id=%d, name=%s", task_id, data["name"])
+        logger.info("Task registered via API: id=%d, name=%s", task_id, _sanitize_log(data["name"]))
         return web.json_response({"status": "created", "id": task_id}, status=201)
 
     async def list_tasks(self, request: web.Request) -> web.Response:
@@ -587,8 +597,8 @@ class ApiServer:
         logger.info(
             "Thread %d marked for resume (reason=%s, session_id=%s)",
             thread_id,
-            reason,
-            session_id,
+            _sanitize_log(reason),
+            _sanitize_log(session_id),
         )
         return web.json_response({"status": "marked", "id": row_id}, status=201)
 
