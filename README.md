@@ -159,6 +159,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Compact detection** — Notifies in-thread when context compaction occurs (trigger type + token count before compact)
 - **Hard stall notification** — Thread message after 30 s of no activity (extended thinking or context compression); resets automatically when Claude resumes
 - **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
+- **Thread inbox** — When `THREAD_INBOX_ENABLED=true`, the dashboard shows a persistent 📬 inbox section: after each session ends, Claude classifies the final message (`waiting` / `done` / `ambiguous`) via a lightweight `claude -p` call; threads awaiting your reply survive bot restarts and are surfaced until you respond
 
 #### 🔌 Input & Skills
 - **Attachment support** — Text files auto-appended to prompt (up to 5 files, 200 KB each / 500 KB total; oversized files are truncated with a notice rather than skipped); images sent as Discord CDN URLs via `--input-format stream-json` (up to 4 × 5 MB); long pasted messages that Discord auto-converts to file attachments (without `content_type`) are handled via extension-based detection
@@ -482,6 +483,7 @@ In inline-reply mode, Claude's response is sent directly as a message in the cha
 | `CUSTOM_COGS_DIR` | Directory containing custom Cog files to load at startup (see [Custom Cogs](#custom-cogs-extend-without-forking)) | (optional) |
 | `CLAUDE_ALLOWED_TOOLS` | Comma-separated list of allowed tools for Claude CLI | (optional) |
 | `CLAUDE_CHANNEL_IDS` | Additional channel IDs (comma-separated) for multi-channel setup | (optional) |
+| `THREAD_INBOX_ENABLED` | Enable the persistent thread inbox (classifies sessions as `waiting`/`done`/`ambiguous` via `claude -p`; shown in thread dashboard) | `false` |
 | `API_HOST` | REST API bind address | `127.0.0.1` |
 | `API_PORT` | REST API port (enables REST API when set) | (optional) |
 
@@ -766,6 +768,7 @@ claude_discord/
     lounge_repo.py         # AI Lounge message CRUD
     resume_repo.py         # Startup resume CRUD (pending resumes across bot restarts)
     settings_repo.py       # Per-guild settings
+    inbox_repo.py          # Thread inbox CRUD (THREAD_INBOX_ENABLED)
   discord_ui/
     status.py              # Emoji reaction manager (debounced)
     chunker.py             # Fence- and table-aware message splitting
@@ -781,6 +784,7 @@ claude_discord/
     permission_view.py     # Allow/Deny buttons for tool permission requests
     elicitation_view.py    # Discord UI for MCP elicitation (Modal form or URL button)
     file_sender.py         # File delivery via .ccdb-attachments
+    inbox_classifier.py    # classify() — lightweight claude -p call to label sessions
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
   utils/
@@ -811,7 +815,7 @@ examples/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-840+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, and permission/elicitation/plan-mode event parsing.
+906+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, and thread inbox classification.
 
 ---
 

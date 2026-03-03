@@ -600,7 +600,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-700+ testes cobrindo parser, chunker, repositório, runner, streaming, disparadores webhook, auto-atualização (incluindo o comando `/upgrade`, invocação de thread e botão de aprovação), REST API, UI do AskUserQuestion, painel de threads, tarefas agendadas, sincronização de sessões, AI Lounge, retomada na inicialização, troca de modelo, detecção de compactação, embeds de progresso do TodoWrite, e análise de eventos de permissão/elicitation/plan-mode.
+906+ testes cobrindo parser, chunker, repositório, runner, streaming, disparadores webhook, auto-atualização (incluindo o comando `/upgrade`, invocação de thread e botão de aprovação), REST API, UI do AskUserQuestion, painel de threads, tarefas agendadas, sincronização de sessões, AI Lounge, retomada na inicialização, troca de modelo, detecção de compactação, embeds de progresso do TodoWrite, e análise de eventos de permissão/elicitation/plan-mode.
 
 ---
 

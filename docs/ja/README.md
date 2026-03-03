@@ -160,6 +160,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **コンパクト検出** — コンテキスト圧縮が発生した際にスレッド内で通知（トリガー種別 + 圧縮前のトークン数）
 - **長時間停止通知** — 30 秒間アクティビティがない場合にスレッドメッセージを送信（長考やコンテキスト圧縮中の可能性を通知）。Claude が再開すると自動リセット
 - **タイムアウト通知** — 経過時間とリジューム手順付きの embed 表示
+- **スレッドインボックス** — `THREAD_INBOX_ENABLED=true` を設定すると、ダッシュボードに永続的な 📬 インボックスセクションが表示されます。セッション終了後、軽量な `claude -p` 呼び出しで最終メッセージを `waiting`（返信待ち）/ `done`（完了）/ `ambiguous`（不明）に分類。返信が必要なスレッドは Bot 再起動後も保持され、あなたが返信するまでサーフェスされます
 
 #### 🔌 入力とスキル
 - **添付ファイル対応** — テキストファイルをプロンプトに自動追加（最大 5 ファイル、1 ファイルあたり 200 KB / 合計 500 KB まで；上限を超えたファイルはスキップせずに先頭部分を切り取って通知付きで追加）；画像は Discord CDN URL として `--input-format stream-json` 経由で送信（最大 4 枚 × 5 MB）；Discord が長文貼り付けを自動的にファイル添付（`content_type` なし）に変換した場合も、拡張子ベースの検出で正しく処理
@@ -381,6 +382,7 @@ INLINE_REPLY_CHANNEL_IDS=333,444
 | `MENTION_ONLY_CHANNEL_IDS` | @メンション時のみ応答するチャンネル ID（カンマ区切り） | （オプション） |
 | `INLINE_REPLY_CHANNEL_IDS` | インライン返信チャンネル ID（カンマ区切り、スレッドを作成しない） | （オプション） |
 | `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
+| `THREAD_INBOX_ENABLED` | 永続スレッドインボックスを有効化（`claude -p` でセッションを `waiting`/`done`/`ambiguous` に分類し、スレッドダッシュボードに表示） | `false` |
 
 ### パーミッションモード — `-p` モードで動作するもの
 
@@ -663,6 +665,7 @@ claude_discord/
     lounge_repo.py         # AI Lounge メッセージ CRUD
     resume_repo.py         # スタートアップリジューム CRUD（Bot 再起動をまたいだ保留リジューム）
     settings_repo.py       # ギルドごとの設定
+    inbox_repo.py          # スレッドインボックス CRUD（THREAD_INBOX_ENABLED）
   discord_ui/
     status.py              # 絵文字リアクションステータスマネージャー（デバウンス付き）
     chunker.py             # フェンス・テーブル対応メッセージ分割
@@ -678,6 +681,7 @@ claude_discord/
     permission_view.py     # ツール実行許可ボタン（Allow/Deny）
     elicitation_view.py    # MCP Elicitation 用 Discord UI（Modal フォームまたは URL ボタン）
     file_sender.py         # .ccdb-attachments 経由のファイル配信
+    inbox_classifier.py    # classify() — セッションにラベルを付ける軽量 claude -p 呼び出し
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）
   utils/
@@ -701,7 +705,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-700 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード（`/upgrade` スラッシュコマンド、スレッド内実行、承認ボタン含む）、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジューム、モデル切り替え、コンパクト検出、TodoWrite 進捗 embed、許可／Elicitation／Plan Mode イベントパースをカバーしています。
+906 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード（`/upgrade` スラッシュコマンド、スレッド内実行、承認ボタン含む）、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジューム、モデル切り替え、コンパクト検出、TodoWrite 進捗 embed、カスタム Cog ローダー、許可／Elicitation／Plan Mode イベントパース、スレッドインボックス分類をカバーしています。
 
 ---
 

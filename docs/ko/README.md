@@ -338,7 +338,7 @@ CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-700+ 테스트가 파서, 분할기, 저장소, 러너, 스트리밍, 웹훅 트리거, 자동 업그레이드(`/upgrade` 슬래시 명령, 스레드 호출 및 승인 버튼 포함), REST API, AskUserQuestion UI, 스레드 대시보드, 예약 작업, 세션 동기화, AI Lounge, 시작 시 재개, 모델 전환, 압축 감지, TodoWrite 진행 embed, 권한/elicitation/plan-mode 이벤트 파싱을 커버합니다.
+906+ 테스트가 파서, 분할기, 저장소, 러너, 스트리밍, 웹훅 트리거, 자동 업그레이드(`/upgrade` 슬래시 명령, 스레드 호출 및 승인 버튼 포함), REST API, AskUserQuestion UI, 스레드 대시보드, 예약 작업, 세션 동기화, AI Lounge, 시작 시 재개, 모델 전환, 압축 감지, TodoWrite 진행 embed, 권한/elicitation/plan-mode 이벤트 파싱을 커버합니다.
 
 ---
 
