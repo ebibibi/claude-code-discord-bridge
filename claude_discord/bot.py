@@ -16,6 +16,7 @@ from .discord_ui.ask_view import AskView
 
 if TYPE_CHECKING:
     from .database.ask_repo import PendingAskRepository
+    from .database.inbox_repo import ThreadInboxRepository
     from .database.lounge_repo import LoungeRepository
     from .discord_ui.thread_dashboard import ThreadStatusDashboard
     from .worktree import WorktreeManager
@@ -58,6 +59,8 @@ class ClaudeDiscordBot(commands.Bot):
         self.lounge_channel_id: int | None = lounge_channel_id
         # Worktree lifecycle manager — cleans up session worktrees after runs
         self.worktree_manager: WorktreeManager | None = worktree_manager
+        # Thread inbox repository — None until THREAD_INBOX_ENABLED=true and setup_bridge runs
+        self.inbox_repo: ThreadInboxRepository | None = None
 
     async def on_ready(self) -> None:
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "?")
@@ -79,6 +82,12 @@ class ClaudeDiscordBot(commands.Bot):
             )
             await self.thread_dashboard.initialize()
             logger.info("Thread status dashboard initialised in channel %d", self.channel_id)
+
+            # If inbox is enabled, restore persistent entries from DB into dashboard.
+            inbox_repo = getattr(self, "inbox_repo", None)
+            if inbox_repo is not None:
+                await self.thread_dashboard.refresh_inbox(inbox_repo)
+                logger.info("Thread inbox restored from DB")
         else:
             logger.warning(
                 "Could not resolve channel %d to a TextChannel; dashboard disabled",

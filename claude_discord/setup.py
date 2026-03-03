@@ -78,6 +78,7 @@ async def setup_bridge(
     task_db_path: str = "data/tasks.db",
     lounge_channel_id: int | None = None,
     worktree_base_dir: str | None = None,
+    enable_thread_inbox: bool = False,
 ) -> BridgeComponents:
     """Initialize and register all ccdb Cogs in one call.
 
@@ -129,6 +130,7 @@ async def setup_bridge(
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
     from .database.ask_repo import PendingAskRepository
+    from .database.inbox_repo import ThreadInboxRepository
     from .database.lounge_repo import LoungeRepository
     from .database.models import init_db
     from .database.repository import SessionRepository
@@ -185,6 +187,12 @@ async def setup_bridge(
     # without a hard import dependency on ccdb internals.
     bot.session_repo = session_repo  # type: ignore[attr-defined]
     bot.resume_repo = resume_repo  # type: ignore[attr-defined]
+
+    # --- Thread inbox (optional — THREAD_INBOX_ENABLED=true) ---
+    if enable_thread_inbox:
+        inbox_repo = ThreadInboxRepository(session_db_path)
+        bot.inbox_repo = inbox_repo  # type: ignore[attr-defined]
+        logger.info("Thread inbox enabled")
 
     # --- ClaudeChatCog ---
     chat_cog = ClaudeChatCog(

@@ -58,6 +58,18 @@ CREATE TABLE IF NOT EXISTS pending_resumes (
     resume_prompt TEXT,        -- message to post + send to Claude on resume
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+-- Thread inbox: persistent status tracking across bot restarts.
+-- Populated when a Claude session ends; cleared when the user replies.
+-- status: 'waiting' (user's reply needed) | 'ambiguous' (unclear)
+-- confidence: 'high' | 'low' (from claude -p classification)
+CREATE TABLE IF NOT EXISTS thread_inbox (
+    thread_id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'waiting',
+    confidence TEXT NOT NULL DEFAULT 'high',
+    last_message_url TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
 """
 
 # Migrations for existing databases that lack new columns.
@@ -83,6 +95,15 @@ _MIGRATIONS = [
         "reason TEXT NOT NULL DEFAULT 'self_restart', "
         "resume_prompt TEXT, "
         "created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
+    ),
+    # thread_inbox added in v1.9 — safe to run on existing DBs
+    (
+        "CREATE TABLE IF NOT EXISTS thread_inbox ("
+        "thread_id INTEGER PRIMARY KEY, "
+        "status TEXT NOT NULL DEFAULT 'waiting', "
+        "confidence TEXT NOT NULL DEFAULT 'high', "
+        "last_message_url TEXT, "
+        "updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
     ),
 ]
 

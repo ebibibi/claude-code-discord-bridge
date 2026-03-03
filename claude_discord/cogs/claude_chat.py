@@ -610,6 +610,20 @@ class ClaudeChatCog(commands.Cog):
         if not prompt and not image_urls:
             return
 
+        # User replied — remove this thread from the inbox immediately so the
+        # dashboard no longer surfaces it as needing attention.
+        # Use isinstance checks so plain MagicMock bots in tests are ignored safely.
+        from ..database.inbox_repo import ThreadInboxRepository
+        from ..discord_ui.thread_dashboard import ThreadStatusDashboard
+
+        _inbox_repo = getattr(self.bot, "inbox_repo", None)
+        if isinstance(_inbox_repo, ThreadInboxRepository):
+            _removed = await _inbox_repo.remove(thread.id)
+            if _removed:
+                _dashboard = getattr(self.bot, "thread_dashboard", None)
+                if isinstance(_dashboard, ThreadStatusDashboard):
+                    await _dashboard.refresh_inbox(_inbox_repo)
+
         # Interrupt any active session in this thread before starting a new one.
         existing_runner = self._active_runners.get(thread.id)
         existing_task = self._active_tasks.get(thread.id)
@@ -705,6 +719,9 @@ class ClaudeChatCog(commands.Cog):
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
                         image_urls=image_urls,
                         attach_on_request=wants_file_attachment(prompt),
+                        inbox_repo=getattr(self.bot, "inbox_repo", None),
+                        inbox_dashboard=dashboard,
+                        claude_command=runner.command,
                     )
                 )
             finally:

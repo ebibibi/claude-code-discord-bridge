@@ -21,6 +21,8 @@ from ..database.repository import SessionRepository
 from ..discord_ui.status import StatusManager
 
 if TYPE_CHECKING:
+    from ..database.inbox_repo import ThreadInboxRepository
+    from ..discord_ui.thread_dashboard import ThreadStatusDashboard
     from ..discord_ui.views import StopView
     from ..worktree import WorktreeManager
 
@@ -68,6 +70,12 @@ class RunConfig:
     # When True, inject a system-prompt instruction telling Claude to write
     # requested file paths to .ccdb-attachments so the bot can send them.
     attach_on_request: bool = False
+    # Thread inbox — when set, classifies the session's final message after
+    # completion and persists the result so the dashboard can surface threads
+    # that need the user's attention across bot restarts.
+    inbox_repo: ThreadInboxRepository | None = None
+    inbox_dashboard: ThreadStatusDashboard | None = None
+    claude_command: str = "claude"
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

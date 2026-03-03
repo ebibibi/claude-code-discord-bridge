@@ -296,6 +296,8 @@ class EventProcessor:
 
     async def _on_complete(self, event: StreamEvent) -> None:
         """Handle RESULT events — finalize streaming, post summary embed."""
+        import asyncio
+
         from ..discord_ui.embeds import (
             session_complete_embed,
         )
@@ -303,9 +305,16 @@ class EventProcessor:
         from ._run_helper import _make_error_embed
 
         # Finalize any in-progress streaming message.
+        # Capture the URL before sending session_complete_embed (which would
+        # become last_message_id and hide Claude's actual reply).
+        last_assistant_url: str | None = None
+        last_assistant_text: str = self._state.accumulated_text
+
         if self._streamer.has_content:
             await self._streamer.finalize()
             self._assistant_text_sent = True
+            if self._streamer._current_message is not None:
+                last_assistant_url = self._streamer._current_message.jump_url
 
         if event.error:
             await self._config.thread.send(embed=_make_error_embed(event.error))
@@ -315,8 +324,12 @@ class EventProcessor:
             # Post final result text only if no assistant text was already sent.
             response_text = event.text
             if response_text and not self._assistant_text_sent:
+                last_sent: discord.Message | None = None
                 for chunk in chunk_message(response_text):
-                    await self._config.thread.send(chunk)
+                    last_sent = await self._config.thread.send(chunk)
+                if last_sent is not None:
+                    last_assistant_url = last_sent.jump_url
+                last_assistant_text = response_text
 
             # Send files listed in the .ccdb-attachments marker file, if present.
             await _send_attachment_requests(
@@ -337,6 +350,21 @@ class EventProcessor:
             )
             if self._config.status:
                 await self._config.status.set_done()
+
+            # Schedule inbox classification as a background task (non-blocking).
+            # Only runs when inbox_repo is wired in (THREAD_INBOX_ENABLED=true).
+            if self._config.inbox_repo is not None and last_assistant_text:
+                asyncio.create_task(
+                    _classify_and_update_inbox(
+                        thread_id=self._config.thread.id,
+                        last_text=last_assistant_text,
+                        last_message_url=last_assistant_url,
+                        inbox_repo=self._config.inbox_repo,
+                        dashboard=self._config.inbox_dashboard,
+                        claude_command=self._config.claude_command,
+                    ),
+                    name=f"inbox-classify-{self._config.thread.id}",
+                )
 
         if event.session_id:
             if self._config.repo:
@@ -474,3 +502,51 @@ class EventProcessor:
         """Move the Stop button to the bottom of the thread if configured."""
         if self._config.stop_view:
             await self._config.stop_view.bump(self._config.thread)
+
+
+# ---------------------------------------------------------------------------
+# Inbox classification helper (module-level so it can be unit-tested)
+# ---------------------------------------------------------------------------
+
+
+async def _classify_and_update_inbox(
+    thread_id: int,
+    last_text: str,
+    last_message_url: str | None,
+    inbox_repo: object,
+    dashboard: object | None,
+    claude_command: str,
+) -> None:
+    """Classify the session's final message and persist the inbox entry.
+
+    Runs as a background asyncio task so it does not block the main flow.
+    Type annotations use ``object`` to avoid a circular import; the actual
+    types are ThreadInboxRepository and ThreadStatusDashboard.
+    """
+    from ..database.inbox_repo import ThreadInboxRepository
+    from ..discord_ui.inbox_classifier import classify
+    from ..discord_ui.thread_dashboard import ThreadStatusDashboard
+
+    assert isinstance(inbox_repo, ThreadInboxRepository)
+
+    try:
+        result = await classify(last_text, claude_command=claude_command)
+        logger.debug("inbox classify thread_id=%d result=%s", thread_id, result)
+
+        if result == "done":
+            # Proactively remove from inbox — no action needed
+            await inbox_repo.remove(thread_id)
+        else:
+            confidence = "high" if result == "waiting" else "low"
+            await inbox_repo.upsert(
+                thread_id=thread_id,
+                status=result,  # type: ignore[arg-type]
+                confidence=confidence,
+                last_message_url=last_message_url,
+            )
+
+        if isinstance(dashboard, ThreadStatusDashboard):
+            await dashboard.refresh_inbox(inbox_repo)
+
+    except Exception:
+        logger.warning("inbox classify task failed for thread_id=%d", thread_id, exc_info=True)

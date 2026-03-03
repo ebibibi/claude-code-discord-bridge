@@ -5,6 +5,10 @@ threads are processing automatically vs. waiting for user input.
 When a thread transitions to WAITING_INPUT, the bot mentions the owner
 so Discord's notification system surfaces the request immediately.
 
+When THREAD_INBOX_ENABLED is set, the dashboard also shows a persistent
+inbox section (📬) that survives bot restarts and surfaces threads where
+the user owes a reply.
+
 Issue: https://github.com/ebibibi/claude-code-discord-bridge/issues/67
 """
 
@@ -15,8 +19,12 @@ import logging
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
 import discord
+
+if TYPE_CHECKING:
+    from ..database.inbox_repo import InboxEntry, ThreadInboxRepository
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +92,8 @@ class ThreadStatusDashboard:
         self._threads: dict[int, _ThreadInfo] = {}
         self._dashboard_message: discord.Message | None = None
         self._lock = asyncio.Lock()
+        # Persistent inbox entries (populated from DB when inbox is enabled).
+        self._inbox: list[InboxEntry] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -167,6 +177,16 @@ class ThreadStatusDashboard:
             self._threads.pop(thread_id, None)
             await self._refresh_dashboard()
 
+    async def refresh_inbox(self, inbox_repo: ThreadInboxRepository) -> None:
+        """Reload inbox entries from DB and refresh the dashboard embed.
+
+        Called after every inbox upsert/remove so the embed stays current.
+        """
+        entries = await inbox_repo.list_all()
+        async with self._lock:
+            self._inbox = entries
+            await self._refresh_dashboard()
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -204,18 +224,23 @@ class ThreadStatusDashboard:
 
     def _build_embed(self) -> discord.Embed:
         """Construct the Discord embed reflecting current thread states."""
-        if not self._threads:
+        has_live = bool(self._threads)
+        has_inbox = bool(self._inbox)
+        any_inbox_waiting = any(e.status == "waiting" for e in self._inbox)
+
+        if not has_live and not has_inbox:
             return discord.Embed(
                 title="📊 Session Status",
                 description="No active sessions.",
                 color=_COLOR_IDLE,
             )
 
-        any_waiting = any(t.state == ThreadState.WAITING_INPUT for t in self._threads.values())
-        color = _COLOR_WAITING if any_waiting else _COLOR_PROCESSING
+        any_live_waiting = any(t.state == ThreadState.WAITING_INPUT for t in self._threads.values())
+        color = _COLOR_WAITING if (any_live_waiting or any_inbox_waiting) else _COLOR_PROCESSING
 
         embed = discord.Embed(title="📊 Session Status", color=color)
 
+        # ── Live sessions ──────────────────────────────────────────────
         now = time.monotonic()
         for info in sorted(self._threads.values(), key=lambda t: t.started_at):
             icon = _STATE_ICON[info.state.value]
@@ -231,5 +256,18 @@ class ThreadStatusDashboard:
                 inline=False,
             )
 
-        embed.set_footer(text="Updates automatically · stale entries removed after 4h")
+        # ── Persistent inbox ───────────────────────────────────────────
+        if has_inbox:
+            embed.add_field(name="📬 Inbox", value="\u200b", inline=False)
+            for entry in self._inbox:
+                icon = "🟡" if entry.status == "waiting" else "❓"
+                conf = "" if entry.confidence == "high" else " _(uncertain)_"
+                link = f" — [→ jump]({entry.last_message_url})" if entry.last_message_url else ""
+                embed.add_field(
+                    name=f"{icon} <#{entry.thread_id}>{conf}",
+                    value=f"{entry.updated_at}{link}",
+                    inline=False,
+                )
+
+        embed.set_footer(text="Updates automatically · stale live entries removed after 4h")
         return embed
