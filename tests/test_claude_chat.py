@@ -650,6 +650,99 @@ class TestCogUnloadMarkForResume:
 
         assert resume_repo.mark.call_args.kwargs["session_id"] is None
 
+    @pytest.mark.asyncio
+    async def test_resume_prompt_warns_against_auto_implementation(self) -> None:
+        """The default resume prompt must NOT instruct Claude to complete pending tasks.
+
+        After a bot restart, context compression may have erased the approval
+        status of planned tasks.  The prompt must ask Claude to *report* the
+        state first, not to auto-implement anything.
+        """
+        cog, _, resume_repo = self._make_cog_with_resume_repo()
+        cog._active_runners[666] = MagicMock()
+
+        await cog.cog_unload()
+
+        prompt: str = resume_repo.mark.call_args.kwargs["resume_prompt"]
+        # Must NOT tell Claude to complete remaining work automatically.
+        assert "完了してください" not in prompt
+        assert "残作業" not in prompt
+        # Must ask Claude to report/confirm before acting.
+        assert any(word in prompt for word in ("報告", "確認", "confirm", "report"))
+
+    @pytest.mark.asyncio
+    async def test_resume_prompt_mentions_context_compression_risk(self) -> None:
+        """The default resume prompt warns that context compression may have occurred."""
+        cog, _, resume_repo = self._make_cog_with_resume_repo()
+        cog._active_runners[777] = MagicMock()
+
+        await cog.cog_unload()
+
+        prompt: str = resume_repo.mark.call_args.kwargs["resume_prompt"]
+        # The prompt should mention the risk of lost approval state.
+        assert any(
+            word in prompt for word in ("コンテキスト", "圧縮", "context", "compress", "承認")
+        )
+
+
+class TestOnReadyFallbackResumePrompt:
+    """Tests for the fallback resume_prompt used when on_ready finds no stored prompt."""
+
+    @pytest.mark.asyncio
+    async def test_fallback_prompt_warns_against_auto_implementation(self) -> None:
+        """The on_ready fallback prompt must not instruct Claude to auto-complete tasks.
+
+        When a PendingResume entry has no resume_prompt stored (e.g. from an
+        older bot version or /api/mark-resume without a prompt), on_ready uses
+        a hardcoded fallback.  That fallback must carry the same safety warning
+        as the cog_unload default.
+        """
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        from claude_discord.database.resume_repo import PendingResume, PendingResumeRepository
+
+        # Entry with no resume_prompt — triggers the fallback.
+        entry = PendingResume(
+            id=1,
+            thread_id=100,
+            session_id="sess-x",
+            reason="bot_shutdown",
+            resume_prompt=None,  # force fallback
+            created_at="2026-03-03 00:00:00",
+        )
+        resume_repo = MagicMock(spec=PendingResumeRepository)
+        resume_repo.get_pending = AsyncMock(return_value=[entry])
+        resume_repo.delete = AsyncMock()
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 100
+        sent_prompts: list[str] = []
+
+        async def capture_send(content: str) -> MagicMock:
+            sent_prompts.append(content)
+            return MagicMock()
+
+        thread.send = capture_send
+        thread.parent = MagicMock(spec=discord.TextChannel)
+
+        bot = MagicMock()
+        bot.get_channel.return_value = thread
+
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock(), resume_repo=resume_repo)
+
+        with patch.object(cog, "_run_claude", new=AsyncMock()):
+            await cog.on_ready()
+
+        assert sent_prompts, "Expected at least one message to be sent to the thread"
+        full_message = sent_prompts[0]
+        # Must NOT auto-instruct completion of pending tasks.
+        assert "完了してください" not in full_message
+        assert "残作業" not in full_message
+        # Must ask Claude to report/confirm first.
+        assert any(word in full_message for word in ("報告", "確認", "confirm", "report"))
+
 
 class TestOnMessageSystemMessageFilter:
     """on_message must ignore Discord system messages (e.g. thread renames)."""
