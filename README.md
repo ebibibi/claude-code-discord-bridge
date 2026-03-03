@@ -185,7 +185,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Webhook triggers** — Trigger Claude Code tasks from GitHub Actions or any CI/CD system
 - **Auto-upgrade** — Automatically update the bot when upstream packages are released
 - **DrainAware restart** — Waits for active sessions to finish before restarting
-- **Auto-resume marking** — Active sessions are automatically marked for resume on any shutdown (upgrade restart via `AutoUpgradeCog`, or any other shutdown via `ClaudeChatCog.cog_unload()`); they pick up where they left off after the bot comes back online
+- **Auto-resume marking** — Active sessions are automatically marked for resume on any shutdown (upgrade restart via `AutoUpgradeCog`, or any other shutdown via `ClaudeChatCog.cog_unload()`); on restart Claude reports its previous state and re-confirms with the user before resuming any implementation work
 - **Restart approval** — Optional gate to confirm upgrades; approve via ✅ reaction in the upgrade thread or via button posted to the parent channel; the button re-posts itself at the bottom as new messages arrive so it stays visible
 - **Manual upgrade trigger** — `/upgrade` slash command lets authorised users trigger the upgrade pipeline directly from Discord (opt-in via `slash_command_enabled=True`)
 
@@ -667,7 +667,7 @@ Before restarting, `AutoUpgradeCog`:
 
 1. **Snapshots active sessions** — Collects all threads with running Claude sessions (duck-typed: any Cog with `_active_runners` dict is discovered automatically).
 2. **Drains** — Waits for active sessions to finish naturally.
-3. **Marks for resume** — Saves active thread IDs to the pending-resumes table. On next startup, those sessions are resumed automatically with a "bot restarted, please continue" prompt.
+3. **Marks for resume** — Saves active thread IDs to the pending-resumes table. On next startup, those sessions are resumed with a safety-first prompt: Claude reports what it was working on and asks the user to re-confirm before resuming any implementation work (code changes, commits, PRs). This prevents unintended actions after context compression may have erased task approval state.
 4. **Restarts** — Executes the configured restart command.
 
 Any Cog with an `active_count` property is auto-discovered and drained:
