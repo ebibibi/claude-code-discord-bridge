@@ -31,6 +31,7 @@ from ..database.settings_repo import SettingsRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
+from ..discord_ui.thread_renamer import suggest_title
 from ..discord_ui.views import StopView
 from ._run_helper import run_claude_with_config
 from .prompt_builder import build_prompt_and_images, wants_file_attachment
@@ -94,6 +95,7 @@ class ClaudeChatCog(commands.Cog):
         channel_ids: set[int] | None = None,
         mention_only_channel_ids: set[int] | None = None,
         inline_reply_channel_ids: set[int] | None = None,
+        auto_rename_threads: bool = False,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -131,6 +133,8 @@ class ClaudeChatCog(commands.Cog):
         self._resume_repo = resume_repo or getattr(bot, "resume_repo", None)
         # Settings repo for dynamic model lookup (optional — falls back to runner.model)
         self._settings_repo = settings_repo or getattr(bot, "settings_repo", None)
+        # When True, rename the thread after creation using a claude -p title suggestion
+        self._auto_rename_threads = auto_rename_threads
 
     @property
     def active_session_count(self) -> int:
@@ -422,7 +426,27 @@ class ClaudeChatCog(commands.Cog):
         else:
             thread_name = message.content[:100] if message.content else "Claude Chat"
             thread = await message.create_thread(name=thread_name)
+            if self._auto_rename_threads and message.content:
+                asyncio.create_task(self._background_rename_thread(thread, message.content))
             await self._run_claude(message, thread, prompt, session_id=None, image_urls=image_urls)
+
+    async def _background_rename_thread(
+        self,
+        thread: discord.Thread,
+        user_message: str,
+    ) -> None:
+        """Rename *thread* to a Claude-generated title based on the first user message.
+
+        Runs as a background asyncio task so it does not block the main session.
+        Silently no-ops on any error so the thread name is never left in a bad state.
+        """
+        title = await suggest_title(user_message, claude_command=self.runner.command)
+        if title:
+            try:
+                await thread.edit(name=title)
+                logger.debug("thread %d renamed to %r", thread.id, title)
+            except Exception:
+                logger.warning("Failed to rename thread %d to %r", thread.id, title, exc_info=True)
 
     async def spawn_session(
         self,

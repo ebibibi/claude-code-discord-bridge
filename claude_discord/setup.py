@@ -79,6 +79,7 @@ async def setup_bridge(
     lounge_channel_id: int | None = None,
     worktree_base_dir: str | None = None,
     enable_thread_inbox: bool = False,
+    auto_rename_threads: bool | None = None,
 ) -> BridgeComponents:
     """Initialize and register all ccdb Cogs in one call.
 
@@ -121,6 +122,10 @@ async def setup_bridge(
                            is created and attached to the bot, enabling automatic
                            cleanup of session worktrees at session end and startup.
                            Defaults to WORKTREE_BASE_DIR env var, or None (disabled).
+        auto_rename_threads: When True, rename each new thread with a Claude-generated
+                             title derived from the first user message.  Runs as a
+                             background task so it never delays the session start.
+                             Defaults to THREAD_AUTO_RENAME env var (off by default).
 
     Returns:
         BridgeComponents with references to initialized repositories.
@@ -165,6 +170,16 @@ async def setup_bridge(
         ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
         lounge_channel_id = int(ch_str) if ch_str.isdigit() else None
 
+    # Thread auto-rename — fall back to THREAD_AUTO_RENAME env var (off by default)
+    if auto_rename_threads is None:
+        auto_rename_threads = os.getenv("THREAD_AUTO_RENAME", "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+    if auto_rename_threads:
+        logger.info("Thread auto-rename enabled (THREAD_AUTO_RENAME)")
+
     # WorktreeManager — attach to bot so cogs can access it via bot.worktree_manager
     if worktree_base_dir is None:
         worktree_base_dir = os.getenv("WORKTREE_BASE_DIR")
@@ -207,6 +222,7 @@ async def setup_bridge(
         channel_ids=_all_channel_ids or None,
         mention_only_channel_ids=mention_only_channel_ids or None,
         inline_reply_channel_ids=inline_reply_channel_ids or None,
+        auto_rename_threads=auto_rename_threads,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")

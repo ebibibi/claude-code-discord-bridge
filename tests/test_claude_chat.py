@@ -1178,3 +1178,153 @@ class TestInlineReplyChannels:
         """Without inline_reply_channel_ids, the set is empty (thread mode for all channels)."""
         cog = self._make_cog(channel_ids={111})
         assert cog._inline_reply_channel_ids == set()
+
+
+class TestAutoRenameThreads:
+    """auto_rename_threads=True fires a background task to rename the thread."""
+
+    def _make_cog(self, auto_rename: bool = False) -> ClaudeChatCog:
+        bot = MagicMock()
+        bot.channel_id = 111
+        bot.user = MagicMock()
+        runner = MagicMock()
+        runner.command = "claude"
+        runner.clone = MagicMock(return_value=MagicMock())
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+        return ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=runner,
+            channel_ids={111},
+            auto_rename_threads=auto_rename,
+        )
+
+    def _make_channel_message(self, content: str = "Fix the auth bug") -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = 42
+        msg.type = discord.MessageType.default
+        msg.content = content
+        msg.attachments = []
+        msg.mentions = []
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = 111
+        msg.channel = channel
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_auto_rename_disabled_by_default(self) -> None:
+        """auto_rename_threads defaults to False — no rename task is spawned."""
+        cog = self._make_cog(auto_rename=False)
+        cog._run_claude = AsyncMock()
+        cog._background_rename_thread = AsyncMock()
+
+        mock_thread = MagicMock()
+        msg = self._make_channel_message()
+        msg.create_thread = AsyncMock(return_value=mock_thread)
+
+        await cog._handle_new_conversation(msg)
+
+        cog._background_rename_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_auto_rename_enabled_spawns_rename_task(self) -> None:
+        """When auto_rename_threads=True, _background_rename_thread is called after thread creation.
+
+        Ensures the rename task is scheduled as a background coroutine.
+        """
+        cog = self._make_cog(auto_rename=True)
+        cog._run_claude = AsyncMock()
+
+        rename_called_with: list = []
+
+        async def _capture_rename(thread, message):
+            rename_called_with.append((thread, message))
+
+        cog._background_rename_thread = _capture_rename  # type: ignore[method-assign]
+
+        mock_thread = MagicMock()
+        msg = self._make_channel_message("Please help me refactor the payment module")
+        msg.create_thread = AsyncMock(return_value=mock_thread)
+
+        await cog._handle_new_conversation(msg)
+
+        # Give the background task a chance to complete
+        import asyncio
+
+        await asyncio.sleep(0)
+
+        assert len(rename_called_with) == 1
+        assert rename_called_with[0][0] is mock_thread
+        assert rename_called_with[0][1] == "Please help me refactor the payment module"
+
+    @pytest.mark.asyncio
+    async def test_auto_rename_skipped_for_empty_message(self) -> None:
+        """When message has no content, no rename task should be created."""
+        cog = self._make_cog(auto_rename=True)
+        cog._run_claude = AsyncMock()
+        cog._background_rename_thread = AsyncMock()
+
+        mock_thread = MagicMock()
+        msg = self._make_channel_message(content="")
+        msg.create_thread = AsyncMock(return_value=mock_thread)
+
+        await cog._handle_new_conversation(msg)
+
+        cog._background_rename_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_background_rename_thread_calls_thread_edit(self) -> None:
+        """_background_rename_thread should call thread.edit(name=...) when title is available."""
+        from unittest.mock import patch
+
+        cog = self._make_cog(auto_rename=True)
+        mock_thread = MagicMock()
+        mock_thread.id = 999
+        mock_thread.edit = AsyncMock()
+
+        with patch(
+            "claude_discord.cogs.claude_chat.suggest_title",
+            new=AsyncMock(return_value="Refactor payment module"),
+        ):
+            await cog._background_rename_thread(mock_thread, "refactor payment module")
+
+        mock_thread.edit.assert_awaited_once_with(name="Refactor payment module")
+
+    @pytest.mark.asyncio
+    async def test_background_rename_thread_no_edit_when_no_title(self) -> None:
+        """When suggest_title returns None, thread.edit must NOT be called."""
+        from unittest.mock import patch
+
+        cog = self._make_cog(auto_rename=True)
+        mock_thread = MagicMock()
+        mock_thread.id = 999
+        mock_thread.edit = AsyncMock()
+
+        with patch(
+            "claude_discord.cogs.claude_chat.suggest_title",
+            new=AsyncMock(return_value=None),
+        ):
+            await cog._background_rename_thread(mock_thread, "some message")
+
+        mock_thread.edit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_background_rename_thread_handles_edit_error_gracefully(self) -> None:
+        """Discord API errors during rename must not propagate — silent no-op."""
+        from unittest.mock import patch
+
+        cog = self._make_cog(auto_rename=True)
+        mock_thread = MagicMock()
+        mock_thread.id = 999
+        mock_thread.edit = AsyncMock(side_effect=RuntimeError("Discord API error"))
+
+        with patch(
+            "claude_discord.cogs.claude_chat.suggest_title",
+            new=AsyncMock(return_value="Some title"),
+        ):
+            # Should not raise
+            await cog._background_rename_thread(mock_thread, "some message")
