@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Literal
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,22 @@ Reply with exactly one word — no other text:
 _VALID = frozenset({"waiting", "done", "ambiguous"})
 _TIMEOUT_SECONDS = 30
 
+# Environment variables that tie a Claude process to a specific Discord session.
+# Removing them prevents SessionStart hooks from treating this utility call
+# as a user-facing Discord conversation.
+_DISCORD_SESSION_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "DISCORD_THREAD_ID",
+        "CCDB_API_URL",
+        "CCDB_API_SECRET",
+    }
+)
+
+
+def _clean_env() -> dict[str, str]:
+    """Return os.environ without Discord session variables."""
+    return {k: v for k, v in os.environ.items() if k not in _DISCORD_SESSION_ENV_KEYS}
+
 
 async def classify(
     last_text: str,
@@ -47,6 +64,8 @@ async def classify(
 
     Falls back to 'waiting' on any error so threads are never silently lost.
     Prompt is passed as a direct argument to the binary (no shell, no injection risk).
+    The subprocess runs without Discord session env vars so that SessionStart
+    hooks do not treat this utility call as a Discord conversation.
     """
     if not last_text.strip():
         return "ambiguous"
@@ -60,6 +79,7 @@ async def classify(
             prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_clean_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_SECONDS)

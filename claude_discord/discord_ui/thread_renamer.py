@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,23 @@ Reply with ONLY the title — no quotes, no punctuation at the end, no explanati
 _TIMEOUT_SECONDS = 30
 _MAX_TITLE_LENGTH = 90  # Discord thread name limit is 100; leave a small margin
 
+# Environment variables that tie a Claude process to a specific Discord session.
+# Removing them prevents SessionStart hooks from treating this utility call
+# as a user-facing Discord conversation (which would create spurious threads
+# or post messages to the wrong channel).
+_DISCORD_SESSION_ENV_KEYS: frozenset[str] = frozenset(
+    {
+        "DISCORD_THREAD_ID",
+        "CCDB_API_URL",
+        "CCDB_API_SECRET",
+    }
+)
+
+
+def _clean_env() -> dict[str, str]:
+    """Return os.environ without Discord session variables."""
+    return {k: v for k, v in os.environ.items() if k not in _DISCORD_SESSION_ENV_KEYS}
+
 
 async def suggest_title(
     user_message: str,
@@ -36,6 +54,8 @@ async def suggest_title(
     Returns None on empty input, timeout, or any error, so the caller can
     keep the original thread name without any visible failure.
     Prompt is passed as a direct argument to the binary (no shell, no injection risk).
+    The subprocess runs without Discord session env vars so that SessionStart
+    hooks do not treat this utility call as a Discord conversation.
     """
     if not user_message.strip():
         return None
@@ -49,6 +69,7 @@ async def suggest_title(
             prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_clean_env(),
         )
         try:
             stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_SECONDS)

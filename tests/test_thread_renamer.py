@@ -148,3 +148,76 @@ class TestSuggestTitleErrors:
         with patch("asyncio.create_subprocess_exec", return_value=proc):
             await suggest_title("some request")
         proc.kill.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Environment variable isolation
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestTitleEnvIsolation:
+    """suggest_title must not pass Discord session env vars to the subprocess."""
+
+    @pytest.mark.asyncio
+    async def test_discord_thread_id_is_stripped_from_subprocess_env(self):
+        proc = _make_proc(b"Some Title\n")
+        captured_env: dict | None = None
+
+        async def _capture_exec(*args, **kwargs):
+            nonlocal captured_env
+            captured_env = kwargs.get("env")
+            return proc
+
+        import unittest.mock as mock
+
+        with (
+            mock.patch("asyncio.create_subprocess_exec", side_effect=_capture_exec),
+            mock.patch.dict("os.environ", {"DISCORD_THREAD_ID": "12345"}, clear=False),
+        ):
+            await suggest_title("some request")
+
+        assert captured_env is not None
+        assert "DISCORD_THREAD_ID" not in captured_env
+
+    @pytest.mark.asyncio
+    async def test_ccdb_api_url_is_stripped_from_subprocess_env(self):
+        proc = _make_proc(b"Some Title\n")
+        captured_env: dict | None = None
+
+        async def _capture_exec(*args, **kwargs):
+            nonlocal captured_env
+            captured_env = kwargs.get("env")
+            return proc
+
+        import unittest.mock as mock
+
+        with (
+            mock.patch("asyncio.create_subprocess_exec", side_effect=_capture_exec),
+            mock.patch.dict("os.environ", {"CCDB_API_URL": "http://127.0.0.1:8099"}, clear=False),
+        ):
+            await suggest_title("some request")
+
+        assert captured_env is not None
+        assert "CCDB_API_URL" not in captured_env
+
+    @pytest.mark.asyncio
+    async def test_regular_env_vars_are_preserved(self):
+        proc = _make_proc(b"Some Title\n")
+        captured_env: dict | None = None
+
+        async def _capture_exec(*args, **kwargs):
+            nonlocal captured_env
+            captured_env = kwargs.get("env")
+            return proc
+
+        import unittest.mock as mock
+
+        with (
+            mock.patch("asyncio.create_subprocess_exec", side_effect=_capture_exec),
+            mock.patch.dict("os.environ", {"PATH": "/usr/bin", "HOME": "/root"}, clear=False),
+        ):
+            await suggest_title("some request")
+
+        assert captured_env is not None
+        assert "PATH" in captured_env
+        assert "HOME" in captured_env
