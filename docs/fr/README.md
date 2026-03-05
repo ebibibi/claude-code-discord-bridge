@@ -120,6 +120,7 @@ Si le bot redémarre en cours de session, les sessions Claude interrompues repre
 - **Sessions simultanées** — Plusieurs sessions parallèles avec limite configurable
 - **Arrêt sans effacement** — `/stop` arrête une session en la préservant pour reprise
 - **Interruption de session** — Envoyer un nouveau message à un fil actif envoie SIGINT à la session en cours et recommence avec la nouvelle instruction ; pas de `/stop` manuel nécessaire
+- **Renommage automatique des fils** — Quand `THREAD_AUTO_RENAME=true`, chaque nouveau fil est automatiquement renommé avec un titre généré par Claude basé sur le premier message (tâche en arrière-plan, sans délai de démarrage de session)
 
 #### 📡 Retour en Temps Réel
 - **Statut en temps réel** — Réactions emoji : 🧠 réflexion, 🛠️ lecture de fichiers, 💻 édition, 🌐 recherche web
@@ -141,6 +142,7 @@ Si le bot redémarre en cours de session, les sessions Claude interrompues repre
 - **Détection de compactage** — Notifie dans le fil quand la compaction du contexte se produit (type de déclencheur + nombre de tokens avant compactage)
 - **Notification de blocage** — Message dans le fil après 30 s sans activité (réflexion étendue ou compression de contexte) ; réinitialise automatiquement quand Claude reprend
 - **Notifications de timeout** — Embed avec temps écoulé et guide de reprise en cas de timeout
+- **Boîte de réception des fils** — Quand `THREAD_INBOX_ENABLED=true`, le tableau de bord affiche une section 📬 persistante ; après chaque fin de session, Claude classe le dernier message (`waiting`/`done`/`ambiguous`) via un appel léger à `claude -p` ; les fils attendant une réponse survivent aux redémarrages du bot et sont affichés jusqu'à votre réponse
 
 #### 🔌 Entrée et Skills
 - **Support des pièces jointes** — Fichiers texte ajoutés automatiquement au prompt (jusqu'à 5 × 50 Ko) ; images téléchargées et transmises via `--image` (jusqu'à 4 × 5 Mo)
@@ -178,6 +180,9 @@ Si le bot redémarre en cours de session, les sessions Claude interrompues repre
 - **Gestion des worktrees** — `/worktree-list` affiche tous les worktrees de session actifs avec leur statut propre/sale ; `/worktree-cleanup` supprime les worktrees propres orphelins (supporte la prévisualisation avec `dry_run`)
 - **Rembobiner la conversation** — `/rewind` réinitialise l'historique des échanges tout en conservant les fichiers de travail créés par Claude ; utile quand une session part dans une mauvaise direction
 - **Bifurquer la conversation** — `/fork` crée un nouveau fil qui continue depuis le même état de session, vous permettant d'explorer une direction différente sans affecter le fil original
+- **Aide intégrée** — `/help` affiche toutes les commandes slash disponibles et l'utilisation basique (éphémère, visible uniquement pour l'appelant)
+- **Changement de modèle à l'exécution** — `/model-show` affiche le modèle global actuel et le modèle de session par fil ; `/model-set` change le modèle pour toutes les nouvelles sessions sans redémarrer
+- **Permissions d'outils à l'exécution** — `/tools-show` affiche les outils actuellement autorisés ; `/tools-set` ouvre un menu de sélection pour activer/désactiver les outils ; `/tools-reset` restaure la valeur par défaut de `.env` — le tout sans redémarrage
 
 ### Sécurité
 - **Pas d'injection shell** — Uniquement `asyncio.create_subprocess_exec`, jamais `shell=True`
@@ -185,6 +190,7 @@ Si le bot redémarre en cours de session, les sessions Claude interrompues repre
 - **Prévention d'injection de flags** — Séparateur `--` avant tous les prompts
 - **Isolation des secrets** — Le token du bot est supprimé de l'environnement du sous-processus
 - **Autorisation utilisateur** — `allowed_user_ids` restreint qui peut invoquer Claude
+- **Prévention d'injection dans les logs** — Les valeurs API fournies par l'utilisateur sont assainies (suppression des sauts de ligne et des séquences d'échappement ANSI) avant d'être écrites dans les logs
 
 ---
 
@@ -291,6 +297,10 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `DISCORD_OWNER_ID` | ID utilisateur à @mentionner quand Claude a besoin d'une saisie | (optionnel) |
 | `COORDINATION_CHANNEL_ID` | ID du canal pour les diffusions d'événements entre sessions | (optionnel) |
 | `WORKTREE_BASE_DIR` | Répertoire de base pour scanner les worktrees de session (active le nettoyage automatique) | (optionnel) |
+| `MENTION_ONLY_CHANNEL_IDS` | IDs de canal séparés par des virgules où le bot répond uniquement quand il est @mentionné | (optionnel) |
+| `INLINE_REPLY_CHANNEL_IDS` | IDs de canal séparés par des virgules où le bot répond en ligne (sans créer de fil) | (optionnel) |
+| `THREAD_INBOX_ENABLED` | Active la boîte de réception persistante des fils (classe les sessions en `waiting`/`done`/`ambiguous` via `claude -p` ; affiché dans le tableau de bord des fils) | `false` |
+| `THREAD_AUTO_RENAME` | Renomme automatiquement les titres des nouveaux fils avec Claude AI — génère un titre court et descriptif du premier message utilisateur via un appel `claude -p` en arrière-plan (sans délai de démarrage de session) | `false` |
 
 ### Modes d'autorisation — Ce qui fonctionne en mode `-p`
 
