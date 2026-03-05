@@ -118,13 +118,29 @@ class TestSuggestTitleEdgeCases:
 class TestSuggestTitleErrors:
     @pytest.mark.asyncio
     async def test_returns_none_on_timeout(self):
-        proc = _make_proc(b"Title\n")
+        """Uses real asyncio.wait_for so asyncio.TimeoutError is raised (not built-in).
 
-        async def _hang(*_args, **_kwargs):
-            raise TimeoutError
+        In Python 3.10, asyncio.TimeoutError and builtins.TimeoutError are different
+        classes. A direct ``raise TimeoutError`` in the mock bypasses asyncio.wait_for
+        entirely and would never expose the Python 3.10 compatibility bug.
+        """
+        import asyncio as _asyncio
 
-        proc.communicate = _hang
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        proc = _make_proc(b"")
+        call_count = 0
+
+        async def _hang_then_ok():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                await _asyncio.sleep(999)  # cancelled by wait_for → asyncio.TimeoutError
+            return b"", b""
+
+        proc.communicate = _hang_then_ok
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=proc),
+            patch("claude_discord.discord_ui.thread_renamer._TIMEOUT_SECONDS", 0.01),
+        ):
             result = await suggest_title("some request")
         assert result is None
 
@@ -139,12 +155,28 @@ class TestSuggestTitleErrors:
 
     @pytest.mark.asyncio
     async def test_kills_process_on_timeout(self):
-        proc = _make_proc(b"Title\n")
+        """After asyncio.wait_for timeout, proc.kill() must be called.
 
-        async def _hang(*_args, **_kwargs):
-            raise TimeoutError
+        Uses real async sleep so asyncio.wait_for raises asyncio.TimeoutError
+        (vs builtins.TimeoutError), validating the except clause handles both.
+        The second communicate() call (post-kill cleanup) returns immediately.
+        """
+        import asyncio as _asyncio
 
-        proc.communicate = _hang
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        proc = _make_proc(b"")
+        call_count = 0
+
+        async def _hang_then_ok():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                await _asyncio.sleep(999)
+            return b"", b""
+
+        proc.communicate = _hang_then_ok
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=proc),
+            patch("claude_discord.discord_ui.thread_renamer._TIMEOUT_SECONDS", 0.01),
+        ):
             await suggest_title("some request")
         proc.kill.assert_called_once()

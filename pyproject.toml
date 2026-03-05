@@ -48,3 +48,13 @@ typeCheckingMode = "basic"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "SIM"]
+
+[tool.coverage.report]
+# Exclude lines that don't need coverage (type stubs, abstract methods, etc.)
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
+    "\\.\\.\\.",
+]
