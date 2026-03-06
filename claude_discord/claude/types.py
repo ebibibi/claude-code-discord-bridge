@@ -20,6 +20,7 @@ class MessageType(Enum):
     RESULT = "result"
     PROGRESS = "progress"
     STREAM_EVENT = "stream_event"  # low-level streaming events; parsed but not acted on
+    RATE_LIMIT_EVENT = "rate_limit_event"  # rate limit info from Anthropic API
 
 
 class ContentBlockType(Enum):
@@ -62,6 +63,17 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
     "TodoWrite": ToolCategory.TASK,
     "ExitPlanMode": ToolCategory.PLAN,
 }
+
+
+@dataclass
+class RateLimitInfo:
+    """Rate limit information from a rate_limit_event stream-json message."""
+
+    rate_limit_type: str  # "five_hour" | "seven_day" | "seven_day_sonnet" | etc.
+    status: str  # "allowed" | "allowed_warning" | "rejected"
+    utilization: float  # 0.0–1.0
+    resets_at: int  # Unix timestamp
+    is_using_overage: bool = False
 
 
 @dataclass
@@ -182,6 +194,7 @@ class StreamEvent:
     cache_creation_tokens: int | None = None
     context_window: int | None = None
     error: str | None = None
+    rate_limit_info: RateLimitInfo | None = None
 
 
 @dataclass

@@ -802,3 +802,132 @@ class TestToolUseCount:
         for i in range(4):
             await p.process(_make_tool_event(tool_id=f"tool{i}"))
         assert p._state.tool_use_count == 4
+
+
+class TestContextStatsPersistence:
+    """context_window / context_used are saved to DB on session complete."""
+
+    @pytest.mark.asyncio
+    async def test_context_stats_saved_on_complete(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        from claude_discord.database.models import init_db
+        from claude_discord.database.repository import SessionRepository
+
+        db_path = str(tmp_path / "sessions.db")
+        await init_db(db_path)
+        repo = SessionRepository(db_path)
+        # Pre-save the session row so update_context_stats has a row to update
+        await repo.save(thread_id=thread.id, session_id="s-ctx")
+
+        config = _make_config(thread, runner, repo=repo)
+        p = EventProcessor(config)
+
+        result = _make_result_event(
+            session_id="s-ctx",
+            input_tokens=98200,
+            output_tokens=12400,
+            cache_read_tokens=23600,
+            cache_creation_tokens=12000,
+            context_window=200000,
+        )
+        await p.process(result)
+
+        record = await repo.get(thread.id)
+        assert record is not None
+        assert record.context_window == 200000
+        # context_used = input + cache_read + cache_creation
+        assert record.context_used == 98200 + 23600 + 12000
+
+    @pytest.mark.asyncio
+    async def test_context_stats_skipped_when_no_repo(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Without a repo, context stats save is a no-op (no crash)."""
+        config = _make_config(thread, runner)  # no repo
+        p = EventProcessor(config)
+        result = _make_result_event(
+            session_id="s1",
+            input_tokens=1000,
+            context_window=200000,
+        )
+        # Should not raise
+        await p.process(result)
+
+    @pytest.mark.asyncio
+    async def test_context_stats_skipped_when_no_context_window(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        """If context_window is absent, skip DB write."""
+        from claude_discord.database.models import init_db
+        from claude_discord.database.repository import SessionRepository
+
+        db_path = str(tmp_path / "sessions.db")
+        await init_db(db_path)
+        repo = SessionRepository(db_path)
+
+        config = _make_config(thread, runner, repo=repo)
+        p = EventProcessor(config)
+
+        result = _make_result_event(session_id="s2")  # no context_window
+        await p.process(result)
+
+        record = await repo.get(thread.id)
+        # Session saved but context stats not written
+        assert record is None or record.context_window is None
+
+
+class TestRateLimitEventProcessing:
+    """rate_limit_event is saved to usage_stats table."""
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_event_saved_to_db(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        from claude_discord.claude.types import RateLimitInfo
+        from claude_discord.database.models import init_db
+        from claude_discord.database.repository import UsageStatsRepository
+
+        db_path = str(tmp_path / "sessions.db")
+        await init_db(db_path)
+        usage_repo = UsageStatsRepository(db_path)
+
+        config = _make_config(thread, runner, usage_repo=usage_repo)
+        p = EventProcessor(config)
+
+        event = StreamEvent(
+            message_type=MessageType.RATE_LIMIT_EVENT,
+            rate_limit_info=RateLimitInfo(
+                rate_limit_type="five_hour",
+                status="allowed",
+                utilization=0.61,
+                resets_at=1234567890,
+            ),
+        )
+        await p.process(event)
+
+        rows = await usage_repo.get_latest()
+        assert len(rows) == 1
+        assert rows[0].rate_limit_type == "five_hour"
+        assert rows[0].utilization == pytest.approx(0.61)
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_event_skipped_when_no_usage_repo(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Without usage_repo, rate_limit_event is a no-op."""
+        from claude_discord.claude.types import RateLimitInfo
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        event = StreamEvent(
+            message_type=MessageType.RATE_LIMIT_EVENT,
+            rate_limit_info=RateLimitInfo(
+                rate_limit_type="seven_day",
+                status="allowed",
+                utilization=0.4,
+                resets_at=999,
+            ),
+        )
+        await p.process(event)  # should not raise

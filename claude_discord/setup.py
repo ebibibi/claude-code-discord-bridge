@@ -138,7 +138,7 @@ async def setup_bridge(
     from .database.inbox_repo import ThreadInboxRepository
     from .database.lounge_repo import LoungeRepository
     from .database.models import init_db
-    from .database.repository import SessionRepository
+    from .database.repository import SessionRepository, UsageStatsRepository
     from .database.resume_repo import PendingResumeRepository
     from .database.settings_repo import SettingsRepository
     from .database.task_repo import TaskRepository
@@ -196,6 +196,7 @@ async def setup_bridge(
     ask_repo = PendingAskRepository(session_db_path)
     lounge_repo = LoungeRepository(session_db_path)
     resume_repo = PendingResumeRepository(session_db_path)
+    usage_repo = UsageStatsRepository(session_db_path)
     logger.info("Session DB initialized: %s", session_db_path)
 
     # Attach repos to bot so generic cogs (e.g. AutoUpgradeCog) can discover them
@@ -233,6 +234,7 @@ async def setup_bridge(
         repo=session_repo,
         cli_sessions_path=cli_sessions_path,
         settings_repo=settings_repo,
+        usage_repo=usage_repo,
     )
     await bot.add_cog(session_manage_cog)
     logger.info("Registered SessionManageCog")
@@ -258,7 +260,7 @@ async def setup_bridge(
         os.makedirs(os.path.dirname(task_db_path) or ".", exist_ok=True)
         task_repo = TaskRepository(task_db_path)
         await task_repo.init_db()
-        scheduler_cog = SchedulerCog(bot, runner, repo=task_repo)
+        scheduler_cog = SchedulerCog(bot, runner, repo=task_repo, session_repo=session_repo)
         await bot.add_cog(scheduler_cog)
         logger.info("Registered SchedulerCog")
 

@@ -22,6 +22,7 @@ from ..discord_ui.status import StatusManager
 
 if TYPE_CHECKING:
     from ..database.inbox_repo import ThreadInboxRepository
+    from ..database.repository import UsageStatsRepository
     from ..discord_ui.thread_dashboard import ThreadStatusDashboard
     from ..discord_ui.views import StopView
     from ..worktree import WorktreeManager
@@ -75,6 +76,7 @@ class RunConfig:
     # that need the user's attention across bot restarts.
     inbox_repo: ThreadInboxRepository | None = None
     inbox_dashboard: ThreadStatusDashboard | None = None
+    usage_repo: UsageStatsRepository | None = None
     claude_command: str = "claude"
 
     # Prevent accidental field mutation — RunConfig is a value object.

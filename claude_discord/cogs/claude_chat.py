@@ -56,6 +56,8 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "clear": "📌 Session",
     "rewind": "📌 Session",
     "fork": "📌 Session",
+    "context": "📌 Session",
+    "usage": "📌 Session",
     "sessions": "📌 Session",
     "resume-info": "📌 Session",
     "sync-sessions": "📌 Session",
@@ -339,23 +341,33 @@ class ClaudeChatCog(commands.Cog):
             )
             return
 
-        # Kill active runner if any — same as /clear.
-        runner = self._active_runners.get(interaction.channel.id)
-        if runner:
-            await runner.kill()
-            del self._active_runners[interaction.channel.id]
-
-        deleted = await self.repo.delete(interaction.channel.id)
-        if not deleted:
+        thread_id = interaction.channel.id
+        record = await self.repo.get(thread_id)
+        if record is None:
             await interaction.response.send_message(
                 "No active session found for this thread.", ephemeral=True
             )
             return
 
+        # Kill active runner if any — same as /clear.
+        runner = self._active_runners.get(thread_id)
+        if runner:
+            await runner.kill()
+            del self._active_runners[thread_id]
+
+        await self.repo.delete(thread_id)
+
+        # Build confirmation message, optionally including context stats.
+        ctx_suffix = ""
+        if record.context_window and record.context_used is not None:
+            pct = round(record.context_used / record.context_window * 100)
+            ctx_suffix = f" Context was **{pct}%** full at reset."
+
         await interaction.response.send_message(
-            "🔄 **Conversation reset.** "
-            "Working files are preserved — only the conversation history was cleared. "
-            "Send a new message to start a fresh session."
+            "🔄 **Conversation reset.**"
+            + ctx_suffix
+            + " Working files are preserved — only the conversation history was cleared."
+            + " Send a new message to start a fresh session."
         )
 
     @app_commands.command(
@@ -406,6 +418,7 @@ class ClaudeChatCog(commands.Cog):
             ),
             thread_name=fork_name,
             session_id=record.session_id,
+            fork=True,
         )
 
         await interaction.followup.send(
@@ -454,6 +467,7 @@ class ClaudeChatCog(commands.Cog):
         prompt: str,
         thread_name: str | None = None,
         session_id: str | None = None,
+        fork: bool = False,
     ) -> discord.Thread:
         """Create a new thread and start a Claude Code session without a user message.
 
@@ -486,7 +500,9 @@ class ClaudeChatCog(commands.Cog):
         seed_message = await thread.send(prompt)
         # Run Claude in the background so /api/spawn returns immediately.
         # The caller gets the thread reference without waiting for Claude to finish.
-        asyncio.create_task(self._run_claude(seed_message, thread, prompt, session_id=session_id))
+        asyncio.create_task(
+            self._run_claude(seed_message, thread, prompt, session_id=session_id, fork=fork)
+        )
         return thread
 
     async def cog_unload(self) -> None:
@@ -681,6 +697,7 @@ class ClaudeChatCog(commands.Cog):
         prompt: str,
         session_id: str | None,
         image_urls: list[str] | None = None,
+        fork: bool = False,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
         if self._semaphore.locked():
@@ -726,6 +743,7 @@ class ClaudeChatCog(commands.Cog):
                 thread_id=thread.id,
                 model=model_override,
                 allowed_tools=tools_override if tools_override is not None else _UNSET,
+                fork_session=fork,
             )
             self._active_runners[thread.id] = runner
 

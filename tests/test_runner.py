@@ -115,6 +115,45 @@ class TestBuildArgs:
         cloned = base.clone(append_system_prompt=None)
         assert cloned.append_system_prompt == "ctx"  # inherits parent
 
+    def test_fork_session_adds_flag(self) -> None:
+        """--fork-session is added to args when fork_session=True and session_id is provided."""
+        runner = ClaudeRunner(fork_session=True)
+        args = runner._build_args("hi", session_id="abc123")
+        assert "--fork-session" in args
+
+    def test_fork_session_flag_after_resume(self) -> None:
+        """--fork-session appears after --resume <session_id> in the arg list."""
+        runner = ClaudeRunner(fork_session=True)
+        args = runner._build_args("hi", session_id="abc123")
+        resume_idx = args.index("--resume")
+        fork_idx = args.index("--fork-session")
+        assert fork_idx > resume_idx
+
+    def test_fork_session_without_session_id_no_flag(self) -> None:
+        """--fork-session is NOT added when no session_id is given (nothing to fork)."""
+        runner = ClaudeRunner(fork_session=True)
+        args = runner._build_args("hi", session_id=None)
+        assert "--fork-session" not in args
+
+    def test_fork_session_false_no_flag(self) -> None:
+        """--fork-session is NOT added by default."""
+        runner = ClaudeRunner()
+        args = runner._build_args("hi", session_id="abc123")
+        assert "--fork-session" not in args
+
+    def test_clone_propagates_fork_session(self) -> None:
+        """clone(fork_session=True) sets fork_session on the cloned runner."""
+        base = ClaudeRunner()
+        cloned = base.clone(fork_session=True)
+        assert cloned.fork_session is True
+
+    def test_clone_fork_session_defaults_false(self) -> None:
+        """clone() without fork_session yields fork_session=False."""
+        base = ClaudeRunner(fork_session=True)
+        cloned = base.clone()
+        # fork_session is NOT inherited — it's per-invocation, not a base setting
+        assert cloned.fork_session is False
+
 
 class TestBuildEnv:
     """Tests for _build_env method."""

@@ -167,6 +167,9 @@ class EventProcessor:
         elif event.message_type == MessageType.PROGRESS:
             await self._on_progress(event)
 
+        elif event.message_type == MessageType.RATE_LIMIT_EVENT:
+            await self._on_rate_limit_event(event)
+
         if event.is_complete:
             await self._on_complete(event)
 
@@ -294,6 +297,12 @@ class EventProcessor:
         if self._config.status:
             self._config.status._reset_stall_timer()
 
+    async def _on_rate_limit_event(self, event: StreamEvent) -> None:
+        """Handle RATE_LIMIT_EVENT — persist latest rate limit info to usage_stats."""
+        if self._config.usage_repo is None or event.rate_limit_info is None:
+            return
+        await self._config.usage_repo.upsert(event.rate_limit_info)
+
     async def _on_complete(self, event: StreamEvent) -> None:
         """Handle RESULT events — finalize streaming, post summary embed."""
         import asyncio
@@ -370,6 +379,19 @@ class EventProcessor:
             if self._config.repo:
                 await self._config.repo.save(self._config.thread.id, event.session_id)
             self._state.session_id = event.session_id
+
+        # Persist context window stats (requires repo + context_window in event).
+        if self._config.repo and event.context_window is not None:
+            context_used = (
+                (event.input_tokens or 0)
+                + (event.cache_read_tokens or 0)
+                + (event.cache_creation_tokens or 0)
+            )
+            await self._config.repo.update_context_stats(
+                thread_id=self._config.thread.id,
+                context_window=event.context_window,
+                context_used=context_used,
+            )
 
         # Reset for potential next streamer
         self._streamer = StreamingMessageManager(self._config.thread)

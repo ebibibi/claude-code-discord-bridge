@@ -17,6 +17,7 @@ from .types import (
     ElicitationRequest,
     MessageType,
     PermissionRequest,
+    RateLimitInfo,
     StreamEvent,
     TodoItem,
     ToolCategory,
@@ -60,6 +61,8 @@ def parse_line(line: str) -> StreamEvent | None:
         _parse_result(data, event)
     elif msg_type == MessageType.PROGRESS:
         pass  # No additional parsing needed — the event itself resets stall timers
+    elif msg_type == MessageType.RATE_LIMIT_EVENT:
+        _parse_rate_limit_event(data, event)
 
     return event
 
@@ -214,6 +217,20 @@ def _parse_result(data: dict[str, Any], event: StreamEvent) -> None:
         # not a normal session-complete embed.
         event.error = result_text
         event.text = ""  # suppress duplicate display via result text path
+
+
+def _parse_rate_limit_event(data: dict[str, Any], event: StreamEvent) -> None:
+    """Parse rate_limit_event message into a RateLimitInfo dataclass."""
+    info = data.get("rate_limit_info", {})
+    if not info:
+        return
+    event.rate_limit_info = RateLimitInfo(
+        rate_limit_type=info.get("rateLimitType", ""),
+        status=info.get("status", ""),
+        utilization=float(info.get("utilization", 0.0)),
+        resets_at=int(info.get("resetsAt", 0)),
+        is_using_overage=bool(info.get("isUsingOverage", False)),
+    )
 
 
 def _parse_ask_questions(tool_input: dict[str, Any]) -> list[AskQuestion]:

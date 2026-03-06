@@ -26,6 +26,7 @@ from .run_config import RunConfig
 
 if TYPE_CHECKING:
     from ..claude.runner import ClaudeRunner
+    from ..database.repository import SessionRepository
     from ..database.task_repo import TaskRepository
 
 logger = logging.getLogger(__name__)
@@ -49,10 +50,12 @@ class SchedulerCog(commands.Cog):
         runner: ClaudeRunner,
         *,
         repo: TaskRepository,
+        session_repo: SessionRepository | None = None,
     ) -> None:
         self.bot = bot
         self.runner = runner
         self.repo = repo
+        self.session_repo = session_repo
         # Track in-flight tasks to avoid double-running the same task_id.
         self._running: set[int] = set()
 
@@ -129,7 +132,7 @@ class SchedulerCog(commands.Cog):
                 RunConfig(
                     thread=thread,
                     runner=cloned,
-                    repo=None,  # scheduled tasks don't persist session state
+                    repo=self.session_repo,
                     prompt=task["prompt"],
                     session_id=None,
                     registry=registry,

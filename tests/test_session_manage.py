@@ -16,6 +16,8 @@ def _make_record(
     summary: str | None = "Fix login bug",
     working_dir: str | None = "/home/user",
     model: str | None = "sonnet",
+    context_window: int | None = None,
+    context_used: int | None = None,
 ) -> SessionRecord:
     return SessionRecord(
         thread_id=thread_id,
@@ -24,6 +26,8 @@ def _make_record(
         model=model,
         origin=origin,
         summary=summary,
+        context_window=context_window,
+        context_used=context_used,
         created_at="2026-02-19 10:00:00",
         last_used_at="2026-02-19 11:00:00",
     )
@@ -126,3 +130,105 @@ class TestSessionsList:
         # Discord sessions show 💬, CLI sessions show 🖥️
         assert "\U0001f4ac" in embed.fields[0].name  # 💬
         assert "\U0001f5a5" in embed.fields[1].name  # 🖥️
+
+
+class TestContextCommand:
+    """Tests for /context slash command."""
+
+    async def test_context_not_in_thread_returns_ephemeral(self):
+        from claude_discord.cogs.session_manage import SessionManageCog
+
+        bot = MagicMock()
+        repo = MagicMock()
+        cog = SessionManageCog(bot=bot, repo=repo)
+
+        interaction = _make_channel_interaction()
+        await cog.context_show.callback(cog, interaction)
+
+        interaction.response.send_message.assert_called_once()
+        call_kwargs = interaction.response.send_message.call_args.kwargs
+        assert call_kwargs.get("ephemeral") is True
+
+    async def test_context_no_stats_shows_info_message(self):
+        from claude_discord.cogs.session_manage import SessionManageCog
+
+        bot = MagicMock()
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=_make_record(context_window=None, context_used=None))
+        cog = SessionManageCog(bot=bot, repo=repo)
+
+        interaction = _make_thread_interaction()
+        await cog.context_show.callback(cog, interaction)
+
+        interaction.response.send_message.assert_called_once()
+        msg = interaction.response.send_message.call_args
+        # Should reply with ephemeral info (no embed with stats)
+        assert msg.kwargs.get("ephemeral") is True
+
+    async def test_context_shows_stats_embed(self):
+        from claude_discord.cogs.session_manage import SessionManageCog
+
+        bot = MagicMock()
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=_make_record(context_window=200000, context_used=134000))
+        cog = SessionManageCog(bot=bot, repo=repo)
+
+        interaction = _make_thread_interaction()
+        await cog.context_show.callback(cog, interaction)
+
+        call_args = interaction.response.send_message.call_args
+        embed = call_args.kwargs.get("embed")
+        assert embed is not None
+        assert "67" in embed.description  # 134000/200000 = 67%
+
+
+class TestUsageCommand:
+    """Tests for /usage slash command."""
+
+    async def test_usage_no_data_shows_info_message(self):
+        from claude_discord.cogs.session_manage import SessionManageCog
+        from claude_discord.database.repository import UsageStatsRepository
+
+        bot = MagicMock()
+        repo = MagicMock()
+        usage_repo = MagicMock(spec=UsageStatsRepository)
+        usage_repo.get_latest = AsyncMock(return_value=[])
+        cog = SessionManageCog(bot=bot, repo=repo, usage_repo=usage_repo)
+
+        interaction = _make_channel_interaction()
+        await cog.usage_show.callback(cog, interaction)
+
+        interaction.response.send_message.assert_called_once()
+        call_kwargs = interaction.response.send_message.call_args.kwargs
+        assert call_kwargs.get("ephemeral") is True
+
+    async def test_usage_shows_stats_embed(self):
+        import time
+
+        from claude_discord.claude.types import RateLimitInfo
+        from claude_discord.cogs.session_manage import SessionManageCog
+        from claude_discord.database.repository import UsageStatsRepository
+
+        bot = MagicMock()
+        repo = MagicMock()
+        usage_repo = MagicMock(spec=UsageStatsRepository)
+        usage_repo.get_latest = AsyncMock(
+            return_value=[
+                RateLimitInfo(
+                    rate_limit_type="five_hour",
+                    status="allowed",
+                    utilization=0.61,
+                    resets_at=int(time.time()) + 7800,  # 2h 10m from now
+                ),
+            ]
+        )
+        cog = SessionManageCog(bot=bot, repo=repo, usage_repo=usage_repo)
+
+        interaction = _make_channel_interaction()
+        await cog.usage_show.callback(cog, interaction)
+
+        call_args = interaction.response.send_message.call_args
+        embed = call_args.kwargs.get("embed")
+        assert embed is not None
+        # Should show utilization percentage
+        assert "61" in embed.description

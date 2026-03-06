@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from claude_discord.claude.parser import parse_line
 from claude_discord.claude.types import MessageType, ToolCategory
 
@@ -545,3 +547,53 @@ class TestTodoWriteParsing:
         assert event.elicitation.server_name == "my-mcp-server"
         assert event.elicitation.mode == "form-mode"
         assert event.elicitation.message == "Please fill in the form"
+
+
+class TestRateLimitEventParsing:
+    def test_rate_limit_event_parsed(self):
+        line = json.dumps(
+            {
+                "type": "rate_limit_event",
+                "rate_limit_info": {
+                    "status": "allowed",
+                    "rateLimitType": "five_hour",
+                    "utilization": 0.61,
+                    "resetsAt": 1234567890,
+                    "isUsingOverage": False,
+                },
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.rate_limit_info is not None
+        assert event.rate_limit_info.rate_limit_type == "five_hour"
+        assert event.rate_limit_info.utilization == pytest.approx(0.61)
+        assert event.rate_limit_info.resets_at == 1234567890
+        assert event.rate_limit_info.status == "allowed"
+        assert event.rate_limit_info.is_using_overage is False
+
+    def test_rate_limit_event_with_overage(self):
+        line = json.dumps(
+            {
+                "type": "rate_limit_event",
+                "rate_limit_info": {
+                    "status": "allowed_warning",
+                    "rateLimitType": "seven_day",
+                    "utilization": 0.87,
+                    "resetsAt": 9999999999,
+                    "isUsingOverage": True,
+                },
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.rate_limit_info is not None
+        assert event.rate_limit_info.is_using_overage is True
+        assert event.rate_limit_info.status == "allowed_warning"
+
+    def test_rate_limit_event_missing_info_returns_event(self):
+        """rate_limit_event with no rate_limit_info should still parse (rate_limit_info=None)."""
+        line = json.dumps({"type": "rate_limit_event"})
+        event = parse_line(line)
+        assert event is not None
+        assert event.rate_limit_info is None

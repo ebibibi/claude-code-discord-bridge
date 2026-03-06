@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-03-06
+
+### Added
+- **`/context` slash command** — shows context window usage % with a visual progress bar and autocompact warning when nearing the 83.5% threshold (#265)
+- **`/usage` slash command** — shows Claude API rate limit utilization with percentage bar and time-until-reset countdown (#267)
+- **`rate_limit_event` parser** — stream-json `rate_limit_event` messages are now parsed and persisted to a new `usage_stats` DB table (upserted per `rate_limit_type`); consumers get up-to-date usage data with zero config (#266)
+- **Context stats persistence** — `context_window` and `context_used` are saved to the `sessions` table after each session completes; powers the `/context` command and `/rewind` confirmation
+
+### Changed
+- **`/rewind` confirmation now shows context % at reset time** — when context stats are available, the reset message includes "Context was X% full at reset." to help users understand why the session was rewound (#242)
+- **`/fork` uses `--fork-session` CLI flag** — forks now create a truly independent session copy with a new session ID; eliminates the `UNIQUE INDEX` violation that crashed the bot when both threads tried to save the same session ID (#243)
+- **DB migration: `idx_sessions_session_id` is no longer UNIQUE** — allows forked sessions to coexist without constraint violations; existing databases are upgraded automatically on startup
+
+### Fixed
+- **Scheduler sessions are now resumable** — `SchedulerCog` passes `session_repo` to `RunConfig` so sessions created by scheduled tasks are persisted to the DB and can be resumed with follow-up messages (#264)
+
+### Database
+- New `usage_stats` table (one row per `rate_limit_type`; upserted on every `rate_limit_event`)
+- New columns `context_window` and `context_used` on `sessions` table
+- `idx_sessions_session_id` changed from UNIQUE to non-unique index
+
 ## [1.9.0] - 2026-03-05
 
 ### Added

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import aiosqlite
+
+if TYPE_CHECKING:
+    from ..claude.types import RateLimitInfo
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +26,8 @@ class SessionRecord:
     summary: str | None
     created_at: str
     last_used_at: str
+    context_window: int | None = None
+    context_used: int | None = None
 
 
 class SessionRepository:
@@ -129,3 +135,71 @@ class SessionRepository:
             cursor = await db.execute(query, (days,))
             await db.commit()
             return cursor.rowcount
+
+    async def update_context_stats(
+        self,
+        thread_id: int,
+        context_window: int,
+        context_used: int,
+    ) -> None:
+        """Persist context window stats for a session.
+
+        Silently ignores unknown thread_ids — this is called from event_processor
+        after session completion, where the session row may not exist for
+        automated workflows (e.g. scheduled tasks without session_repo).
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE sessions SET context_window = ?, context_used = ? WHERE thread_id = ?",
+                (context_window, context_used, thread_id),
+            )
+            await db.commit()
+
+
+class UsageStatsRepository:
+    """CRUD for rate limit usage stats (one row per rate_limit_type, upserted)."""
+
+    def __init__(self, db_path: str) -> None:
+        self.db_path = db_path
+
+    async def upsert(self, info: RateLimitInfo) -> None:
+        """Insert or replace the latest rate limit info for the given type."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO usage_stats
+                     (rate_limit_type, status, utilization, resets_at, is_using_overage)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(rate_limit_type) DO UPDATE SET
+                     status = excluded.status,
+                     utilization = excluded.utilization,
+                     resets_at = excluded.resets_at,
+                     is_using_overage = excluded.is_using_overage,
+                     recorded_at = datetime('now', 'localtime')""",
+                (
+                    info.rate_limit_type,
+                    info.status,
+                    info.utilization,
+                    info.resets_at,
+                    int(info.is_using_overage),
+                ),
+            )
+            await db.commit()
+
+    async def get_latest(self) -> list[RateLimitInfo]:
+        """Return all stored rate limit entries (one per type)."""
+        from ..claude.types import RateLimitInfo as _RateLimitInfo
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM usage_stats ORDER BY rate_limit_type")
+            rows = await cursor.fetchall()
+            return [
+                _RateLimitInfo(
+                    rate_limit_type=row["rate_limit_type"],
+                    status=row["status"],
+                    utilization=row["utilization"],
+                    resets_at=row["resets_at"],
+                    is_using_overage=bool(row["is_using_overage"]),
+                )
+                for row in rows
+            ]

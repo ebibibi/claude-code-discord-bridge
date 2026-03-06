@@ -55,6 +55,8 @@ def _make_session_record(
     thread_id: int = 12345,
     session_id: str = "sess-abc",
     working_dir: str | None = "/tmp/work",
+    context_window: int | None = None,
+    context_used: int | None = None,
 ) -> SessionRecord:
     return SessionRecord(
         thread_id=thread_id,
@@ -65,6 +67,8 @@ def _make_session_record(
         summary=None,
         created_at="2026-01-01 00:00:00",
         last_used_at="2026-01-01 00:00:00",
+        context_window=context_window,
+        context_used=context_used,
     )
 
 
@@ -177,6 +181,41 @@ class TestRewindCommand:
         assert any(
             word in content.lower() for word in ("file", "work", "保持", "preserved", "kept")
         )
+
+    @pytest.mark.asyncio
+    async def test_rewind_shows_context_stats_when_available(self) -> None:
+        """/rewind confirmation includes context usage % when stats are in the DB."""
+        cog = _make_cog()
+        thread_id = 12345
+        record = _make_session_record(
+            thread_id=thread_id, context_window=200000, context_used=150000
+        )
+        cog.repo.get = AsyncMock(return_value=record)
+        cog.repo.delete = AsyncMock(return_value=True)
+        interaction = _make_thread_interaction(thread_id=thread_id)
+
+        await cog.rewind_session.callback(cog, interaction)
+
+        call_args = interaction.response.send_message.call_args
+        # The confirmation message includes a context % indicator (e.g. "75%")
+        content: str = call_args.args[0]
+        assert "75" in content  # 150000/200000 = 75%
+
+    @pytest.mark.asyncio
+    async def test_rewind_no_context_stats_still_succeeds(self) -> None:
+        """/rewind works even when no context stats are stored."""
+        cog = _make_cog()
+        thread_id = 12345
+        record = _make_session_record(thread_id=thread_id, context_window=None, context_used=None)
+        cog.repo.get = AsyncMock(return_value=record)
+        cog.repo.delete = AsyncMock(return_value=True)
+        interaction = _make_thread_interaction(thread_id=thread_id)
+
+        await cog.rewind_session.callback(cog, interaction)
+
+        # Should still send a non-ephemeral confirmation
+        call_kwargs = interaction.response.send_message.call_args.kwargs
+        assert not call_kwargs.get("ephemeral", False)
 
 
 # ---------------------------------------------------------------------------
@@ -301,3 +340,28 @@ class TestForkCommand:
 
         interaction.response.send_message.assert_called_once()
         assert interaction.response.send_message.call_args.kwargs.get("ephemeral") is True
+
+    @pytest.mark.asyncio
+    async def test_fork_passes_fork_true_to_spawn_session(self) -> None:
+        """/fork calls spawn_session with fork=True so --fork-session is used."""
+        cog = _make_cog()
+        thread_id = 12345
+        session_id = "sess-abc"
+        record = _make_session_record(thread_id=thread_id, session_id=session_id)
+        cog.repo.get = AsyncMock(return_value=record)
+
+        interaction = _make_thread_interaction(thread_id=thread_id)
+        parent_channel = MagicMock(spec=discord.TextChannel)
+        interaction.channel.parent = parent_channel
+
+        new_thread = MagicMock(spec=discord.Thread)
+        new_thread.id = 99999
+        new_thread.mention = "<#99999>"
+
+        with patch.object(
+            cog, "spawn_session", new=AsyncMock(return_value=new_thread)
+        ) as mock_spawn:
+            await cog.fork_session.callback(cog, interaction)
+
+        call_kwargs = mock_spawn.call_args.kwargs
+        assert call_kwargs.get("fork") is True

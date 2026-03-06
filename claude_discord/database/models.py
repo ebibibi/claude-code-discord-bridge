@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_last_used ON sessions(last_used_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id);
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -70,6 +70,17 @@ CREATE TABLE IF NOT EXISTS thread_inbox (
     last_message_url TEXT,
     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+-- Rate limit events emitted by the Claude Code CLI (rate_limit_event stream-json type).
+-- One row per rate_limit_type; upserted on every event so this holds the latest state.
+CREATE TABLE IF NOT EXISTS usage_stats (
+    rate_limit_type TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    utilization REAL NOT NULL,
+    resets_at INTEGER NOT NULL,
+    is_using_overage INTEGER NOT NULL DEFAULT 0,
+    recorded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
 """
 
 # Migrations for existing databases that lack new columns.
@@ -104,6 +115,23 @@ _MIGRATIONS = [
         "confidence TEXT NOT NULL DEFAULT 'high', "
         "last_message_url TEXT, "
         "updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
+    ),
+    # Drop UNIQUE constraint on session_id to allow /fork (multiple threads, same source session)
+    # SQLite cannot ALTER INDEX, so we drop and recreate as a non-unique index.
+    "DROP INDEX IF EXISTS idx_sessions_session_id",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)",
+    # context stats columns added in v2.0
+    "ALTER TABLE sessions ADD COLUMN context_window INTEGER",
+    "ALTER TABLE sessions ADD COLUMN context_used INTEGER",
+    # usage_stats table added in v2.0
+    (
+        "CREATE TABLE IF NOT EXISTS usage_stats ("
+        "rate_limit_type TEXT PRIMARY KEY, "
+        "status TEXT NOT NULL, "
+        "utilization REAL NOT NULL, "
+        "resets_at INTEGER NOT NULL, "
+        "is_using_overage INTEGER NOT NULL DEFAULT 0, "
+        "recorded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
     ),
 ]
 
