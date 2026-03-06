@@ -258,7 +258,7 @@ async def setup_bridge(
         os.makedirs(os.path.dirname(task_db_path) or ".", exist_ok=True)
         task_repo = TaskRepository(task_db_path)
         await task_repo.init_db()
-        scheduler_cog = SchedulerCog(bot, runner, repo=task_repo)
+        scheduler_cog = SchedulerCog(bot, runner, repo=task_repo, session_repo=session_repo)
         await bot.add_cog(scheduler_cog)
         logger.info("Registered SchedulerCog")
 

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from claude_discord.cogs.scheduler import SchedulerCog
+from claude_discord.database.repository import SessionRepository
 from claude_discord.database.task_repo import TaskRepository
 
 
@@ -146,6 +147,73 @@ class TestSchedulerCogMasterLoop:
         # Claude ran inside the thread — call_args[0][0] is the RunConfig
         mock_run.assert_called_once()
         assert mock_run.call_args[0][0].thread is mock_thread
+
+    async def test_run_task_passes_session_repo_to_run_config(
+        self, repo: TaskRepository, tmp_path
+    ) -> None:
+        """When session_repo is provided, RunConfig.repo should be set (not None).
+
+        This enables session persistence so follow-up messages in the scheduled
+        task's thread resume the original session (fixes GitHub issue #264).
+        """
+        import discord
+
+        from claude_discord.database.models import init_db
+
+        session_db = str(tmp_path / "sessions.db")
+        await init_db(session_db)
+        session_repo = SessionRepository(session_db)
+
+        cog_with_session_repo = SchedulerCog(
+            _make_bot(), _make_runner(), repo=repo, session_repo=session_repo
+        )
+
+        task_id = await repo.create(
+            name="resumable", prompt="do stuff", interval_seconds=60, channel_id=99
+        )
+        task = await repo.get(task_id)
+
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_starter_msg = AsyncMock()
+        mock_starter_msg.create_thread = AsyncMock(return_value=mock_thread)
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock(return_value=mock_starter_msg)
+        cog_with_session_repo.bot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
+        ) as mock_run:
+            await cog_with_session_repo._run_task(task)
+
+        mock_run.assert_called_once()
+        run_config = mock_run.call_args[0][0]
+        assert run_config.repo is session_repo
+
+    async def test_run_task_repo_none_when_session_repo_not_set(
+        self, cog: SchedulerCog, repo: TaskRepository
+    ) -> None:
+        """Without session_repo, RunConfig.repo stays None (backward compatible)."""
+        import discord
+
+        task_id = await repo.create(
+            name="no-session", prompt="p", interval_seconds=60, channel_id=99
+        )
+        task = await repo.get(task_id)
+
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_starter_msg = AsyncMock()
+        mock_starter_msg.create_thread = AsyncMock(return_value=mock_thread)
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock(return_value=mock_starter_msg)
+        cog.bot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
+        ) as mock_run:
+            await cog._run_task(task)
+
+        run_config = mock_run.call_args[0][0]
+        assert run_config.repo is None
 
     async def test_disabled_task_not_run(self, cog: SchedulerCog, repo: TaskRepository) -> None:
         """Disabled tasks should not fire even if overdue."""
