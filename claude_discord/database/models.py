@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_last_used ON sessions(last_used_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id);
 
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -116,6 +116,10 @@ _MIGRATIONS = [
         "last_message_url TEXT, "
         "updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
     ),
+    # Drop UNIQUE constraint on session_id to allow /fork (multiple threads, same source session)
+    # SQLite cannot ALTER INDEX, so we drop and recreate as a non-unique index.
+    "DROP INDEX IF EXISTS idx_sessions_session_id",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)",
     # context stats columns added in v2.0
     "ALTER TABLE sessions ADD COLUMN context_window INTEGER",
     "ALTER TABLE sessions ADD COLUMN context_used INTEGER",

@@ -301,3 +301,28 @@ class TestForkCommand:
 
         interaction.response.send_message.assert_called_once()
         assert interaction.response.send_message.call_args.kwargs.get("ephemeral") is True
+
+    @pytest.mark.asyncio
+    async def test_fork_passes_fork_true_to_spawn_session(self) -> None:
+        """/fork calls spawn_session with fork=True so --fork-session is used."""
+        cog = _make_cog()
+        thread_id = 12345
+        session_id = "sess-abc"
+        record = _make_session_record(thread_id=thread_id, session_id=session_id)
+        cog.repo.get = AsyncMock(return_value=record)
+
+        interaction = _make_thread_interaction(thread_id=thread_id)
+        parent_channel = MagicMock(spec=discord.TextChannel)
+        interaction.channel.parent = parent_channel
+
+        new_thread = MagicMock(spec=discord.Thread)
+        new_thread.id = 99999
+        new_thread.mention = "<#99999>"
+
+        with patch.object(
+            cog, "spawn_session", new=AsyncMock(return_value=new_thread)
+        ) as mock_spawn:
+            await cog.fork_session.callback(cog, interaction)
+
+        call_kwargs = mock_spawn.call_args.kwargs
+        assert call_kwargs.get("fork") is True

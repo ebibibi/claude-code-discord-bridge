@@ -89,6 +89,7 @@ class ClaudeRunner:
         thread_id: int | None = None,
         append_system_prompt: str | None = None,
         image_urls: list[str] | None = None,
+        fork_session: bool = False,
     ) -> None:
         self.command = command
         self.model = model
@@ -103,6 +104,7 @@ class ClaudeRunner:
         self.thread_id = thread_id
         self.append_system_prompt = append_system_prompt
         self.image_urls = image_urls
+        self.fork_session = fork_session
         self._process: asyncio.subprocess.Process | None = None
 
     async def run(
@@ -176,6 +178,7 @@ class ClaudeRunner:
         model: str | None = None,
         append_system_prompt: str | None = None,
         allowed_tools: list[str] | None | object = _UNSET,
+        fork_session: bool = False,
     ) -> ClaudeRunner:
         """Create a fresh runner with the same configuration but no active process.
 
@@ -215,6 +218,8 @@ class ClaudeRunner:
             ),
             # image_urls are NOT inherited — they are per-invocation.
             # The caller (run_claude_with_config) passes them via RunConfig.
+            # fork_session is NOT inherited — it's a per-invocation flag.
+            fork_session=fork_session,
         )
 
     async def inject_tool_result(self, request_id: str, data: dict) -> None:
@@ -346,6 +351,8 @@ class ClaudeRunner:
             if not re.match(r"^[a-f0-9\-]+$", session_id):
                 raise ValueError(f"Invalid session_id format: {session_id!r}")
             args.extend(["--resume", session_id])
+            if self.fork_session:
+                args.append("--fork-session")
 
         if self.append_system_prompt:
             args.extend(["--append-system-prompt", self.append_system_prompt])

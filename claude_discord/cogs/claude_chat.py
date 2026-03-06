@@ -408,6 +408,7 @@ class ClaudeChatCog(commands.Cog):
             ),
             thread_name=fork_name,
             session_id=record.session_id,
+            fork=True,
         )
 
         await interaction.followup.send(
@@ -456,6 +457,7 @@ class ClaudeChatCog(commands.Cog):
         prompt: str,
         thread_name: str | None = None,
         session_id: str | None = None,
+        fork: bool = False,
     ) -> discord.Thread:
         """Create a new thread and start a Claude Code session without a user message.
 
@@ -488,7 +490,9 @@ class ClaudeChatCog(commands.Cog):
         seed_message = await thread.send(prompt)
         # Run Claude in the background so /api/spawn returns immediately.
         # The caller gets the thread reference without waiting for Claude to finish.
-        asyncio.create_task(self._run_claude(seed_message, thread, prompt, session_id=session_id))
+        asyncio.create_task(
+            self._run_claude(seed_message, thread, prompt, session_id=session_id, fork=fork)
+        )
         return thread
 
     async def cog_unload(self) -> None:
@@ -683,6 +687,7 @@ class ClaudeChatCog(commands.Cog):
         prompt: str,
         session_id: str | None,
         image_urls: list[str] | None = None,
+        fork: bool = False,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
         if self._semaphore.locked():
@@ -728,6 +733,7 @@ class ClaudeChatCog(commands.Cog):
                 thread_id=thread.id,
                 model=model_override,
                 allowed_tools=tools_override if tools_override is not None else _UNSET,
+                fork_session=fork,
             )
             self._active_runners[thread.id] = runner
 
