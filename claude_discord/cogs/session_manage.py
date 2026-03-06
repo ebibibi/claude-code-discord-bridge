@@ -10,15 +10,16 @@ Provides slash commands for viewing and managing Claude Code sessions:
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..database.repository import SessionRepository
+from ..database.repository import SessionRepository, UsageStatsRepository
 from ..database.settings_repo import SettingsRepository
-from ..discord_ui.embeds import COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
+from ..discord_ui.embeds import COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
 from ..discord_ui.views import ToolSelectView
 from ..worktree import WorktreeManager
 from .session_sync import sync_cli_sessions
@@ -78,6 +79,28 @@ KNOWN_TOOLS: list[str] = [
 ]
 
 
+_AUTOCOMPACT_THRESHOLD = 0.835  # Claude Code's default autocompact threshold
+
+
+def _progress_bar(ratio: float, width: int = 20) -> str:
+    """Return a block-character progress bar, e.g. '████████░░░░░░░░░░░░'."""
+    filled = round(ratio * width)
+    filled = max(0, min(width, filled))
+    return "█" * filled + "░" * (width - filled)
+
+
+def _format_countdown(resets_at: int) -> str:
+    """Return a human-readable countdown to a Unix timestamp, e.g. 'resets in 2h 14m'."""
+    remaining = resets_at - int(time.time())
+    if remaining <= 0:
+        return "resetting now"
+    hours, rem = divmod(remaining, 3600)
+    minutes = rem // 60
+    if hours > 0:
+        return f"resets in {hours}h {minutes}m"
+    return f"resets in {minutes}m"
+
+
 class SessionManageCog(commands.Cog):
     """Cog for session listing, resume info, and CLI sync commands."""
 
@@ -88,11 +111,13 @@ class SessionManageCog(commands.Cog):
         cli_sessions_path: str | None = None,
         settings_repo: SettingsRepository | None = None,
         runner: object | None = None,
+        usage_repo: UsageStatsRepository | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
         self.cli_sessions_path = cli_sessions_path
         self.settings_repo = settings_repo
+        self.usage_repo = usage_repo
         # Optional ClaudeRunner reference for reading the default model.
         # Resolved lazily from ClaudeChatCog if not provided directly.
         self._runner = runner
@@ -684,3 +709,103 @@ class SessionManageCog(commands.Cog):
             )
 
         await interaction.followup.send(embed=embed)
+
+    # ------------------------------------------------------------------
+    # Context window commands
+    # ------------------------------------------------------------------
+
+    @app_commands.command(
+        name="context",
+        description="Show the context window usage for this thread's session",
+    )
+    async def context_show(self, interaction: discord.Interaction) -> None:
+        """Display context window usage (%) with a progress bar and autocompact distance."""
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message(
+                "This command can only be used in a Claude chat thread.", ephemeral=True
+            )
+            return
+
+        record = await self.repo.get(interaction.channel.id)
+        if record is None or record.context_window is None or record.context_used is None:
+            await interaction.response.send_message(
+                "ℹ️ No context data yet — stats are recorded after the first session completes.",
+                ephemeral=True,
+            )
+            return
+
+        ratio = record.context_used / record.context_window
+        pct = round(ratio * 100)
+        bar = _progress_bar(ratio)
+        autocompact_tokens = round(_AUTOCOMPACT_THRESHOLD * record.context_window)
+        distance_to_compact = max(0, autocompact_tokens - record.context_used)
+
+        warning = ratio >= _AUTOCOMPACT_THRESHOLD
+        color = COLOR_ERROR if warning else COLOR_INFO
+
+        lines = [
+            f"`{bar}`  **{pct}%**  ({record.context_used:,} / {record.context_window:,} tokens)",
+            "",
+            f"⚡ autocompact threshold: {round(_AUTOCOMPACT_THRESHOLD * 100, 1)}%"
+            f" ({distance_to_compact:,} tokens away)",
+        ]
+        if warning:
+            lines.append("")
+            lines.append("⚠️ Above autocompact threshold — auto-compact may run on next turn")
+
+        lines.append("")
+        lines.append("💡 Use `/rewind` to recover context headroom")
+
+        embed = discord.Embed(
+            title=f"📊 Context Window — #{interaction.channel.name}",
+            description="\n".join(lines),
+            color=color,
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="usage",
+        description="Show Claude Code rate limit usage and weekly activity",
+    )
+    async def usage_show(self, interaction: discord.Interaction) -> None:
+        """Display rate limit utilization (5-hour / 7-day) with reset countdown."""
+        if self.usage_repo is None:
+            await interaction.response.send_message(
+                "ℹ️ Usage tracking is not enabled for this bot instance.", ephemeral=True
+            )
+            return
+
+        rows = await self.usage_repo.get_latest()
+        if not rows:
+            await interaction.response.send_message(
+                "ℹ️ No usage data yet — stats are recorded after the first session completes.",
+                ephemeral=True,
+            )
+            return
+
+        lines: list[str] = []
+        has_warning = any(r.utilization >= 0.8 for r in rows)
+
+        type_label = {
+            "five_hour": "⚡ 5-hour window",
+            "seven_day": "📅 7-day window",
+            "seven_day_sonnet": "📅 7-day (Sonnet)",
+            "seven_day_opus": "📅 7-day (Opus)",
+        }
+
+        for row in rows:
+            label = type_label.get(row.rate_limit_type, f"📊 {row.rate_limit_type}")
+            bar = _progress_bar(row.utilization)
+            pct = round(row.utilization * 100)
+            countdown = _format_countdown(row.resets_at)
+            warn = " ⚠️" if row.utilization >= 0.8 else ""
+            lines.append(f"**{label}**{warn}")
+            lines.append(f"`{bar}`  **{pct}%**  — {countdown}")
+            lines.append("")
+
+        embed = discord.Embed(
+            title="📊 Claude Code Usage",
+            description="\n".join(lines).rstrip(),
+            color=COLOR_ERROR if has_warning else COLOR_INFO,
+        )
+        await interaction.response.send_message(embed=embed)

@@ -56,6 +56,8 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "clear": "📌 Session",
     "rewind": "📌 Session",
     "fork": "📌 Session",
+    "context": "📌 Session",
+    "usage": "📌 Session",
     "sessions": "📌 Session",
     "resume-info": "📌 Session",
     "sync-sessions": "📌 Session",
