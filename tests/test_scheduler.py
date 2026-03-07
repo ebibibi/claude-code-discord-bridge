@@ -22,6 +22,7 @@ def _make_bot() -> MagicMock:
 def _make_runner() -> MagicMock:
     runner = MagicMock()
     runner.clone.return_value = runner
+    runner.working_dir = None
     return runner
 
 
@@ -385,3 +386,111 @@ class TestSchedulerCogFollowUp:
         assert run_config.session_id == "existing-session-id-abc"
 
         os.unlink(session_db_path)
+
+
+class TestSchedulerPreCheck:
+    """Tests for pre_check_command support."""
+
+    async def test_no_pre_check_runs_normally(
+        self, cog: SchedulerCog, repo: TaskRepository
+    ) -> None:
+        """Task without pre_check_command should run as before."""
+        import discord
+
+        task_id = await repo.create(
+            name="no-check", prompt="do stuff", interval_seconds=60, channel_id=99
+        )
+        task = await repo.get(task_id)
+
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_starter_msg = AsyncMock()
+        mock_starter_msg.create_thread = AsyncMock(return_value=mock_thread)
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock(return_value=mock_starter_msg)
+        cog.bot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
+        ) as mock_run:
+            await cog._run_task(task)
+
+        mock_run.assert_called_once()
+
+    async def test_pre_check_passes_runs_task(
+        self, cog: SchedulerCog, repo: TaskRepository
+    ) -> None:
+        """Task with passing pre_check_command (exit 0) should run."""
+        import discord
+        import sys
+
+        task_id = await repo.create(
+            name="check-pass",
+            prompt="do stuff",
+            interval_seconds=60,
+            channel_id=99,
+            pre_check_command=f"{sys.executable} -c \"raise SystemExit(0)\"",
+        )
+        task = await repo.get(task_id)
+
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_starter_msg = AsyncMock()
+        mock_starter_msg.create_thread = AsyncMock(return_value=mock_thread)
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock(return_value=mock_starter_msg)
+        cog.bot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
+        ) as mock_run:
+            await cog._run_task(task)
+
+        mock_run.assert_called_once()
+
+    async def test_pre_check_fails_skips_task(
+        self, cog: SchedulerCog, repo: TaskRepository
+    ) -> None:
+        """Task with failing pre_check_command (exit 1) should be skipped."""
+        import sys
+
+        task_id = await repo.create(
+            name="check-fail",
+            prompt="do stuff",
+            interval_seconds=60,
+            channel_id=99,
+            pre_check_command=f"{sys.executable} -c \"raise SystemExit(1)\"",
+        )
+        task = await repo.get(task_id)
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
+        ) as mock_run:
+            await cog._run_task(task)
+
+        # Claude should NOT have been called
+        mock_run.assert_not_called()
+
+    async def test_pre_check_skipped_no_thread_created(
+        self, cog: SchedulerCog, repo: TaskRepository
+    ) -> None:
+        """When pre-check fails, no Discord thread should be created."""
+        import sys
+
+        task_id = await repo.create(
+            name="check-no-thread",
+            prompt="do stuff",
+            interval_seconds=60,
+            channel_id=99,
+            pre_check_command=f"{sys.executable} -c \"raise SystemExit(1)\"",
+        )
+        task = await repo.get(task_id)
+
+        mock_channel = AsyncMock()
+        cog.bot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
+        ):
+            await cog._run_task(task)
+
+        # Channel.send should NOT have been called (no starter message)
+        mock_channel.send.assert_not_called()

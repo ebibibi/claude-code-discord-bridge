@@ -310,6 +310,8 @@ class ApiServer:
             interval_seconds: How often to run (seconds).
             channel_id: Discord channel ID for thread creation.
             working_dir: (optional) Working directory for Claude.
+            pre_check_command: (optional) Shell command to run before spawning.
+                If it exits non-zero, the task is skipped for this cycle.
             run_immediately: (optional, default true) Fire on next loop tick.
             anchor_time: (optional) Wall-clock time ``"HH:MM"`` to snap to,
                 preventing time drift. When set, next_run_at is calculated as
@@ -352,6 +354,7 @@ class ApiServer:
                 interval_seconds=int(data["interval_seconds"]),
                 channel_id=int(data["channel_id"]),
                 working_dir=data.get("working_dir"),
+                pre_check_command=data.get("pre_check_command"),
                 run_immediately=bool(data.get("run_immediately", True)),
                 anchor_hour=anchor_hour,
                 anchor_minute=anchor_minute,
@@ -422,6 +425,8 @@ class ApiServer:
             patch_kwargs["interval_seconds"] = int(data["interval_seconds"])
         if "working_dir" in data:
             patch_kwargs["working_dir"] = str(data["working_dir"])
+        if "pre_check_command" in data:
+            patch_kwargs["pre_check_command"] = str(data["pre_check_command"])
 
         # anchor_time: "HH:MM" to set, null to clear
         if "anchor_time" in data:

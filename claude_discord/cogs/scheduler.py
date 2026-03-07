@@ -96,6 +96,39 @@ class SchedulerCog(commands.Cog):
     async def _before_master_loop(self) -> None:
         await self.bot.wait_until_ready()
 
+    async def _run_pre_check(self, command: str, working_dir: str | None) -> bool:
+        """Run a pre-check command. Returns True if the task should proceed.
+
+        The contract is simple: exit code 0 = proceed, anything else = skip.
+        """
+        cwd = working_dir or getattr(self.runner, "working_dir", None)
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if proc.returncode == 0:
+                logger.info("Pre-check passed (exit 0): %s", command)
+                return True
+            else:
+                logger.info(
+                    "Pre-check failed (exit %d), skipping task: %s",
+                    proc.returncode,
+                    command,
+                )
+                if stderr:
+                    logger.debug("Pre-check stderr: %s", stderr.decode(errors="replace").strip())
+                return False
+        except asyncio.TimeoutError:
+            logger.warning("Pre-check timed out after 30s, skipping task: %s", command)
+            return False
+        except Exception:
+            logger.exception("Pre-check error, skipping task: %s", command)
+            return False
+
     async def _run_task(self, task: dict) -> None:
         """Execute a single scheduled task in a Discord thread.
 
@@ -108,6 +141,17 @@ class SchedulerCog(commands.Cog):
         task_id: int = task["id"]
         self._running.add(task_id)
         try:
+            pre_check = task.get("pre_check_command")
+            if pre_check:
+                should_run = await self._run_pre_check(pre_check, task.get("working_dir"))
+                if not should_run:
+                    logger.info(
+                        "SchedulerCog: task %d (%s) skipped by pre-check",
+                        task_id,
+                        task["name"],
+                    )
+                    return
+
             thread_id = task.get("thread_id")
             session_id: str | None = None
 
