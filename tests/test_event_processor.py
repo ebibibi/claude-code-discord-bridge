@@ -788,6 +788,36 @@ class TestCcdbAttachmentsDelivery:
 
         mock_send.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_relative_path_resolved_against_working_dir(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        """Relative paths in .ccdb-attachments are resolved against working_dir.
+
+        Claude may write a bare filename instead of an absolute path.
+        The bot must resolve it against the session working directory so the
+        file is found even though the bot process has a different cwd.
+        """
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        f = tmp_path / "out.py"
+        f.write_text("result = 42", encoding="utf-8")
+        # Write only the bare filename (relative path) — no directory prefix
+        (tmp_path / ".ccdb-attachments").write_text("out.py\n", encoding="utf-8")
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with patch(
+            "claude_discord.cogs.event_processor.send_files",
+            new_callable=AsyncMock,
+        ) as mock_send:
+            await p.process(_make_result_event(session_id="s1"))
+
+        # "out.py" must be resolved to tmp_path / "out.py"
+        mock_send.assert_called_once_with(thread, [str(f)], str(tmp_path))
+
 
 class TestToolUseCount:
     """tool_use_count state tracking."""

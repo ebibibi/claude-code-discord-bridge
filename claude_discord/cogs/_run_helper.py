@@ -93,9 +93,10 @@ async def _build_system_context(config: RunConfig) -> str | None:
         parts.append(
             "## File Delivery\n"
             "The user wants you to send specific files to Discord.\n"
-            "When you are ready to deliver a file, write its absolute path "
-            "(one path per line, UTF-8) to the file:\n"
+            "After creating the file(s) to deliver, use your Bash tool to append "
+            "each file's ABSOLUTE path (one path per line, UTF-8) to:\n"
             f"  {wd}/.ccdb-attachments\n"
+            f"Example: `echo /absolute/path/to/file >> {wd}/.ccdb-attachments`\n"
             "The bot will attach those files to Discord when this session ends.\n"
             "Only include files the user explicitly asked to receive — "
             "not everything you create."

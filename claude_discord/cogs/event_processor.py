@@ -64,7 +64,12 @@ async def _send_attachment_requests(
         paths = [p.strip() for p in marker.read_text(encoding="utf-8").splitlines() if p.strip()]
         marker.unlink(missing_ok=True)
         if paths:
-            await send_files(thread, paths, working_dir)  # type: ignore[arg-type]
+            # Resolve relative paths against working_dir.  Claude is instructed to
+            # write absolute paths, but may write a bare filename.  Resolving here
+            # ensures the file is found even when the bot process has a different cwd.
+            wd = Path(working_dir)
+            abs_paths = [raw if Path(raw).is_absolute() else str(wd / raw) for raw in paths]
+            await send_files(thread, abs_paths, working_dir)  # type: ignore[arg-type]
 
 
 # Max characters for tool result display.
