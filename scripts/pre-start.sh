@@ -2,9 +2,23 @@
 # ccdb pre-start script — runs as ExecStartPre before bot process.
 # Ensures code is at latest and dependencies are synced.
 set -e
-cd /home/ebi/claude-code-discord-bridge
 
-UV=/home/ebi/.local/bin/uv
+# Resolve the repository root dynamically so this script works for any user,
+# regardless of where they cloned the repo.  Using readlink -f handles the case
+# where the script itself is a symlink.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+CCDB_HOME="$(dirname "$SCRIPT_DIR")"
+cd "$CCDB_HOME"
+
+# Locate uv: prefer the local installation, fall back to whatever is on PATH.
+UV="${CCDB_UV_BIN:-}"
+if [ -z "$UV" ]; then
+    UV="$(command -v uv 2>/dev/null || true)"
+fi
+if [ -z "$UV" ]; then
+    echo "[pre-start] ERROR: uv not found. Install it or set CCDB_UV_BIN." >&2
+    exit 1
+fi
 
 # ── Webhook helper ──
 DISCORD_WEBHOOK_URL=""
@@ -43,7 +57,7 @@ fi
 
 # ── Step 2: Sync dependencies ──
 echo "[pre-start] Syncing dependencies..." >&2
-$UV sync 2>&1
+"$UV" sync 2>&1
 
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 echo "[pre-start] Code at: ${COMMIT}" >&2
@@ -62,7 +76,7 @@ if [ $IMPORT_EXIT -ne 0 ]; then
 
     echo "[pre-start] Rolling back..." >&2
     git revert --no-edit HEAD 2>&1 || git checkout HEAD~1 2>&1
-    $UV sync 2>&1
+    "$UV" sync 2>&1
 
     set +e
     ROLLBACK_ERROR=$(.venv/bin/python -c "from claude_discord.main import main" 2>&1)
@@ -79,8 +93,9 @@ if [ $IMPORT_EXIT -ne 0 ]; then
 fi
 
 # ── Step 4: Cleanup stale worktrees ──
-if [ -x /home/ebi/claude-code-discord-bridge/scripts/cleanup_worktrees.sh ]; then
-    /home/ebi/claude-code-discord-bridge/scripts/cleanup_worktrees.sh 2>&1 || true
+CLEANUP_SCRIPT="$CCDB_HOME/scripts/cleanup_worktrees.sh"
+if [ -x "$CLEANUP_SCRIPT" ]; then
+    "$CLEANUP_SCRIPT" 2>&1 || true
 fi
 
 echo "[pre-start] All checks passed. Starting bot (${COMMIT})." >&2
