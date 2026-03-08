@@ -727,6 +727,7 @@ class ClaudeChatCog(commands.Cog):
                 )
 
             model_override = await self._get_current_model()
+            effective_model = model_override or self.runner.model
 
             async def _notify_stall() -> None:
                 threshold = status._stall_hard
@@ -738,7 +739,7 @@ class ClaudeChatCog(commands.Cog):
             status = StatusManager(
                 user_message,
                 on_hard_stall=_notify_stall,
-                model=model_override,
+                model=effective_model,
             )
             await status.set_thinking()
 
