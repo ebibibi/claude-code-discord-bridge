@@ -12,32 +12,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from claude_discord.discord_ui.file_sender import (
-    _is_binary,
     _relative_path,
     collect_discord_files,
     send_files,
 )
-
-# ---------------------------------------------------------------------------
-# _is_binary
-# ---------------------------------------------------------------------------
-
-
-class TestIsBinary:
-    def test_plain_text_is_not_binary(self) -> None:
-        assert _is_binary(b"hello world\nprint('hi')\n") is False
-
-    def test_null_byte_flags_binary(self) -> None:
-        assert _is_binary(b"data\x00more data") is True
-
-    def test_empty_bytes_are_not_binary(self) -> None:
-        assert _is_binary(b"") is False
-
-    def test_null_byte_beyond_first_8kb_not_detected(self) -> None:
-        """Only the first 8 KB is sampled — null bytes later are ignored."""
-        data = b"a" * 8192 + b"\x00"
-        assert _is_binary(data) is False
-
 
 # ---------------------------------------------------------------------------
 # _relative_path
@@ -98,13 +76,15 @@ class TestCollectDiscordFiles:
 
         assert files == []
 
-    def test_binary_file_is_skipped(self, tmp_path: Path) -> None:
+    def test_binary_file_is_included(self, tmp_path: Path) -> None:
+        """Binary files (e.g. PNG, ZIP) are allowed — Discord supports them."""
         f = tmp_path / "binary.bin"
         f.write_bytes(b"\x00\x01\x02\x03")
 
         files = collect_discord_files([str(f)], str(tmp_path))
 
-        assert files == []
+        assert len(files) == 1
+        assert files[0].filename == "binary.bin"
 
     def test_multiple_valid_files_all_returned(self, tmp_path: Path) -> None:
         (tmp_path / "a.py").write_text("a = 1", encoding="utf-8")
@@ -199,7 +179,8 @@ class TestSendFiles:
         assert len(second_batch) == 2
 
     @pytest.mark.asyncio
-    async def test_skips_all_binary_files_sends_nothing(self, tmp_path: Path) -> None:
+    async def test_binary_file_is_sent(self, tmp_path: Path) -> None:
+        """Binary files like PNG are now allowed and sent as attachments."""
         thread = MagicMock()
         thread.send = AsyncMock()
         f = tmp_path / "img.png"
@@ -207,4 +188,4 @@ class TestSendFiles:
 
         await send_files(thread, [str(f)], str(tmp_path))
 
-        thread.send.assert_not_called()
+        thread.send.assert_called_once()

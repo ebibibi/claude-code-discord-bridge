@@ -5,7 +5,7 @@ Files are specified by writing their paths to ``.ccdb-attachments`` in the
 working directory; the bot reads this marker and sends the listed files.
 
 Discord limits: 10 files per message, 8 MB per file (non-boosted server).
-Files exceeding the size limit or detected as binary are skipped.
+Files exceeding the size limit are skipped.
 """
 
 from __future__ import annotations
@@ -19,18 +19,11 @@ import discord
 
 logger = logging.getLogger(__name__)
 
-# Per-file size limit — generous for source code, avoids large binary uploads.
-_MAX_FILE_BYTES = 512 * 1024  # 512 KB
+# Per-file size limit matching Discord's default upload cap for non-boosted servers.
+_MAX_FILE_BYTES = 8 * 1024 * 1024  # 8 MB
 
 # Discord API hard limit: 10 files per message.
 _MAX_FILES_PER_MESSAGE = 10
-
-
-def _is_binary(data: bytes) -> bool:
-    """Heuristic: treat a file as binary if it contains a null byte in the
-    first 8 KB.  Null bytes never appear in valid UTF-8 source files.
-    """
-    return b"\x00" in data[:8192]
 
 
 def _relative_path(file_path: str, working_dir: str | None) -> str:
@@ -59,8 +52,9 @@ def collect_discord_files(
 
     Skips files that:
     * Do not exist on disk
-    * Exceed *max_bytes* (default: 512 KB)
-    * Appear to be binary (contain a null byte in the first 8 KB)
+    * Exceed *max_bytes* (default: 8 MB, matching Discord's non-boosted limit)
+
+    Binary files (images, ZIPs, PDFs, etc.) are accepted — Discord supports them.
 
     Args:
         file_paths: Absolute or working-dir-relative paths to attach.
@@ -98,10 +92,6 @@ def collect_discord_files(
             data = path.read_bytes()
         except OSError:
             logger.debug("Cannot read file, skipping: %s", path, exc_info=True)
-            continue
-
-        if _is_binary(data):
-            logger.debug("Skipping binary file: %s", path)
             continue
 
         display_name = _relative_path(path_str, working_dir)
