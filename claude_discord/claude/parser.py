@@ -160,6 +160,8 @@ def _parse_user(data: dict[str, Any], event: StreamEvent) -> None:
     content = message.get("content", [])
 
     for block in content:
+        if not isinstance(block, dict):
+            continue
         if block.get("type") == ContentBlockType.TOOL_RESULT.value:
             event.tool_result_id = block.get("tool_use_id", "")
             # Extract tool result content
