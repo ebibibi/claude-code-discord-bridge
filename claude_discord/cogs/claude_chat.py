@@ -726,16 +726,22 @@ class ClaudeChatCog(commands.Cog):
                     thread=thread,
                 )
 
+            model_override = await self._get_current_model()
+
             async def _notify_stall() -> None:
+                threshold = status._stall_hard
                 await thread.send(
-                    "-# \u26a0\ufe0f No activity for 30s — could be extended thinking "
+                    f"-# \u26a0\ufe0f No activity for {threshold}s — could be extended thinking "
                     "or context compression. Will resume automatically."
                 )
 
-            status = StatusManager(user_message, on_hard_stall=_notify_stall)
+            status = StatusManager(
+                user_message,
+                on_hard_stall=_notify_stall,
+                model=model_override,
+            )
             await status.set_thinking()
 
-            model_override = await self._get_current_model()
             tools_override = await self._get_allowed_tools()
             from ..claude.runner import _UNSET
 

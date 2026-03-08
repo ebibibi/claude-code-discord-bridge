@@ -42,6 +42,19 @@ DEBOUNCE_MS = 700
 STALL_SOFT_SECONDS = 10
 STALL_HARD_SECONDS = 30
 
+# Models known to have extended thinking pauses (thinking, context compression).
+# These get higher stall thresholds to avoid false warnings.
+_SLOW_MODEL_KEYWORDS = ("opus",)
+_SLOW_STALL_SOFT_SECONDS = 30
+_SLOW_STALL_HARD_SECONDS = 120
+
+
+def _stall_thresholds(model: str | None) -> tuple[int, int]:
+    """Return (soft, hard) stall thresholds appropriate for *model*."""
+    if model and any(kw in model.lower() for kw in _SLOW_MODEL_KEYWORDS):
+        return _SLOW_STALL_SOFT_SECONDS, _SLOW_STALL_HARD_SECONDS
+    return STALL_SOFT_SECONDS, STALL_HARD_SECONDS
+
 
 class StatusManager:
     """Manages emoji reactions on a Discord message to show Claude's status.
@@ -54,6 +67,7 @@ class StatusManager:
         self,
         message: discord.Message,
         on_hard_stall: Callable[[], Awaitable[None]] | None = None,
+        model: str | None = None,
     ) -> None:
         self._message = message
         self._current_emoji: str | None = None
@@ -64,6 +78,7 @@ class StatusManager:
         self._last_activity = asyncio.get_running_loop().time()
         self._on_hard_stall = on_hard_stall
         self._hard_stall_notified = False
+        self._stall_soft, self._stall_hard = _stall_thresholds(model)
 
     async def set_thinking(self) -> None:
         """Set status to thinking."""
@@ -163,14 +178,14 @@ class StatusManager:
             await asyncio.sleep(2)
             elapsed = asyncio.get_running_loop().time() - self._last_activity
 
-            if elapsed >= STALL_HARD_SECONDS and self._current_emoji != EMOJI_STALL_HARD:
+            if elapsed >= self._stall_hard and self._current_emoji != EMOJI_STALL_HARD:
                 await self._set_status(EMOJI_STALL_HARD)
                 if self._on_hard_stall and not self._hard_stall_notified:
                     self._hard_stall_notified = True
                     with contextlib.suppress(Exception):
                         await self._on_hard_stall()
             elif (
-                elapsed >= STALL_SOFT_SECONDS
+                elapsed >= self._stall_soft
                 and not soft_warned
                 and self._current_emoji != EMOJI_STALL_HARD
             ):
