@@ -140,7 +140,7 @@ Si el bot se reinicia a mitad de sesión, las sesiones de Claude interrumpidas s
 - **Uso de tokens** — Tasa de aciertos de caché y recuento de tokens mostrados en el embed de sesión completada
 - **Uso de contexto** — Porcentaje de la ventana de contexto (tokens de entrada + caché, excluyendo salida) y capacidad restante hasta el auto-compactado mostrados en el embed de sesión completada; ⚠️ advertencia cuando supera el 83,5%
 - **Detección de compactado** — Notifica en el hilo cuando ocurre la compactación de contexto (tipo de desencadenante + recuento de tokens antes del compactado)
-- **Notificación de estancamiento** — Mensaje en el hilo tras 30 s sin actividad (pensamiento extendido o compresión de contexto); se reinicia automáticamente cuando Claude reanuda
+- **Notificación de estancamiento** — Mensaje en el hilo cuando no hay actividad (pensamiento extendido o compresión de contexto); se reinicia automáticamente cuando Claude reanuda. Los umbrales se adaptan al modelo: 30 s para modelos estándar, 120 s para Opus (pausas de reflexión más largas)
 - **Notificaciones de timeout** — Embed con tiempo transcurrido y guía de reanudación al agotar tiempo
 - **Bandeja de entrada de hilos** — Cuando `THREAD_INBOX_ENABLED=true`, el panel muestra una sección 📬 persistente; al finalizar cada sesión, Claude clasifica el último mensaje (`waiting`/`done`/`ambiguous`) mediante una llamada ligera a `claude -p`; los hilos que esperan respuesta sobreviven reinicios del bot y se muestran hasta que respondes
 
@@ -243,6 +243,8 @@ journalctl -u mybot.service -f
 3. **Validación de importación** — verifica que `claude_discord.main` se importe correctamente
 4. **Reversión automática** — si la importación falla, revierte al commit anterior y reintenta; envía notificación vía Discord webhook
 5. **Limpieza de worktrees** — elimina git worktrees huérfanos de sesiones que fallaron
+
+El script detecta dinámicamente la raíz del repositorio mediante `readlink -f $0`, por lo que no es necesario editar rutas en el script independientemente de dónde se haya clonado. El binario `uv` también se detecta automáticamente desde `PATH`; usa la variable `CCDB_UV_BIN` para especificar una ruta personalizada.
 
 Configura `DISCORD_WEBHOOK_URL` en `.env` para recibir notificaciones de fallo (opcional).
 

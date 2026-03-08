@@ -140,7 +140,7 @@ Si le bot redémarre en cours de session, les sessions Claude interrompues repre
 - **Utilisation de tokens** — Taux de succès du cache et nombre de tokens affichés dans l'embed de session terminée
 - **Utilisation du contexte** — Pourcentage de la fenêtre de contexte (tokens d'entrée + cache, hors sortie) et capacité restante jusqu'à l'auto-compactage affichés dans l'embed de session terminée ; ⚠️ avertissement au-dessus de 83,5%
 - **Détection de compactage** — Notifie dans le fil quand la compaction du contexte se produit (type de déclencheur + nombre de tokens avant compactage)
-- **Notification de blocage** — Message dans le fil après 30 s sans activité (réflexion étendue ou compression de contexte) ; réinitialise automatiquement quand Claude reprend
+- **Notification de blocage** — Message dans le fil en l'absence d'activité (réflexion étendue ou compression de contexte) ; réinitialise automatiquement quand Claude reprend. Les seuils s'adaptent au modèle : 30 s pour les modèles standard, 120 s pour Opus (pauses de réflexion plus longues)
 - **Notifications de timeout** — Embed avec temps écoulé et guide de reprise en cas de timeout
 - **Boîte de réception des fils** — Quand `THREAD_INBOX_ENABLED=true`, le tableau de bord affiche une section 📬 persistante ; après chaque fin de session, Claude classe le dernier message (`waiting`/`done`/`ambiguous`) via un appel léger à `claude -p` ; les fils attendant une réponse survivent aux redémarrages du bot et sont affichés jusqu'à votre réponse
 
@@ -243,6 +243,8 @@ journalctl -u mybot.service -f
 3. **Validation des imports** — vérifie que `claude_discord.main` s'importe correctement
 4. **Rollback automatique** — en cas d'échec de l'import, revient au commit précédent et réessaie ; envoie une notification via Discord webhook
 5. **Nettoyage des worktrees** — supprime les git worktrees orphelins laissés par des sessions qui ont planté
+
+Le script détecte dynamiquement la racine du dépôt via `readlink -f $0`, donc aucune modification de chemin n'est nécessaire dans le script lui-même, quel que soit l'emplacement du clone. Le binaire `uv` est également auto-détecté depuis `PATH` ; utilisez la variable `CCDB_UV_BIN` pour spécifier un chemin personnalisé.
 
 Configurez `DISCORD_WEBHOOK_URL` dans `.env` pour recevoir des notifications d'échec (optionnel).
 

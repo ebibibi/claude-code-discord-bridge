@@ -158,7 +158,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Token usage** — Cache hit rate and token counts shown in session-complete embed
 - **Context usage** — Context window percentage (input + cache tokens, excluding output) and remaining capacity until auto-compact shown in session-complete embed; ⚠️ warning when above 83.5%
 - **Compact detection** — Notifies in-thread when context compaction occurs (trigger type + token count before compact)
-- **Hard stall notification** — Thread message after 30 s of no activity (extended thinking or context compression); resets automatically when Claude resumes
+- **Hard stall notification** — Thread message after no activity (extended thinking or context compression); resets automatically when Claude resumes. Thresholds are model-aware: 30 s for standard models, 120 s for Opus (which has longer thinking pauses)
 - **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
 - **Thread inbox** — When `THREAD_INBOX_ENABLED=true`, the dashboard shows a persistent 📬 inbox section: after each session ends, Claude classifies the final message (`waiting` / `done` / `ambiguous`) via a lightweight `claude -p` call; threads awaiting your reply survive bot restarts and are surfaced until you respond
 
@@ -316,6 +316,8 @@ journalctl -u mybot.service -f
 3. **Import validation** — verifies that `claude_discord.main` imports cleanly
 4. **Auto-rollback** — if import fails, reverts to the previous commit and retries; posts a Discord webhook notification on failure or success
 5. **Worktree cleanup** — removes stale git worktrees left by crashed sessions
+
+The script detects the repository root dynamically (via `readlink -f` on `$0`), so it works for any user regardless of where they cloned the repo — no path editing needed in the script itself. It also auto-discovers the `uv` binary from `PATH`; override via `CCDB_UV_BIN` env var if needed.
 
 The script requires the `DISCORD_WEBHOOK_URL` variable in `.env` for failure notifications (optional — the script works without it).
 

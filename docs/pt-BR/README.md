@@ -140,7 +140,7 @@ Se o bot reiniciar no meio de uma sessão, as sessões do Claude interrompidas s
 - **Uso de tokens** — Taxa de acerto de cache e contagem de tokens exibidos no embed de sessão completa
 - **Uso de contexto** — Percentual da janela de contexto (tokens de entrada + cache, excluindo saída) e capacidade restante até o auto-compact exibidos no embed de sessão concluída; ⚠️ aviso quando acima de 83,5%
 - **Detecção de compactação** — Notifica na thread quando a compactação de contexto ocorre (tipo de gatilho + contagem de tokens antes da compactação)
-- **Notificação de travamento** — Mensagem na thread após 30 s sem atividade (pensamento estendido ou compressão de contexto); reinicia automaticamente quando Claude retoma
+- **Notificação de travamento** — Mensagem na thread quando não há atividade (pensamento estendido ou compressão de contexto); reinicia automaticamente quando Claude retoma. Os limites se adaptam ao modelo: 30 s para modelos padrão, 120 s para Opus (pausas de reflexão mais longas)
 - **Notificações de timeout** — Embed com tempo decorrido e guia de retomada ao atingir timeout
 - **Caixa de entrada de threads** — Quando `THREAD_INBOX_ENABLED=true`, o painel exibe uma seção 📬 persistente; após cada sessão terminar, o Claude classifica a última mensagem (`waiting`/`done`/`ambiguous`) via uma chamada leve a `claude -p`; threads aguardando resposta sobrevivem a reinícios do bot e são exibidas até você responder
 
@@ -243,6 +243,8 @@ journalctl -u mybot.service -f
 3. **Validação de importação** — verifica se `claude_discord.main` importa corretamente
 4. **Rollback automático** — se a importação falhar, reverte para o commit anterior e tenta novamente; envia notificação via Discord webhook
 5. **Limpeza de worktrees** — remove git worktrees órfãos de sessões que falharam
+
+O script detecta dinamicamente a raiz do repositório via `readlink -f $0`, então não é necessário editar caminhos no script independentemente de onde o clone foi feito. O binário `uv` também é auto-detectado do `PATH`; use a variável `CCDB_UV_BIN` para especificar um caminho personalizado.
 
 Configure `DISCORD_WEBHOOK_URL` no `.env` para receber notificações de falha (opcional).
 
