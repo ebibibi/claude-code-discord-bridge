@@ -56,10 +56,13 @@ async def _send_attachment_requests(
     is suppressed — file attachment is non-fatal.
     """
     if not working_dir:
+        logger.debug("_send_attachment_requests: no working_dir, skipping")
         return
     marker = Path(working_dir) / _ATTACHMENT_MARKER
     if not marker.exists():
+        logger.debug("_send_attachment_requests: %s not found, skipping", marker)
         return
+    logger.info("_send_attachment_requests: found %s", marker)
     with contextlib.suppress(OSError):
         paths = [p.strip() for p in marker.read_text(encoding="utf-8").splitlines() if p.strip()]
         marker.unlink(missing_ok=True)
@@ -69,6 +72,11 @@ async def _send_attachment_requests(
             # ensures the file is found even when the bot process has a different cwd.
             wd = Path(working_dir)
             abs_paths = [raw if Path(raw).is_absolute() else str(wd / raw) for raw in paths]
+            logger.info(
+                "_send_attachment_requests: sending %d file(s): %s",
+                len(abs_paths),
+                abs_paths,
+            )
             await send_files(thread, abs_paths, working_dir)  # type: ignore[arg-type]
 
 
