@@ -789,6 +789,50 @@ class TestCcdbAttachmentsDelivery:
         mock_send.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_logging_when_marker_found(
+        self, thread: MagicMock, runner: MagicMock, tmp_path, caplog
+    ) -> None:
+        """INFO log is emitted when .ccdb-attachments is found and processed."""
+        import logging
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        f = tmp_path / "out.py"
+        f.write_text("x = 1", encoding="utf-8")
+        (tmp_path / ".ccdb-attachments").write_text(str(f) + "\n", encoding="utf-8")
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with (
+            patch("claude_discord.cogs.event_processor.send_files", new_callable=AsyncMock),
+            caplog.at_level(logging.INFO, logger="claude_discord.cogs.event_processor"),
+        ):
+            await p.process(_make_result_event(session_id="s1"))
+
+        assert any("ccdb-attachments" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_logging_when_marker_absent(
+        self, thread: MagicMock, runner: MagicMock, tmp_path, caplog
+    ) -> None:
+        """DEBUG log is emitted when .ccdb-attachments is absent."""
+        import logging
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with (
+            patch("claude_discord.cogs.event_processor.send_files", new_callable=AsyncMock),
+            caplog.at_level(logging.DEBUG, logger="claude_discord.cogs.event_processor"),
+        ):
+            await p.process(_make_result_event(session_id="s1"))
+
+        assert any("ccdb-attachments" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
     async def test_relative_path_resolved_against_working_dir(
         self, thread: MagicMock, runner: MagicMock, tmp_path
     ) -> None:
