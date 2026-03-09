@@ -27,19 +27,14 @@ When you send tasks to Claude Code in separate Discord threads, the bridge does 
 
 2. **Active session registry** — Each running session knows about the others. If two sessions are about to touch the same repo, they can coordinate rather than conflict.
 
-3. **Coordination channel** — A shared Discord channel where sessions broadcast start/end events. Both Claude and humans can see at a glance what's happening across all active threads.
-
-4. **AI Lounge** — A session-to-session "breakroom" injected into every prompt. Before starting, each session reads recent lounge messages to see what other sessions are doing. Before disruptive operations (force push, bot restart, DB drop), sessions check the lounge first so they don't stomp on each other's work.
+3. **AI Lounge** — A session-to-session "breakroom" injected into every prompt. Before starting, each session reads recent lounge messages to see what other sessions are doing. Before disruptive operations (force push, bot restart, DB drop), sessions check the lounge first so they don't stomp on each other's work.
 
 ```
 Thread A (feature)   ──→  Claude Code (worktree-A)  ─┐
 Thread B (PR review) ──→  Claude Code (worktree-B)   ├─→  #ai-lounge
 Thread C (docs)      ──→  Claude Code (worktree-C)  ─┘    "A: auth refactor in progress"
-           ↓ lifecycle events                              "B: PR #42 review done"
-   #coordination channel                                   "C: updating README"
-   "A: started on auth refactor"
-   "B: reviewing PR #42"
-   "C: updating README"
+                                                           "B: PR #42 review done"
+                                                           "C: updating README"
 ```
 
 No race conditions. No lost work. No merge surprises.
@@ -57,7 +52,7 @@ Use Claude Code from anywhere Discord runs — phone, tablet, or desktop. Each m
 Open multiple threads simultaneously. Each is an independent Claude Code session with its own context, working directory, and git worktree. Useful patterns:
 
 - **Feature + review in parallel**: Start a feature in one thread while Claude reviews a PR in another.
-- **Multiple contributors**: Different team members each get their own thread; sessions stay aware of each other via the coordination channel.
+- **Multiple contributors**: Different team members each get their own thread; sessions stay aware of each other via the AI Lounge.
 - **Experiment safely**: Try an approach in thread A while keeping thread B on stable code.
 
 ### Scheduled Tasks (SchedulerCog)
@@ -158,7 +153,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Token usage** — Cache hit rate and token counts shown in session-complete embed
 - **Context usage** — Context window percentage (input + cache tokens, excluding output) and remaining capacity until auto-compact shown in session-complete embed; ⚠️ warning when above 83.5%
 - **Compact detection** — Notifies in-thread when context compaction occurs (trigger type + token count before compact)
-- **Hard stall notification** — Thread message after 30 s of no activity (extended thinking or context compression); resets automatically when Claude resumes
+- **Hard stall notification** — Thread message after no activity (extended thinking or context compression); resets automatically when Claude resumes. Thresholds are model-aware: 30 s for standard models, 120 s for Opus (which has longer thinking pauses)
 - **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
 - **Thread inbox** — When `THREAD_INBOX_ENABLED=true`, the dashboard shows a persistent 📬 inbox section: after each session ends, Claude classifies the final message (`waiting` / `done` / `ambiguous`) via a lightweight `claude -p` call; threads awaiting your reply survive bot restarts and are surfaced until you respond
 
@@ -173,8 +168,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Automatic worktree cleanup** — Session worktrees (`wt-{thread_id}`) are removed automatically at session end and on bot startup; dirty worktrees are never auto-removed (safety invariant)
 - **Active session registry** — In-memory registry; each session sees what the others are doing
 - **AI Lounge** — Shared "breakroom" channel; context injected via `--append-system-prompt` (ephemeral, never accumulates in history) so long sessions never hit "Prompt is too long"; sessions post intentions, read each other's status, and check before disruptive operations; humans see it as a live activity feed
-- **Coordination channel** — Optional shared channel for cross-session lifecycle broadcasts
-- **Coordination scripts** — Claude can call `coord_post.py` / `coord_read.py` from within a session to post and read events
+- **Coordination channel** — `COORDINATION_CHANNEL_ID` env var is used as the default fallback for the AI Lounge channel (no separate bot-side lifecycle events)
 
 ### Scheduled Tasks
 - **SchedulerCog** — SQLite-backed periodic task executor with a 30-second master loop
@@ -316,6 +310,8 @@ journalctl -u mybot.service -f
 3. **Import validation** — verifies that `claude_discord.main` imports cleanly
 4. **Auto-rollback** — if import fails, reverts to the previous commit and retries; posts a Discord webhook notification on failure or success
 5. **Worktree cleanup** — removes stale git worktrees left by crashed sessions
+
+The script detects the repository root dynamically (via `readlink -f` on `$0`), so it works for any user regardless of where they cloned the repo — no path editing needed in the script itself. It also auto-discovers the `uv` binary from `PATH`; override via `CCDB_UV_BIN` env var if needed.
 
 The script requires the `DISCORD_WEBHOOK_URL` variable in `.env` for failure notifications (optional — the script works without it).
 
@@ -480,7 +476,7 @@ In inline-reply mode, Claude's response is sent directly as a message in the cha
 | `MAX_CONCURRENT_SESSIONS` | Max parallel sessions | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Session inactivity timeout | `300` |
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
-| `COORDINATION_CHANNEL_ID` | Channel ID for cross-session event broadcasts | (optional) |
+| `COORDINATION_CHANNEL_ID` | Channel ID used as default fallback for AI Lounge channel | (optional) |
 | `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot only responds when @mentioned | (optional) |
 | `INLINE_REPLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot replies inline (no thread created) | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
@@ -762,8 +758,6 @@ claude_discord/
     runner.py              # Claude CLI subprocess manager
     parser.py              # stream-json event parser
     types.py               # Type definitions for SDK messages
-  coordination/
-    service.py             # Posts session lifecycle events to shared channel
   database/
     models.py              # SQLite schema
     repository.py          # Session CRUD
@@ -807,7 +801,7 @@ examples/
 ### Design Philosophy
 
 - **CLI spawn, not API** — Invokes `claude -p --output-format stream-json`, giving full Claude Code features (CLAUDE.md, skills, tools, memory) without reimplementing them. Runs on your Claude Pro/Max subscription — no API key, no per-token billing
-- **Concurrency first** — Multiple simultaneous sessions are the expected case, not an edge case; every session gets worktree instructions, the registry and coordination channel handle the rest
+- **Concurrency first** — Multiple simultaneous sessions are the expected case, not an edge case; every session gets worktree instructions, the registry and AI Lounge handle the rest
 - **Discord as glue** — Discord provides UI, threading, reactions, webhooks, and persistent notifications; no custom frontend needed
 - **Framework, not application** — Install as a package, add Cogs to your existing bot, configure via code
 - **Zero-code extensibility** — Add scheduled tasks and webhook triggers without touching source

@@ -386,6 +386,29 @@ class TestNewThreadMode:
         interaction.followup.send.assert_called_once()
         assert "not found" in interaction.followup.send.call_args.args[0].lower()
 
+    @pytest.mark.asyncio
+    async def test_runner_cloned_with_thread_id_in_new_thread_mode(self) -> None:
+        """runner.clone() must receive the new thread's ID in new-thread mode.
+
+        Without thread_id, skills like image-gen deliver files to the wrong thread
+        because DISCORD_THREAD_ID env var inherits a stale or None value from the
+        base runner.
+        """
+        cog = _make_cog(skills=[{"name": "image-gen", "description": "Tasks"}])
+        interaction = _make_interaction()
+
+        mock_channel = MagicMock(spec=discord.TextChannel)
+        mock_thread = _make_thread(thread_id=8888)
+        mock_channel.create_thread = AsyncMock(return_value=mock_thread)
+        cog.bot.get_channel = MagicMock(return_value=mock_channel)
+
+        with patch(
+            "claude_discord.cogs.skill_command.run_claude_with_config", new_callable=AsyncMock
+        ):
+            await cog.run_skill.callback(cog, interaction, name="image-gen", args=None)
+
+        cog.runner.clone.assert_called_once_with(thread_id=8888)
+
 
 # ---------------------------------------------------------------------------
 # /skill — in-thread mode
@@ -465,6 +488,25 @@ class TestInThreadMode:
             await cog.run_skill.callback(cog, interaction, name="todoist", args="filter today")
             call_kwargs = mock_run.call_args[0][0]  # RunConfig object
             assert call_kwargs.prompt == "/todoist filter today"
+
+    @pytest.mark.asyncio
+    async def test_runner_cloned_with_thread_id_in_thread_mode(self) -> None:
+        """runner.clone() must receive thread_id so DISCORD_THREAD_ID env var is correct.
+
+        Without thread_id, image-gen and other skills that deliver files via REST API
+        would attach their output to the wrong thread (the runner's inherited thread_id).
+        """
+        cog = _make_cog(skills=[{"name": "image-gen", "description": ""}])
+        thread = _make_thread(thread_id=7777, parent_id=999)
+        interaction = _make_interaction(channel=thread)
+        cog.repo.get = AsyncMock(return_value=None)
+
+        with patch(
+            "claude_discord.cogs.skill_command.run_claude_with_config", new_callable=AsyncMock
+        ):
+            await cog.run_skill.callback(cog, interaction, name="image-gen", args=None)
+
+        cog.runner.clone.assert_called_once_with(thread_id=7777)
 
 
 # ---------------------------------------------------------------------------

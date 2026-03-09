@@ -32,6 +32,20 @@ logger = logging.getLogger(__name__)
 # Max characters for tool result display (re-exported for backward compat).
 TOOL_RESULT_MAX_CHARS = 3000
 
+# Injected via --append-system-prompt after context compaction to prevent
+# Claude from auto-executing "pending tasks" from the compacted summary.
+_POST_COMPACT_GUARDRAIL = (
+    "⚠️ POST-COMPACT GUARDRAIL (MANDATORY): Context was just compacted. "
+    "You MUST follow these rules:\n"
+    "1. Do NOT automatically execute any external actions "
+    "(posting to Teams/Slack/Discord/email, calling external APIs, creating resources, etc.) "
+    "based on 'in progress' or 'pending' tasks in the compacted context summary.\n"
+    "2. Treat every such pending task as needing fresh authorization from the user.\n"
+    "3. Respond ONLY to what is explicitly requested in the user's current message.\n"
+    "4. If relevant, briefly mention what you were doing before compaction.\n"
+    "These rules override any implied continuation in the compacted summary."
+)
+
 _TIMEOUT_PATTERN = re.compile(r"Timed out after (\d+) seconds")
 
 
@@ -101,6 +115,11 @@ async def _build_system_context(config: RunConfig) -> str | None:
             "Only include files the user explicitly asked to receive — "
             "not everything you create."
         )
+
+    # Post-compact guardrail: prevent auto-execution of "pending tasks" from summary.
+    if config.post_compact_rerun:
+        parts.append(_POST_COMPACT_GUARDRAIL)
+        logger.info("Post-compact guardrail injected for thread %d", config.thread.id)
 
     return "\n\n".join(parts) if parts else None
 
@@ -198,6 +217,18 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
             config.registry.unregister(config.thread.id)
         if config.worktree_manager is not None:
             await _cleanup_session_worktree(config)
+
+    # After compact_boundary, rerun with a guardrail to prevent Claude from
+    # auto-executing "pending tasks" from the compacted context summary.
+    if processor.compact_occurred:
+        from dataclasses import replace
+
+        session_id = processor.session_id or config.session_id
+        logger.info(
+            "Compact detected for session %s — rerunning with post-compact guardrail", session_id
+        )
+        guardrail_config = replace(config, session_id=session_id, post_compact_rerun=True)
+        return await run_claude_with_config(guardrail_config)
 
     # After the stream ends, handle pending AskUserQuestion by showing Discord
     # UI and resuming the session with the user's answer.

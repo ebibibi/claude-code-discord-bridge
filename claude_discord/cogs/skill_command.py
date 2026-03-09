@@ -202,7 +202,7 @@ class SkillCommandCog(commands.Cog):
             display = f"`/{name} {args}`" if args else f"`/{name}`"
             await interaction.followup.send(f"Running {display} in this thread…")
 
-            runner = self.runner.clone()
+            runner = self.runner.clone(thread_id=channel.id)
             await run_claude_with_config(
                 RunConfig(
                     thread=channel,
@@ -237,7 +237,7 @@ class SkillCommandCog(commands.Cog):
         display = f"`/{name} {args}`" if args else f"`/{name}`"
         await interaction.followup.send(f"Running {display} → {thread.mention}")
 
-        runner = self.runner.clone()
+        runner = self.runner.clone(thread_id=thread.id)
         await run_claude_with_config(
             RunConfig(
                 thread=thread,
