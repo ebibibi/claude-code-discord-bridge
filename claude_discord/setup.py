@@ -114,9 +114,7 @@ async def setup_bridge(
         enable_scheduler: Whether to enable SchedulerCog.
         task_db_path: Path for scheduled tasks SQLite DB.
         lounge_channel_id: Discord channel ID for AI Lounge messages.
-                           Defaults to COORDINATION_CHANNEL_ID env var so
-                           lounge and coordination share the same channel
-                           with no extra configuration needed.
+                           Defaults to COORDINATION_CHANNEL_ID env var.
         worktree_base_dir: Base directory to scan for session worktrees
                            (e.g. ``/home/user``). When set, a WorktreeManager
                            is created and attached to the bot, enabling automatic
@@ -165,7 +163,7 @@ async def setup_bridge(
             int(x.strip()) for x in _env_inline.split(",") if x.strip().isdigit()
         } or None
 
-    # Lounge shares the coordination channel unless explicitly overridden
+    # Lounge channel — fall back to COORDINATION_CHANNEL_ID env var for backward compat
     if lounge_channel_id is None:
         ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
         lounge_channel_id = int(ch_str) if ch_str.isdigit() else None

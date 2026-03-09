@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 from typing import TYPE_CHECKING
 
 import discord
@@ -22,7 +21,6 @@ from discord.ext import commands
 
 from ..claude.runner import ClaudeRunner
 from ..concurrency import SessionRegistry
-from ..coordination.service import CoordinationService
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
@@ -89,7 +87,6 @@ class ClaudeChatCog(commands.Cog):
         allowed_user_ids: set[int] | None = None,
         registry: SessionRegistry | None = None,
         dashboard: ThreadStatusDashboard | None = None,
-        coordination: CoordinationService | None = None,
         ask_repo: PendingAskRepository | None = None,
         lounge_repo: LoungeRepository | None = None,
         resume_repo: PendingResumeRepository | None = None,
@@ -125,8 +122,6 @@ class ClaudeChatCog(commands.Cog):
         self._active_tasks: dict[int, asyncio.Task] = {}
         # Dashboard may be None until bot is ready; resolved lazily in _get_dashboard()
         self._dashboard = dashboard
-        # Coordination service resolved lazily from bot if not supplied directly
-        self._coordination = coordination
         # For AskUserQuestion persistence across restarts
         self._ask_repo = ask_repo or getattr(bot, "ask_repo", None)
         # AI Lounge repo (optional — lounge disabled when None)
@@ -182,24 +177,6 @@ class ClaudeChatCog(commands.Cog):
         if stored is None:
             return None
         return [t.strip() for t in stored.split(",") if t.strip()]
-
-    def _get_coordination(self) -> CoordinationService:
-        """Return the coordination service (zero-config: auto-creates from env if needed).
-
-        Priority:
-        1. Explicitly supplied via constructor or bot.coordination attribute
-        2. Auto-created from COORDINATION_CHANNEL_ID env var (no consumer wiring needed)
-        3. No-op service when env var is unset
-        """
-        if self._coordination is None:
-            existing = getattr(self.bot, "coordination", None)
-            if existing is not None:
-                self._coordination = existing
-            else:
-                channel_id_str = os.getenv("COORDINATION_CHANNEL_ID", "")
-                channel_id = int(channel_id_str) if channel_id_str.isdigit() else None
-                self._coordination = CoordinationService(self.bot, channel_id)
-        return self._coordination
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
@@ -708,7 +685,6 @@ class ClaudeChatCog(commands.Cog):
 
         async with self._semaphore:
             dashboard = self._get_dashboard()
-            coordination = self._get_coordination()
             description = prompt[:100].replace("\n", " ")
 
             # Register the current asyncio Task so _handle_thread_reply can
@@ -783,9 +759,6 @@ class ClaudeChatCog(commands.Cog):
                 await stop_view.disable()
                 self._active_runners.pop(thread.id, None)
                 self._active_tasks.pop(thread.id, None)
-
-                # Announce session end to coordination channel (no-op if unconfigured)
-                await coordination.post_session_end(thread)
 
                 # Transition to WAITING_INPUT so owner knows a reply is needed
                 if dashboard is not None:

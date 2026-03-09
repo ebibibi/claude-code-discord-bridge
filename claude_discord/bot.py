@@ -10,7 +10,6 @@ from discord.ext import commands
 
 from .claude.types import AskOption, AskQuestion
 from .concurrency import SessionRegistry
-from .coordination.service import CoordinationService
 from .discord_ui.ask_bus import ask_bus
 from .discord_ui.ask_view import AskView
 
@@ -31,7 +30,6 @@ class ClaudeDiscordBot(commands.Bot):
         self,
         channel_id: int,
         owner_id: int | None = None,
-        coordination_channel_id: int | None = None,
         ask_repo: PendingAskRepository | None = None,
         lounge_repo: LoungeRepository | None = None,
         lounge_channel_id: int | None = None,
@@ -52,8 +50,6 @@ class ClaudeDiscordBot(commands.Bot):
         self.ask_repo: PendingAskRepository | None = ask_repo
         # Populated after on_ready when the channel is resolved
         self.thread_dashboard: ThreadStatusDashboard | None = None
-        # Coordination channel for multi-session awareness (optional)
-        self.coordination = CoordinationService(self, coordination_channel_id)
         # AI Lounge — casual shared space for concurrent Claude sessions (optional)
         self.lounge_repo: LoungeRepository | None = lounge_repo
         self.lounge_channel_id: int | None = lounge_channel_id

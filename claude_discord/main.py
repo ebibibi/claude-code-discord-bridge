@@ -49,7 +49,6 @@ def load_config() -> dict[str, str]:
         "max_concurrent": os.getenv("MAX_CONCURRENT_SESSIONS", "3"),
         "timeout": os.getenv("SESSION_TIMEOUT_SECONDS", "300"),
         "owner_id": os.getenv("DISCORD_OWNER_ID", ""),
-        "coordination_channel_id": os.getenv("COORDINATION_CHANNEL_ID", ""),
         "dangerously_skip_permissions": os.getenv("CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS", ""),
         # Additional config for custom cogs and multi-channel
         "claude_channel_ids": os.getenv("CLAUDE_CHANNEL_IDS", ""),
@@ -93,13 +92,9 @@ async def main() -> None:
     )
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None
-    coordination_channel_id = (
-        int(config["coordination_channel_id"]) if config["coordination_channel_id"] else None
-    )
     bot = ClaudeDiscordBot(
         channel_id=channel_id,
         owner_id=owner_id,
-        coordination_channel_id=coordination_channel_id,
     )
 
     # Optional API server

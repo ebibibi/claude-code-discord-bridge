@@ -90,7 +90,6 @@ class TestLoadConfig:
                     "MAX_CONCURRENT_SESSIONS": "5",
                     "SESSION_TIMEOUT_SECONDS": "600",
                     "DISCORD_OWNER_ID": "999",
-                    "COORDINATION_CHANNEL_ID": "888",
                     "CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS": "true",
                     "CLAUDE_CHANNEL_IDS": "111,222,333",
                     "API_HOST": "0.0.0.0",
@@ -108,7 +107,6 @@ class TestLoadConfig:
         assert config["claude_working_dir"] == "/home/test"
         assert config["max_concurrent"] == "5"
         assert config["owner_id"] == "999"
-        assert config["coordination_channel_id"] == "888"
         assert config["claude_channel_ids"] == "111,222,333"
         assert config["api_host"] == "0.0.0.0"
         assert config["api_port"] == "9000"
