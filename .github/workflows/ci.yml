@@ -5,6 +5,13 @@ on:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: '0 17 * * *'  # Daily at 02:00 JST (17:00 UTC)
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
 
 jobs:
   test:
@@ -74,3 +81,40 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"content\": \"❌ **CI failed** — ${CONTEXT}\n${RUN_URL}\"}" \
             "$DISCORD_WEBHOOK_URL"
+
+  create-issue-on-schedule-failure:
+    needs: [test]
+    # Only create issues for scheduled runs (not PR/push — those are dev feedback loops)
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create auto-fix label if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create "auto-fix" \
+            --color "e4e669" \
+            --description "Targeted for auto-fix by issue_resolver" \
+            --repo "${REPO}" 2>/dev/null || true
+
+      - name: Create GitHub Issue for scheduled CI failure
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          gh issue create \
+            --title "CI failure on scheduled run (${DATE})" \
+            --body "## Scheduled CI Failure
+
+The daily CI run failed on ${DATE}.
+
+**Workflow run:** ${RUN_URL}
+
+Please investigate the test failures and fix them. Check the linked workflow run for details." \
+            --label "auto-fix" \
+            --repo "${REPO}"
