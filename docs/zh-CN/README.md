@@ -313,7 +313,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `MAX_CONCURRENT_SESSIONS` | 最大并发会话数 | `3` |
 | `SESSION_TIMEOUT_SECONDS` | 会话非活动超时 | `300` |
 | `DISCORD_OWNER_ID` | Claude 需要输入时 @提及的用户 ID | （可选） |
-| `COORDINATION_CHANNEL_ID` | 跨会话事件广播的频道 ID | （可选） |
+| `COORDINATION_CHANNEL_ID` | AI Lounge 频道的默认回退频道 ID | （可选） |
 | `WORKTREE_BASE_DIR` | 扫描会话 worktree 的基础目录（启用自动清理） | （可选） |
 | `MENTION_ONLY_CHANNEL_IDS` | 仅在 @提及时响应的频道 ID（逗号分隔） | （可选） |
 | `INLINE_REPLY_CHANNEL_IDS` | 内联回复的频道 ID（逗号分隔，不创建线程） | （可选） |

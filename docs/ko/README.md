@@ -295,7 +295,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `MAX_CONCURRENT_SESSIONS` | 최대 동시 세션 수 | `3` |
 | `SESSION_TIMEOUT_SECONDS` | 세션 비활성 시간 초과 | `300` |
 | `DISCORD_OWNER_ID` | Claude가 입력이 필요할 때 @멘션할 사용자 ID | (선택) |
-| `COORDINATION_CHANNEL_ID` | 세션 간 이벤트 브로드캐스트 채널 ID | (선택) |
+| `COORDINATION_CHANNEL_ID` | AI Lounge 채널의 기본 폴백 채널 ID | (선택) |
 | `WORKTREE_BASE_DIR` | 세션 worktree 스캔 기본 디렉토리 (자동 정리 활성화) | (선택) |
 | `MENTION_ONLY_CHANNEL_IDS` | 봇이 @멘션될 때만 응답하는 채널 ID (쉼표로 구분) | (선택) |
 | `INLINE_REPLY_CHANNEL_IDS` | 인라인 답장 채널 ID (쉼표로 구분, 스레드 생성 없음) | (선택) |

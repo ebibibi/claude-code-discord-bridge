@@ -295,7 +295,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `MAX_CONCURRENT_SESSIONS` | Nombre maximum de sessions parallèles | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Timeout d'inactivité de session | `300` |
 | `DISCORD_OWNER_ID` | ID utilisateur à @mentionner quand Claude a besoin d'une saisie | (optionnel) |
-| `COORDINATION_CHANNEL_ID` | ID du canal pour les diffusions d'événements entre sessions | (optionnel) |
+| `COORDINATION_CHANNEL_ID` | ID du canal utilisé comme valeur de repli par défaut pour le canal AI Lounge | (optionnel) |
 | `WORKTREE_BASE_DIR` | Répertoire de base pour scanner les worktrees de session (active le nettoyage automatique) | (optionnel) |
 | `MENTION_ONLY_CHANNEL_IDS` | IDs de canal séparés par des virgules où le bot répond uniquement quand il est @mentionné | (optionnel) |
 | `INLINE_REPLY_CHANNEL_IDS` | IDs de canal séparés par des virgules où le bot répond en ligne (sans créer de fil) | (optionnel) |
