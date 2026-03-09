@@ -141,6 +141,10 @@ class EventProcessor:
         # (skip events) then handle the ask after the stream ends.
         self._pending_ask: list[AskQuestion] | None = None
 
+        # Set when compact_boundary fires (and post_compact_rerun is False).
+        # Triggers interrupt → rerun-with-guardrail in _run_helper.
+        self._compact_occurred: bool = False
+
     # ------------------------------------------------------------------
     # Public properties
     # ------------------------------------------------------------------
@@ -156,9 +160,14 @@ class EventProcessor:
         return self._pending_ask
 
     @property
+    def compact_occurred(self) -> bool:
+        """True if compact_boundary was detected and runner was interrupted."""
+        return self._compact_occurred
+
+    @property
     def should_drain(self) -> bool:
-        """True while the runner should be drained (AskUserQuestion detected)."""
-        return self._pending_ask is not None
+        """True while the runner should be drained (AskUserQuestion or compact detected)."""
+        return self._pending_ask is not None or self._compact_occurred
 
     @property
     def assistant_text_sent(self) -> bool:
@@ -200,8 +209,9 @@ class EventProcessor:
     async def _on_system(self, event: StreamEvent) -> None:
         """Handle SYSTEM events — capture session_id, post start embed, compact notification."""
         # Context compaction notification
-        if event.is_compact and self._config.status:
-            await self._config.status.set_compact()
+        if event.is_compact:
+            if self._config.status:
+                await self._config.status.set_compact()
             pre = event.compact_pre_tokens
             trigger = event.compact_trigger or "auto"
             label = f"\U0001f5dc\ufe0f Context compacted ({trigger})"
@@ -209,6 +219,12 @@ class EventProcessor:
                 label += f" \u2014 was {pre:,} tokens"
             with contextlib.suppress(discord.HTTPException):
                 await self._config.thread.send(f"-# {label}")
+
+            # Interrupt the runner so _run_helper can rerun with a guardrail.
+            # Skip when post_compact_rerun=True (guardrail already active; avoid loops).
+            if not self._config.post_compact_rerun:
+                self._compact_occurred = True
+                await self._config.runner.interrupt()
 
         # Permission request — show Allow/Deny buttons
         if event.permission_request is not None:

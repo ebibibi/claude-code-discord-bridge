@@ -78,6 +78,9 @@ class RunConfig:
     inbox_dashboard: ThreadStatusDashboard | None = None
     usage_repo: UsageStatsRepository | None = None
     claude_command: str = "claude"
+    # When True, a compact guardrail was already injected into --append-system-prompt
+    # for this run. Prevents infinite interrupt→rerun loops if compact fires again.
+    post_compact_rerun: bool = False
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

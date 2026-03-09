@@ -612,6 +612,63 @@ class TestCompactHandling:
         calls = [str(c) for c in thread.send.call_args_list]
         assert any("compact" in c.lower() or "\U0001f5dc" in c for c in calls)
 
+    def test_compact_occurred_false_initially(self, thread: MagicMock, runner: MagicMock) -> None:
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+        assert p.compact_occurred is False
+
+    @pytest.mark.asyncio
+    async def test_compact_sets_compact_occurred(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        runner.interrupt = AsyncMock()
+        thread.send = AsyncMock(return_value=MagicMock(embeds=[]))
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, is_compact=True))
+
+        assert p.compact_occurred is True
+
+    @pytest.mark.asyncio
+    async def test_compact_sets_should_drain(self, thread: MagicMock, runner: MagicMock) -> None:
+        runner.interrupt = AsyncMock()
+        thread.send = AsyncMock(return_value=MagicMock(embeds=[]))
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, is_compact=True))
+
+        assert p.should_drain is True
+
+    @pytest.mark.asyncio
+    async def test_compact_calls_runner_interrupt(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        runner.interrupt = AsyncMock()
+        thread.send = AsyncMock(return_value=MagicMock(embeds=[]))
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, is_compact=True))
+
+        runner.interrupt.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_compact_does_not_interrupt_on_post_compact_rerun(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """When post_compact_rerun=True, we already added the guardrail — don't interrupt again."""
+        runner.interrupt = AsyncMock()
+        thread.send = AsyncMock(return_value=MagicMock(embeds=[]))
+        config = _make_config(thread, runner, post_compact_rerun=True)
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, is_compact=True))
+
+        runner.interrupt.assert_not_awaited()
+        assert p.compact_occurred is False
+
     @pytest.mark.asyncio
     async def test_progress_resets_stall_timer(self) -> None:
         thread = MagicMock()
