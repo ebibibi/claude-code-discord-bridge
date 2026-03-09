@@ -10,7 +10,12 @@ jobs:
     # Skip draft PRs — only auto-merge when the PR is explicitly marked ready.
     # This prevents the race condition where auto-merge fires on the first
     # commit before subsequent commits have been pushed.
-    if: github.event.pull_request.user.login == 'ebibibi' && github.event.pull_request.draft == false
+    # Skip 'external-issue' PRs — these are created from external user Issues via
+    # Docker sandbox and require manual review before merging.
+    if: >
+      github.event.pull_request.user.login == 'ebibibi' &&
+      github.event.pull_request.draft == false &&
+      !contains(github.event.pull_request.labels.*.name, 'external-issue')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
