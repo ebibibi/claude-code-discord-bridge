@@ -1160,3 +1160,152 @@ class TestImageOnlyRunConfig:
 
         await run_claude_with_config(config)
         assert runner.image_urls == ["https://example.com/img.png"]
+
+
+class TestCompactRerun:
+    """compact_boundary → interrupt → rerun-with-guardrail integration tests.
+
+    When compact_boundary fires, EventProcessor interrupts the runner and sets
+    compact_occurred=True. run_claude_with_config should then rerun with a
+    guardrail injected into --append-system-prompt and post_compact_rerun=True.
+    """
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        msg = MagicMock(spec=discord.Message)
+        t.send = AsyncMock(return_value=msg)
+        msg.edit = AsyncMock()
+        t.id = 42
+        return t
+
+    def _make_async_gen(self, events: list[StreamEvent]):
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return gen
+
+    @pytest.mark.asyncio
+    async def test_compact_triggers_rerun(self, thread: MagicMock) -> None:
+        """After compact_boundary, run_claude_with_config must call runner.run() a second time."""
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.image_urls = None
+        runner.interrupt = AsyncMock()
+
+        compact_events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-1"),
+            StreamEvent(message_type=MessageType.SYSTEM, is_compact=True),
+        ]
+        rerun_events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-1"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-1",
+                cost_usd=0.01,
+                duration_ms=100,
+            ),
+        ]
+
+        call_count = 0
+
+        async def mock_run(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            events = compact_events if call_count == 1 else rerun_events
+            for e in events:
+                yield e
+
+        runner.run = mock_run
+        runner.clone = MagicMock(return_value=runner)
+
+        config = RunConfig(thread=thread, runner=runner, prompt="check X", session_id="sess-1")
+        session_id = await run_claude_with_config(config)
+
+        assert call_count == 2, f"Expected 2 runner.run calls, got {call_count}"
+        assert session_id == "sess-1"
+
+    @pytest.mark.asyncio
+    async def test_compact_rerun_injects_guardrail_via_clone(self, thread: MagicMock) -> None:
+        """The rerun invokes runner.clone() with an append_system_prompt guardrail."""
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.image_urls = None
+        runner.interrupt = AsyncMock()
+
+        compact_events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-2"),
+            StreamEvent(message_type=MessageType.SYSTEM, is_compact=True),
+        ]
+        rerun_events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-2"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-2",
+                cost_usd=0.01,
+                duration_ms=100,
+            ),
+        ]
+
+        call_count = 0
+
+        async def mock_run(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            events = compact_events if call_count == 1 else rerun_events
+            for e in events:
+                yield e
+
+        # Clone returns a runner that delivers rerun_events.
+        cloned_runner = MagicMock()
+        cloned_runner.working_dir = None
+        cloned_runner.image_urls = None
+        cloned_runner.interrupt = AsyncMock()
+        cloned_runner.run = mock_run  # same mock; call_count distinguishes runs
+
+        runner.run = mock_run
+        runner.clone = MagicMock(return_value=cloned_runner)
+
+        config = RunConfig(thread=thread, runner=runner, prompt="check X", session_id="sess-2")
+        await run_claude_with_config(config)
+
+        # runner.clone() must have been called for the rerun (guardrail injection).
+        runner.clone.assert_called()
+        clone_kwargs = runner.clone.call_args.kwargs
+        prompt_arg = clone_kwargs.get("append_system_prompt", "")
+        assert prompt_arg is not None and len(prompt_arg) > 0, (
+            "Guardrail must be injected via append_system_prompt"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_rerun_loop_when_compact_on_rerun(self, thread: MagicMock) -> None:
+        """When compact fires during a post_compact_rerun, do NOT interrupt again (no loop)."""
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.image_urls = None
+        runner.interrupt = AsyncMock()
+
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-3"),
+            StreamEvent(message_type=MessageType.SYSTEM, is_compact=True),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-3",
+                cost_usd=0.01,
+                duration_ms=100,
+            ),
+        ]
+
+        runner.run = self._make_async_gen(events)
+        runner.clone = MagicMock(return_value=runner)
+
+        config = RunConfig(thread=thread, runner=runner, prompt="test", post_compact_rerun=True)
+        # Should complete without infinite loop; interrupt must not be called.
+        session_id = await run_claude_with_config(config)
+
+        runner.interrupt.assert_not_awaited()
+        assert session_id == "sess-3"
