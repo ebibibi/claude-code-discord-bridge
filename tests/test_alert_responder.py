@@ -1,37 +1,55 @@
 """tests/test_alert_responder.py
 
-AlertResponderCog のユニットテスト。
-Discord オブジェクトと Claude ランナーをモックして、
-アラート検知・スキップ・スレッド作成・重複防止の各経路を検証する。
+Unit tests for AlertResponderCog.
+
+All configuration is sourced from environment variables; this test module sets
+ALERT_MONITOR_CHANNEL_ID before importing the Cog so module-level constants
+are initialised with a known test value.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+import os
 
-import discord
-import pytest
+# Set required env vars before the module under test is imported, because
+# ALERT_CHANNEL_ID and _ALERT_PATTERN are resolved at import time.
+os.environ.setdefault("ALERT_MONITOR_CHANNEL_ID", "111111111111111111")
 
-from examples.ebibot.cogs.alert_responder import _ALERT_PATTERN, ALERT_CHANNEL_ID, AlertResponderCog
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
+
+import discord  # noqa: E402
+import pytest  # noqa: E402
+
+from examples.ebibot.cogs.alert_responder import (  # noqa: E402
+    _ALERT_PATTERN,
+    ALERT_CHANNEL_ID,
+    AlertResponderCog,
+)
+
+# Sanity-check: the env var we set above must have been picked up.
+assert int(os.environ["ALERT_MONITOR_CHANNEL_ID"]) == ALERT_CHANNEL_ID
+
+_TEST_CHANNEL_ID: int = ALERT_CHANNEL_ID  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
-# パターン検証（⚠️ マッチング）
+# Pattern tests
 # ---------------------------------------------------------------------------
 
 
 class TestAlertPattern:
     def test_warning_emoji_matches(self) -> None:
-        assert _ALERT_PATTERN.search("[BlueSky] ⚠️ ch5: Gemini が使えなかった")
+        assert _ALERT_PATTERN.search("[BlueSky] ⚠️ ch5: Gemini failed")
 
     def test_plain_message_does_not_match(self) -> None:
-        assert not _ALERT_PATTERN.search("[BlueSky] ✅ 投稿完了")
+        assert not _ALERT_PATTERN.search("[BlueSky] ✅ posted successfully")
 
     def test_error_without_warning_emoji_does_not_match(self) -> None:
-        assert not _ALERT_PATTERN.search("[Agent Pipeline] エラー: 詳細ログ参照")
+        assert not _ALERT_PATTERN.search("[Agent Pipeline] error: see logs")
 
 
 # ---------------------------------------------------------------------------
-# ヘルパー — Discord モックオブジェクト生成
+# Discord mock helpers
 # ---------------------------------------------------------------------------
 
 
@@ -44,7 +62,7 @@ def _make_text_channel(channel_id: int) -> MagicMock:
 
 def _make_message(
     content: str,
-    channel_id: int = ALERT_CHANNEL_ID,
+    channel_id: int = _TEST_CHANNEL_ID,
     is_bot: bool = False,
 ) -> MagicMock:
     msg = MagicMock(spec=discord.Message)
@@ -54,7 +72,6 @@ def _make_message(
     msg.author.bot = is_bot
     channel = _make_text_channel(channel_id)
     msg.channel = channel
-    # create_thread はメッセージ自体にも必要（スレッド作成時）
     mock_thread = AsyncMock(spec=discord.Thread)
     mock_thread.id = 99999
     mock_thread.send = AsyncMock()
@@ -76,24 +93,23 @@ def _make_cog(bot: MagicMock | None = None) -> AlertResponderCog:
     runner.clone = MagicMock(return_value=MagicMock())
     components = MagicMock()
     cog = AlertResponderCog(bot, runner, components)
-    # bot.user を自分自身として設定（Bot 自身の発言をスキップするため）
     bot_user = MagicMock()
     cog.bot.user = bot_user
     return cog
 
 
 # ---------------------------------------------------------------------------
-# on_message — スキップ条件
+# on_message — skip conditions
 # ---------------------------------------------------------------------------
 
 
 class TestOnMessageSkip:
     @pytest.mark.asyncio
     async def test_ignores_bot_own_message(self) -> None:
-        """Bot 自身のメッセージは無視する"""
+        """Bot's own messages are ignored."""
         cog = _make_cog()
-        msg = _make_message("⚠️ テスト")
-        msg.author = cog.bot.user  # Bot 自身
+        msg = _make_message("⚠️ test")
+        msg.author = cog.bot.user  # same object → identity check passes
 
         with patch.object(cog, "_start_investigation") as mock_inv:
             await cog.on_message(msg)
@@ -102,9 +118,9 @@ class TestOnMessageSkip:
 
     @pytest.mark.asyncio
     async def test_ignores_wrong_channel(self) -> None:
-        """監視チャンネル以外のメッセージは無視する"""
+        """Messages in other channels are ignored."""
         cog = _make_cog()
-        msg = _make_message("⚠️ テスト", channel_id=999999)  # 別チャンネル
+        msg = _make_message("⚠️ test", channel_id=999999)
 
         with patch.object(cog, "_start_investigation") as mock_inv:
             await cog.on_message(msg)
@@ -113,9 +129,9 @@ class TestOnMessageSkip:
 
     @pytest.mark.asyncio
     async def test_ignores_non_alert_message(self) -> None:
-        """⚠️ を含まないメッセージは無視する"""
+        """Messages without the alert pattern are ignored."""
         cog = _make_cog()
-        msg = _make_message("✅ 投稿完了: https://bsky.app/...")
+        msg = _make_message("✅ posted: https://bsky.app/...")
 
         with patch.object(cog, "_start_investigation") as mock_inv:
             await cog.on_message(msg)
@@ -124,10 +140,10 @@ class TestOnMessageSkip:
 
     @pytest.mark.asyncio
     async def test_ignores_duplicate_message(self) -> None:
-        """同じメッセージへの二重調査を防ぐ"""
+        """A message already being investigated is not queued again."""
         cog = _make_cog()
-        msg = _make_message("⚠️ テスト")
-        cog._investigating.add(msg.id)  # 調査中フラグを立てる
+        msg = _make_message("⚠️ test")
+        cog._investigating.add(msg.id)
 
         with patch.object(cog, "_start_investigation") as mock_inv:
             await cog.on_message(msg)
@@ -136,16 +152,16 @@ class TestOnMessageSkip:
 
 
 # ---------------------------------------------------------------------------
-# on_message — 検知条件
+# on_message — detection conditions
 # ---------------------------------------------------------------------------
 
 
 class TestOnMessageDetect:
     @pytest.mark.asyncio
     async def test_triggers_investigation_for_alert(self) -> None:
-        """⚠️ を含むメッセージで調査を開始する"""
+        """A matching message triggers investigation."""
         cog = _make_cog()
-        msg = _make_message("[BlueSky] ⚠️ ch5: Gemini が使えなかった")
+        msg = _make_message("[Service] ⚠️ Gemini timed out")
 
         with patch.object(cog, "_start_investigation", new_callable=AsyncMock) as mock_inv:
             await cog.on_message(msg)
@@ -154,9 +170,9 @@ class TestOnMessageDetect:
 
     @pytest.mark.asyncio
     async def test_removes_message_from_investigating_after_completion(self) -> None:
-        """調査完了後、_investigating からメッセージ ID が除去される"""
+        """Message ID is removed from _investigating after the investigation finishes."""
         cog = _make_cog()
-        msg = _make_message("⚠️ テスト")
+        msg = _make_message("⚠️ test")
 
         with patch.object(cog, "_start_investigation", new_callable=AsyncMock):
             await cog.on_message(msg)
@@ -165,9 +181,9 @@ class TestOnMessageDetect:
 
     @pytest.mark.asyncio
     async def test_removes_message_from_investigating_on_error(self) -> None:
-        """調査中に例外が発生しても _investigating からクリーンアップされる"""
+        """Message ID is cleaned up even if investigation raises an exception."""
         cog = _make_cog()
-        msg = _make_message("⚠️ テスト")
+        msg = _make_message("⚠️ test")
 
         with patch.object(
             cog,
@@ -175,22 +191,22 @@ class TestOnMessageDetect:
             new_callable=AsyncMock,
             side_effect=RuntimeError("test error"),
         ):
-            await cog.on_message(msg)  # 例外を飲み込むことを確認
+            await cog.on_message(msg)  # exception is swallowed
 
         assert msg.id not in cog._investigating
 
 
 # ---------------------------------------------------------------------------
-# _start_investigation — スレッド作成
+# _start_investigation — thread creation
 # ---------------------------------------------------------------------------
 
 
 class TestStartInvestigation:
     @pytest.mark.asyncio
     async def test_creates_thread_on_alert_message(self) -> None:
-        """アラートメッセージにスレッドを作成する"""
+        """A thread is created on the alert message."""
         cog = _make_cog()
-        msg = _make_message("[BlueSky] ⚠️ ch5: Gemini タイムアウト")
+        msg = _make_message("[Service] ⚠️ connection timeout")
 
         with patch(
             "examples.ebibot.cogs.alert_responder.run_claude_with_config", new_callable=AsyncMock
@@ -201,10 +217,10 @@ class TestStartInvestigation:
 
     @pytest.mark.asyncio
     async def test_skips_when_runner_is_none(self) -> None:
-        """runner が None の場合はスレッドを作らない"""
+        """No thread is created when runner is None."""
         cog = _make_cog()
         cog.runner = None
-        msg = _make_message("⚠️ テスト")
+        msg = _make_message("⚠️ test")
 
         with patch(
             "examples.ebibot.cogs.alert_responder.run_claude_with_config", new_callable=AsyncMock
@@ -215,14 +231,14 @@ class TestStartInvestigation:
 
     @pytest.mark.asyncio
     async def test_alert_text_included_in_prompt(self) -> None:
-        """アラート文がプロンプトに含まれる"""
+        """The alert message content is embedded in the prompt."""
         cog = _make_cog()
-        alert_text = "[BlueSky] ⚠️ ch5: Gemini が使えなかったため"
+        alert_text = "[Service] ⚠️ connection refused"
         msg = _make_message(alert_text)
 
         captured_config = None
 
-        async def capture(config):
+        async def capture(config):  # type: ignore[no-untyped-def]
             nonlocal captured_config
             captured_config = config
 
