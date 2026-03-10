@@ -87,6 +87,41 @@ uv run python -m claude_discord.main
 `scripts/pre-start.sh`・`.github/workflows/`・`examples/ebibot/cogs/` を読むこと。
 自動化されている可能性が高い。
 
+### 開発フロー（worktree + ローカルテスト）
+
+EbiBot は `/home/ebi/claude-code-discord-bridge/` から直接起動する（systemd `WorkingDirectory`）。
+コード変更をPRマージ前に EbiBot で動作確認するための **dev worktree モード**が用意されている。
+
+```bash
+# 1. worktreeを作成してブランチで作業（Claude Codeが自動で行う）
+git worktree add ../wt-my-feature -b feat/my-feature
+
+# 2. 変更をworktreeで実装・テスト後、dev modeを有効化
+cd /home/ebi/wt-my-feature
+make dev-on    # ~/.ccdb-dev-worktree にパスを書いてbotを再起動
+
+# 3. Discord上でEbiBotをテスト
+
+# 4. 問題なければdev modeを解除してPR作成
+make dev-off   # ~/.ccdb-dev-worktree を削除してbotを再起動
+make pr        # ブランチをpushしてGitHub PRを作成
+```
+
+**仕組み（`pre-start.sh` の実装）:**
+
+1. `uv sync` 実行後、`_ccdb_dev_hook.py` と `_ccdb_dev_hook.pth` を venv の site-packages に配置する
+2. `_ccdb_dev_hook.pth` が Python 起動時に `import _ccdb_dev_hook` を実行する
+3. `_ccdb_dev_hook.py` が `sys.meta_path[0]` に `_Finder` を挿入する
+4. `_Finder` が `~/.ccdb-dev-worktree` を読み、`claude_discord` のimportをworktreeに横取りする
+
+`sys.meta_path` フックは `python -m` の CWD-first（`sys.path[0] = ''`）より優先される。
+`.pth` / `PYTHONPATH` / `sitecustomize.py` では CWD に勝てないため、この方式を採用した。
+
+**通常起動（本番モード）:**
+
+`~/.ccdb-dev-worktree` が存在しない場合、フックは何もしない。
+mainブランチで変更なしの場合、`pre-start.sh` が `git pull` して最新コードを取得する。
+
 ## Code Conventions
 
 ### Style
