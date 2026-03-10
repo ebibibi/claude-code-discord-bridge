@@ -31,19 +31,48 @@ _PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Separator lines: sequences of ─ (U+2500), -, spaces, or backticks
+_SEPARATOR_RE = re.compile(r"^[\u2500\-\s`]+$")
+
 
 def _clean_title(raw: str) -> str:
-    """Extract a clean single-line title from raw model output."""
-    # Take the first non-empty line only
-    line = next((ln.strip() for ln in raw.splitlines() if ln.strip()), "")
-    # Strip markdown bold/italic markers
-    line = line.strip("*_")
-    # Strip surrounding quotes
-    line = line.strip("\"'")
-    # Strip common prefix patterns (e.g. "Title: ", "タイトル: ")
-    line = _PREFIX_RE.sub("", line)
-    # Final cleanup
-    return line.strip()
+    """Extract a clean single-line title from raw model output.
+
+    Skips explanatory output mode Insight blocks (★ Insight ... ─────) and
+    other structural noise before returning the first meaningful content line.
+    """
+    in_insight_block = False
+
+    for raw_line in raw.splitlines():
+        # Strip backticks used as decorators around insight markers/separators
+        stripped = raw_line.strip().strip("`").strip()
+
+        # Detect insight block header (★ Insight marker)
+        if "\u2605 Insight" in stripped:  # ★ = U+2605
+            in_insight_block = True
+            continue
+
+        # Detect insight block end: a separator line of ─ chars after the header
+        is_separator = bool(stripped) and bool(_SEPARATOR_RE.fullmatch(stripped))
+        if in_insight_block and is_separator:
+            in_insight_block = False
+            continue
+
+        # Skip lines inside insight blocks and standalone separator lines
+        if in_insight_block or is_separator:
+            continue
+
+        # Skip empty lines
+        if not stripped:
+            continue
+
+        # Found the first real content line — apply formatting cleanup
+        line = stripped.strip("*_").strip("\"'")
+        line = _PREFIX_RE.sub("", line).strip()
+        if line:
+            return line
+
+    return ""
 
 
 async def suggest_title(

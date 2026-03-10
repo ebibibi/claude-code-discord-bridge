@@ -132,6 +132,39 @@ class TestSuggestTitleOutputCleaning:
             result = await suggest_title("Help me fix the login system")
         assert result == "Fix authentication bug"
 
+    @pytest.mark.asyncio
+    async def test_skips_insight_block_plain(self):
+        """Skip explanatory output mode Insight blocks (plain format without backticks)."""
+        header = "\u2605 Insight \u2500\u2500\u2500\u2500\u2500\n"
+        sep = "\u2500\u2500\u2500\u2500\u2500\n"
+        output = header + "- some educational point\n" + sep + "\nFix authentication bug\n"
+        proc = _make_proc(output.encode())
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("Help me fix the login system")
+        assert result == "Fix authentication bug"
+
+    @pytest.mark.asyncio
+    async def test_skips_insight_block_backtick(self):
+        """Skip explanatory output mode Insight blocks (backtick-wrapped format)."""
+        header = "`\u2605 Insight \u2500\u2500\u2500\u2500\u2500`\n"
+        sep = "`\u2500\u2500\u2500\u2500\u2500`\n"
+        output = header + "- some educational point\n" + sep + "\nFix authentication bug\n"
+        proc = _make_proc(output.encode())
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("Help me fix the login system")
+        assert result == "Fix authentication bug"
+
+    @pytest.mark.asyncio
+    async def test_only_insight_block_returns_none(self):
+        """If the output is only an Insight block with no title after, return None."""
+        header = "`\u2605 Insight \u2500\u2500\u2500\u2500\u2500`\n"
+        sep = "`\u2500\u2500\u2500\u2500\u2500`\n"
+        output = header + "- some educational point\n" + sep
+        proc = _make_proc(output.encode())
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("Help me fix the login system")
+        assert result is None
+
 
 class TestSuggestTitleEdgeCases:
     @pytest.mark.asyncio
