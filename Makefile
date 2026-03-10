@@ -1,4 +1,4 @@
-.PHONY: setup check-setup format check test ci pr
+.PHONY: setup check-setup format check test ci pr dev-on dev-off
 
 # One-time setup after cloning: install uv (if needed) and register the committed git hooks.
 setup:
@@ -42,3 +42,15 @@ pr:
 	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
 	git push -u origin "$$BRANCH"; \
 	gh pr create --fill --web
+
+# Enable dev mode: EbiBot loads claude_discord from this worktree on next restart.
+dev-on:
+	@echo "$$(pwd)" > $(HOME)/.ccdb-dev-worktree
+	@echo "Dev mode ON — loading from $$(pwd)"
+	sudo systemctl restart discord-bot
+
+# Disable dev mode: EbiBot goes back to main tree on next restart.
+dev-off:
+	@rm -f $(HOME)/.ccdb-dev-worktree
+	@echo "Dev mode OFF — back to main tree"
+	sudo systemctl restart discord-bot

@@ -60,6 +60,22 @@ echo "[pre-start] Syncing dependencies..." >&2
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 echo "[pre-start] Code at: ${COMMIT}" >&2
 
+# ── Step 2b: Dev worktree mode — override .pth to load code from worktree ──
+# Create ~/.ccdb-dev-worktree (containing the worktree path) to activate dev mode.
+# Use `make dev-on` / `make dev-off` in the worktree to manage this file.
+DEV_WORKTREE_FILE="$HOME/.ccdb-dev-worktree"
+if [ -f "$DEV_WORKTREE_FILE" ]; then
+    DEV_WORKTREE=$(tr -d '[:space:]' < "$DEV_WORKTREE_FILE")
+    if [ -d "$DEV_WORKTREE/claude_discord" ]; then
+        echo "[pre-start] Dev worktree mode: loading claude_discord from $DEV_WORKTREE" >&2
+        for pth in "$CCDB_HOME"/.venv/lib/python*/site-packages/_claude_code_discord_bridge.pth; do
+            echo "$DEV_WORKTREE" > "$pth"
+        done
+    else
+        echo "[pre-start] WARNING: $DEV_WORKTREE/claude_discord not found — using main tree" >&2
+    fi
+fi
+
 # ── Step 3: Validate imports ──
 echo "[pre-start] Validating imports..." >&2
 set +e
