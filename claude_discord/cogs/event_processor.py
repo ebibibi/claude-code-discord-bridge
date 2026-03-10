@@ -389,6 +389,21 @@ class EventProcessor:
             if self._config.status:
                 await self._config.status.set_done()
 
+            # Post the user's configured statusLine as Discord subtext.
+            # Runs only when statusLine.command is set in ~/.claude/settings.json.
+            asyncio.create_task(
+                _post_statusline_footer(
+                    thread=self._config.thread,
+                    working_dir=self._config.runner.working_dir,
+                    model=self._config.runner.model,
+                    context_window=event.context_window,
+                    input_tokens=event.input_tokens,
+                    cache_creation_tokens=event.cache_creation_tokens,
+                    cache_read_tokens=event.cache_read_tokens,
+                ),
+                name=f"statusline-{self._config.thread.id}",
+            )
+
             # Schedule inbox classification as a background task (non-blocking).
             # Only runs when inbox_repo is wired in (THREAD_INBOX_ENABLED=true).
             if self._config.inbox_repo is not None and last_assistant_text:
@@ -553,6 +568,63 @@ class EventProcessor:
         """Move the Stop button to the bottom of the thread if configured."""
         if self._config.stop_view:
             await self._config.stop_view.bump(self._config.thread)
+
+
+# ---------------------------------------------------------------------------
+# Statusline footer helper (module-level so it can be unit-tested)
+# ---------------------------------------------------------------------------
+
+
+async def _post_statusline_footer(
+    thread: object,
+    working_dir: str | None,
+    model: str,
+    context_window: int | None,
+    input_tokens: int | None,
+    cache_creation_tokens: int | None,
+    cache_read_tokens: int | None,
+) -> None:
+    """Run the configured statusLine.command and post the result to *thread*.
+
+    Reads ``statusLine.command`` from ``~/.claude/settings.json``.  Does
+    nothing (silently) when the setting is absent or the command fails.
+    The output is posted as Discord subtext (``-#`` prefix per line) so it
+    appears visually distinct from the main conversation.
+    """
+    import os
+
+    from ..discord_ui.statusline import (
+        build_statusline_json,
+        read_statusline_command,
+        render_statusline,
+    )
+
+    command = read_statusline_command()
+    if not command:
+        return
+
+    cwd = working_dir or os.path.expanduser("~")
+    json_input = build_statusline_json(
+        cwd=cwd,
+        model_id=model,
+        model_display_name=model,
+        context_size=context_window or 200000,
+        input_tokens=input_tokens or 0,
+        cache_creation_tokens=cache_creation_tokens or 0,
+        cache_read_tokens=cache_read_tokens or 0,
+    )
+
+    result = await render_statusline(command, json_input)
+    if not result:
+        return
+
+    lines = [line for line in result.splitlines() if line.strip()]
+    if not lines:
+        return
+
+    subtext = "\n".join(f"-# {line}" for line in lines[:3])
+    with contextlib.suppress(Exception):
+        await thread.send(subtext)  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
