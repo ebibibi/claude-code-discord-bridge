@@ -11,20 +11,39 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
 _PROMPT_TEMPLATE = """\
-Generate a short, descriptive title (max 80 characters) for a chat thread.
-The title should clearly summarize the user's request or topic.
-Reply with ONLY the title — no quotes, no punctuation at the end, no explanation.
+Output a short thread title (max 80 characters) for the message below.
+Rules: single line only, no prefix like "Title:" or "Here's a title:", no quotes, no markdown.
 
-[USER MESSAGE]
 {text}
 """
 
 _TIMEOUT_SECONDS = 30
 _MAX_TITLE_LENGTH = 90  # Discord thread name limit is 100; leave a small margin
+
+# Prefixes that models sometimes add before the actual title
+_PREFIX_RE = re.compile(
+    r"^(?:title|タイトル|here'?s?\s+(?:a\s+)?(?:suggested\s+)?title|suggested title)\s*[:：]\s*",
+    re.IGNORECASE,
+)
+
+
+def _clean_title(raw: str) -> str:
+    """Extract a clean single-line title from raw model output."""
+    # Take the first non-empty line only
+    line = next((ln.strip() for ln in raw.splitlines() if ln.strip()), "")
+    # Strip markdown bold/italic markers
+    line = line.strip("*_")
+    # Strip surrounding quotes
+    line = line.strip("\"'")
+    # Strip common prefix patterns (e.g. "Title: ", "タイトル: ")
+    line = _PREFIX_RE.sub("", line)
+    # Final cleanup
+    return line.strip()
 
 
 async def suggest_title(
@@ -58,10 +77,8 @@ async def suggest_title(
             logger.warning("thread title renamer timed out after %ds", _TIMEOUT_SECONDS)
             return None
 
-        raw = stdout.decode(errors="replace").strip()
-        # Strip surrounding quotes that some models add
-        raw = raw.strip("\"'")
-        title = raw.strip()
+        raw = stdout.decode(errors="replace")
+        title = _clean_title(raw)
 
         if not title:
             logger.debug("thread title renamer returned empty output")

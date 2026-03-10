@@ -81,6 +81,58 @@ class TestSuggestTitleNormal:
 # ---------------------------------------------------------------------------
 
 
+class TestSuggestTitleOutputCleaning:
+    """Tests for robustness against messy model output."""
+
+    @pytest.mark.asyncio
+    async def test_multiline_output_uses_first_line(self):
+        """If Claude outputs multiple lines, only the first non-empty line is used."""
+        proc = _make_proc(b"Fix authentication bug\nHere is the title I suggest.\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("Help me fix the login system")
+        assert result == "Fix authentication bug"
+
+    @pytest.mark.asyncio
+    async def test_strips_title_prefix(self):
+        """Strip 'Title: ' prefix that some models add."""
+        proc = _make_proc(b"Title: Fix authentication bug\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("Help me fix the login system")
+        assert result == "Fix authentication bug"
+
+    @pytest.mark.asyncio
+    async def test_strips_japanese_title_prefix(self):
+        """Strip 'タイトル: ' prefix."""
+        proc = _make_proc("タイトル: 認証バグの修正\n".encode())
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("ログインシステムを直してください")
+        assert result == "認証バグの修正"
+
+    @pytest.mark.asyncio
+    async def test_strips_markdown_bold(self):
+        """Strip markdown **bold** formatting."""
+        proc = _make_proc(b"**Fix authentication bug**\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("Help me fix the login system")
+        assert result == "Fix authentication bug"
+
+    @pytest.mark.asyncio
+    async def test_strips_heres_a_title_prefix(self):
+        """Strip verbose preamble like 'Here's a title: ...'."""
+        proc = _make_proc(b"Here's a title: Fix authentication bug\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("Help me fix the login system")
+        assert result == "Fix authentication bug"
+
+    @pytest.mark.asyncio
+    async def test_skips_blank_leading_lines(self):
+        """Skip blank leading lines and take the first non-empty line."""
+        proc = _make_proc(b"\n\nFix authentication bug\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("Help me fix the login system")
+        assert result == "Fix authentication bug"
+
+
 class TestSuggestTitleEdgeCases:
     @pytest.mark.asyncio
     async def test_empty_message_returns_none(self):
