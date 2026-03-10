@@ -60,20 +60,49 @@ echo "[pre-start] Syncing dependencies..." >&2
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 echo "[pre-start] Code at: ${COMMIT}" >&2
 
-# ── Step 2b: Dev worktree mode — override .pth to load code from worktree ──
-# Create ~/.ccdb-dev-worktree (containing the worktree path) to activate dev mode.
-# Use `make dev-on` / `make dev-off` in the worktree to manage this file.
-DEV_WORKTREE_FILE="$HOME/.ccdb-dev-worktree"
-if [ -f "$DEV_WORKTREE_FILE" ]; then
-    DEV_WORKTREE=$(tr -d '[:space:]' < "$DEV_WORKTREE_FILE")
-    if [ -d "$DEV_WORKTREE/claude_discord" ]; then
-        echo "[pre-start] Dev worktree mode: loading claude_discord from $DEV_WORKTREE" >&2
-        for pth in "$CCDB_HOME"/.venv/lib/python*/site-packages/_claude_code_discord_bridge.pth; do
-            echo "$DEV_WORKTREE" > "$pth"
-        done
-    else
-        echo "[pre-start] WARNING: $DEV_WORKTREE/claude_discord not found — using main tree" >&2
-    fi
+# ── Step 2b: Install dev worktree import hook ──
+# The hook intercepts claude_discord imports via sys.meta_path and redirects them
+# to ~/.ccdb-dev-worktree when that file exists. Uses sys.meta_path (not sys.path)
+# to override python -m's CWD-first resolution.
+# The hook files are created here so they survive venv recreation (uv sync --reinstall).
+for SITE_PKG in "$CCDB_HOME"/.venv/lib/python*/site-packages; do
+    # Install the import hook module
+    cat > "$SITE_PKG/_ccdb_dev_hook.py" << 'HOOK_EOF'
+"""Dev worktree import hook — redirects claude_discord to ~/.ccdb-dev-worktree."""
+import sys, os, importlib.util
+
+def _install():
+    dev_file = os.path.expanduser("~/.ccdb-dev-worktree")
+    if not os.path.exists(dev_file):
+        return
+    with open(dev_file) as f:
+        worktree = f.read().strip()
+    if not os.path.isdir(os.path.join(worktree, "claude_discord")):
+        return
+    class _Finder:
+        def find_spec(self, fullname, path, target=None):
+            if not (fullname == "claude_discord" or fullname.startswith("claude_discord.")):
+                return None
+            parts = fullname.split(".")
+            pkg = os.path.join(worktree, *parts)
+            if os.path.isdir(pkg):
+                init = os.path.join(pkg, "__init__.py")
+                if os.path.exists(init):
+                    return importlib.util.spec_from_file_location(fullname, init, submodule_search_locations=[pkg])
+            mod = pkg + ".py"
+            if os.path.exists(mod):
+                return importlib.util.spec_from_file_location(fullname, mod)
+            return None
+    sys.meta_path.insert(0, _Finder())
+
+_install()
+HOOK_EOF
+    # Activate the hook via .pth (runs on Python startup, before any user code)
+    echo "import _ccdb_dev_hook" > "$SITE_PKG/_ccdb_dev_hook.pth"
+done
+
+if [ -f "$HOME/.ccdb-dev-worktree" ]; then
+    echo "[pre-start] Dev worktree mode: $(cat "$HOME/.ccdb-dev-worktree")" >&2
 fi
 
 # ── Step 3: Validate imports ──
