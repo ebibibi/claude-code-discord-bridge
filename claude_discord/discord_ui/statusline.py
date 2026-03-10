@@ -100,8 +100,13 @@ def strip_ansi(text: str) -> str:
 
 
 def convert_for_discord(raw: str) -> str:
-    """Convert raw statusline output (ANSI) to Discord-ready plain text."""
-    return strip_ansi(_bars_to_unicode(raw))
+    """Convert raw statusline output (ANSI) to Discord-ready plain text.
+
+    Claude Code's terminal UI treats the statusline output as a printf format
+    string, converting ``%%`` to ``%``.  CCDB reads the raw stdout directly, so
+    we replicate that step here.
+    """
+    return strip_ansi(_bars_to_unicode(raw)).replace("%%", "%")
 
 
 async def render_statusline(

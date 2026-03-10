@@ -622,9 +622,9 @@ async def _post_statusline_footer(
     if not lines:
         return
 
-    subtext = "\n".join(f"-# {line}" for line in lines[:3])
+    text = "\n".join(lines[:3])
     with contextlib.suppress(Exception):
-        await thread.send(subtext)  # type: ignore[union-attr]
+        await thread.send(text)  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------

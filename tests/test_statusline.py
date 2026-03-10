@@ -80,6 +80,11 @@ class TestConvertForDiscord:
         result = convert_for_discord(bar + " " + text)
         assert result == "███░░░ 62%"
 
+    def test_double_percent_converted_to_single(self) -> None:
+        """Statusline scripts emit %% so printf renders %; we replicate that."""
+        result = convert_for_discord("🧠 62%%")
+        assert result == "🧠 62%"
+
 
 class TestBuildStatuslineJson:
     def test_output_is_valid_json(self) -> None:
