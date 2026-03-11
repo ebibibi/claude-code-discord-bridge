@@ -107,14 +107,9 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           DATE=$(date -u +%Y-%m-%d)
+          BODY=$(printf '## Scheduled CI Failure\n\nThe daily CI run failed on %s.\n\n**Workflow run:** %s\n\nPlease investigate the test failures and fix them. Check the linked workflow run for details.' "${DATE}" "${RUN_URL}")
           gh issue create \
             --title "CI failure on scheduled run (${DATE})" \
-            --body "## Scheduled CI Failure
-
-The daily CI run failed on ${DATE}.
-
-**Workflow run:** ${RUN_URL}
-
-Please investigate the test failures and fix them. Check the linked workflow run for details." \
+            --body "${BODY}" \
             --label "auto-fix" \
             --repo "${REPO}"
