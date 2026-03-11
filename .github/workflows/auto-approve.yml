@@ -5,6 +5,14 @@ on:
     # the intended trigger for multi-commit workflows where the PR is opened
     # as a draft, all commits are pushed, and then the PR is marked ready.
     types: [opened, synchronize, reopened, ready_for_review]
+
+# Cancel any in-progress run for the same PR when a new commit is pushed
+# (synchronize event). This prevents stale polling loops from an earlier
+# commit competing with a fresh run while new CI checks are still pending.
+concurrency:
+  group: auto-approve-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   auto-approve-and-merge:
     # Skip draft PRs — only auto-merge when the PR is explicitly marked ready.
@@ -41,7 +49,9 @@ jobs:
         run: |
           # GITHUB_TOKEN merges don't trigger other workflows (push/PR events).
           # So we poll for merge completion and send the webhooks directly.
-          for i in $(seq 1 30); do
+          # Poll for up to 15 minutes (90 × 10s) to accommodate CI runs that
+          # start after fix commits are pushed (synchronize event).
+          for i in $(seq 1 90); do
             STATE=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state -q .state)
             if [ "$STATE" = "MERGED" ]; then
               # --- EbiBot upgrade webhook (skip for docs-sync and auto-bump PRs) ---
@@ -93,7 +103,7 @@ jobs:
 
               exit 0
             fi
-            echo "Waiting for merge... ($i/30)"
+            echo "Waiting for merge... ($i/90)"
             sleep 10
           done
-          echo "PR not merged within 5 minutes, skipping webhook"
+          echo "PR not merged within 15 minutes, skipping webhook"
