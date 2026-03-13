@@ -144,7 +144,7 @@ def _parse_session_file(path: Path, *, max_lines: int = 20) -> CliSession | None
     timestamp: str | None = None
 
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             lines_read = 0
             for line in f:
                 lines_read += 1
@@ -247,7 +247,7 @@ def extract_recent_messages(
     all_messages: list[SessionMessage] = []
 
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line:

@@ -56,6 +56,7 @@ def load_config() -> dict[str, str]:
         "api_port": os.getenv("API_PORT", ""),
         "allowed_tools": os.getenv("CLAUDE_ALLOWED_TOOLS", ""),
         "custom_cogs_dir": os.getenv("CUSTOM_COGS_DIR", ""),
+        "cli_sessions_path": os.getenv("CLI_SESSIONS_PATH", ""),
         "thread_inbox_enabled": os.getenv("THREAD_INBOX_ENABLED", "false"),
     }
 
@@ -123,6 +124,7 @@ async def main() -> None:
             allowed_user_ids=allowed_user_ids,
             claude_channel_id=channel_id,
             claude_channel_ids=claude_channel_ids,
+            cli_sessions_path=config["cli_sessions_path"] or None,
             enable_thread_inbox=config["thread_inbox_enabled"].lower() == "true",
         )
 

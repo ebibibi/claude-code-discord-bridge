@@ -385,6 +385,28 @@ class TestScanCliSessions:
         assert len(sessions) == 1
         assert sessions[0].summary == "Late user message"
 
+    def test_scan_unicode_session_file(self, tmp_path):
+        """Session files containing non-ASCII characters are parsed correctly."""
+        session_id = "555eeeee-1234-5678-9abc-def012345678"
+        _write_session_jsonl(
+            tmp_path / f"{session_id}.jsonl",
+            session_id,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": session_id,
+                    "cwd": "/home/ユーザー/プロジェクト",
+                    "timestamp": "2026-03-12T10:00:00.000Z",
+                    "message": {"role": "user", "content": "バグを修正して 🔧"},
+                },
+            ],
+        )
+        sessions = scan_cli_sessions(str(tmp_path))
+        assert len(sessions) == 1
+        assert "バグを修正して" in sessions[0].summary
+        assert sessions[0].working_dir == "/home/ユーザー/プロジェクト"
+
     def test_cli_session_dataclass(self):
         s = CliSession(
             session_id="test-id",
@@ -751,6 +773,34 @@ class TestExtractRecentMessages:
     def test_extract_not_found(self, tmp_path):
         result = extract_recent_messages(str(tmp_path), "nonexistent-id")
         assert result == []
+
+    def test_extract_unicode_content(self, tmp_path):
+        """Session files with non-ASCII (emoji, CJK) are read correctly."""
+        sid = "fff11111-1234-5678-9abc-def012345678"
+        _write_session_jsonl(
+            tmp_path / f"{sid}.jsonl",
+            sid,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": sid,
+                    "cwd": "/home",
+                    "timestamp": "2026-03-12T10:00:00.000Z",
+                    "message": {"role": "user", "content": "日本語テスト 🎉 emoji"},
+                },
+                {
+                    "type": "assistant",
+                    "sessionId": sid,
+                    "timestamp": "2026-03-12T10:00:01.000Z",
+                    "message": {"role": "assistant", "content": "はい、了解です 👍"},
+                },
+            ],
+        )
+        result = extract_recent_messages(str(tmp_path), sid, count=5)
+        assert len(result) == 2
+        assert "日本語テスト" in result[0].content
+        assert "🎉" in result[0].content
 
     def test_extract_content_blocks(self, tmp_path):
         sid = "eee00000-1234-5678-9abc-def012345678"

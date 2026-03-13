@@ -96,6 +96,7 @@ class TestLoadConfig:
                     "API_PORT": "9000",
                     "CLAUDE_ALLOWED_TOOLS": "Read,Write",
                     "CUSTOM_COGS_DIR": "/my/cogs",
+                    "CLI_SESSIONS_PATH": "~/.claude/projects",
                 },
                 clear=True,
             ),
@@ -112,6 +113,26 @@ class TestLoadConfig:
         assert config["api_port"] == "9000"
         assert config["allowed_tools"] == "Read,Write"
         assert config["custom_cogs_dir"] == "/my/cogs"
+        assert config["cli_sessions_path"] == "~/.claude/projects"
+
+    def test_cli_sessions_path_defaults_to_empty(self) -> None:
+        """CLI_SESSIONS_PATH defaults to empty string when not set."""
+        from claude_discord.main import load_config
+
+        with (
+            patch("claude_discord.main.load_dotenv"),
+            patch.dict(
+                "os.environ",
+                {
+                    "DISCORD_BOT_TOKEN": "tok",
+                    "DISCORD_CHANNEL_ID": "111",
+                },
+                clear=True,
+            ),
+        ):
+            config = load_config()
+
+        assert config["cli_sessions_path"] == ""
 
     def test_dangerously_skip_permissions_is_string(self) -> None:
         """dangerously_skip_permissions is returned as string, not bool."""

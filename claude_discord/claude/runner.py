@@ -179,6 +179,7 @@ class ClaudeRunner:
         append_system_prompt: str | None = None,
         allowed_tools: list[str] | None | object = _UNSET,
         fork_session: bool = False,
+        working_dir: str | None | object = _UNSET,
     ) -> ClaudeRunner:
         """Create a fresh runner with the same configuration but no active process.
 
@@ -196,12 +197,18 @@ class ClaudeRunner:
                    ``_UNSET`` (default) inherits from the parent runner.
                    ``None`` means no tool restrictions.
                    A list of tool names restricts to those tools.
+            working_dir: Working directory override for this clone.
+                   ``_UNSET`` (default) inherits from the parent runner.
+                   A string overrides the working directory (useful for resuming
+                   CLI-imported sessions that were started in a different directory).
         """
         return ClaudeRunner(
             command=self.command,
             model=model if model is not None else self.model,
             permission_mode=self.permission_mode,
-            working_dir=self.working_dir,
+            working_dir=(
+                self.working_dir if working_dir is _UNSET else working_dir  # type: ignore[arg-type]
+            ),
             timeout_seconds=self.timeout_seconds,
             allowed_tools=(
                 self.allowed_tools if allowed_tools is _UNSET else allowed_tools  # type: ignore[arg-type]

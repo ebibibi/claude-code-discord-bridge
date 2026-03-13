@@ -154,6 +154,19 @@ class TestBuildArgs:
         # fork_session is NOT inherited — it's per-invocation, not a base setting
         assert cloned.fork_session is False
 
+    def test_clone_working_dir_override(self) -> None:
+        """clone(working_dir=...) overrides the parent's working_dir."""
+        base = ClaudeRunner(working_dir="/global/dir")
+        cloned = base.clone(working_dir="/session/specific/dir")
+        assert cloned.working_dir == "/session/specific/dir"
+        assert base.working_dir == "/global/dir"  # original unchanged
+
+    def test_clone_working_dir_inherits_when_not_provided(self) -> None:
+        """clone() without working_dir inherits the parent's value."""
+        base = ClaudeRunner(working_dir="/global/dir")
+        cloned = base.clone()
+        assert cloned.working_dir == "/global/dir"
+
 
 class TestBuildEnv:
     """Tests for _build_env method."""

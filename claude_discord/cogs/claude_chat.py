@@ -678,7 +678,12 @@ class ClaudeChatCog(commands.Cog):
                     await existing_task
 
         await self._run_claude(
-            message, thread, prompt, session_id=session_id, image_urls=image_urls
+            message,
+            thread,
+            prompt,
+            session_id=session_id,
+            image_urls=image_urls,
+            working_dir_override=record.working_dir if record else None,
         )
 
     async def _build_prompt_and_images(self, message: discord.Message) -> tuple[str, list[str]]:
@@ -693,6 +698,7 @@ class ClaudeChatCog(commands.Cog):
         session_id: str | None,
         image_urls: list[str] | None = None,
         fork: bool = False,
+        working_dir_override: str | None = None,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
         if self._semaphore.locked():
@@ -745,6 +751,7 @@ class ClaudeChatCog(commands.Cog):
                 model=model_override,
                 allowed_tools=tools_override if tools_override is not None else _UNSET,
                 fork_session=fork,
+                working_dir=working_dir_override if working_dir_override is not None else _UNSET,
             )
             self._active_runners[thread.id] = runner
 
