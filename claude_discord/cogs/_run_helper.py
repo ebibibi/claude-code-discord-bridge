@@ -211,12 +211,15 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
             if processor.should_drain:
                 continue
             await processor.process(event)
-    except Exception:
+    except Exception as exc:
         logger.exception("Error running Claude CLI for thread %d", config.thread.id)
         # Wrap Discord sends in suppress — the connection may already be closed
         # (e.g. ServerDisconnectedError on bot shutdown), and sending would fail too.
         with contextlib.suppress(Exception):
-            await config.thread.send(embed=error_embed("An unexpected error occurred."))
+            detail = f"{type(exc).__name__}: {exc}"
+            await config.thread.send(
+                embed=error_embed(f"An unexpected error occurred.\n```\n{detail}\n```")
+            )
         if config.status:
             with contextlib.suppress(Exception):
                 await config.status.set_error()

@@ -485,6 +485,22 @@ class TestTodoWriteParsing:
         assert event.todo_list is not None
         assert event.todo_list[0].active_form == ""
 
+    def test_todo_write_string_items_skipped(self):
+        """String items in todos array should be skipped, not crash."""
+        todos = ["some string item", {"content": "Real task", "status": "pending"}]
+        event = parse_line(self._make_todo_line(todos))
+        assert event is not None
+        assert event.todo_list is not None
+        assert len(event.todo_list) == 1
+        assert event.todo_list[0].content == "Real task"
+
+    def test_todo_write_all_string_items(self):
+        """All-string todos array should return empty list, not crash."""
+        todos = ["task 1", "task 2"]
+        event = parse_line(self._make_todo_line(todos))
+        assert event is not None
+        assert event.todo_list == []
+
     def test_exit_plan_mode_sets_is_plan_approval(self):
         import json
 

@@ -264,6 +264,8 @@ def _parse_todo_items(tool_input: dict[str, Any]) -> list[TodoItem]:
     todos_raw = tool_input.get("todos", [])
     result: list[TodoItem] = []
     for t in todos_raw:
+        if not isinstance(t, dict):
+            continue
         content = t.get("content", "")
         if not content:
             continue

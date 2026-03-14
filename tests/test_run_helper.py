@@ -481,6 +481,25 @@ class TestRunClaudeInThread:
         assert any("Error" in (c.kwargs["embed"].title or "") for c in embed_calls)
 
     @pytest.mark.asyncio
+    async def test_unexpected_exception_includes_detail_in_embed(
+        self, thread: MagicMock, runner: MagicMock, repo: MagicMock
+    ) -> None:
+        """When an unexpected exception occurs, the error embed should include the detail."""
+
+        async def _failing_run(*args, **kwargs):
+            raise AttributeError("'str' object has no attribute 'get'")
+            yield  # make it an async generator  # noqa: RUF028
+
+        runner.run = _failing_run
+
+        await run_claude_in_thread(thread, runner, repo, "test", None)
+
+        embed_calls = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        descriptions = [c.kwargs["embed"].description or "" for c in embed_calls]
+        assert any("AttributeError" in d for d in descriptions)
+        assert any("'str' object has no attribute 'get'" in d for d in descriptions)
+
+    @pytest.mark.asyncio
     async def test_error_embed_send_failure_does_not_raise(
         self, thread: MagicMock, runner: MagicMock, repo: MagicMock
     ) -> None:
