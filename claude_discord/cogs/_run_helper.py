@@ -191,8 +191,18 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
     # original config.runner a "dead" runner with no process.  Without this
     # update the Stop button would send SIGINT to that dead runner and have no
     # effect.  See: https://github.com/ebibibi/claude-code-discord-bridge/issues/174
-    if config.stop_view is not None and runner is not config.runner:
-        config.stop_view.update_runner(runner)
+    if runner is not config.runner:
+        if config.stop_view is not None:
+            config.stop_view.update_runner(runner)
+
+        # Update config.runner to point to the clone so that EventProcessor
+        # calls interrupt() on the runner that actually owns the subprocess.
+        # Without this, compact_boundary and AskUserQuestion interrupt the
+        # original (process-less) runner — a no-op that leaves Claude running
+        # invisibly.  See: https://github.com/ebibibi/claude-code-discord-bridge/issues/306
+        from dataclasses import replace
+
+        config = replace(config, runner=runner)
 
     processor = EventProcessor(config)
 

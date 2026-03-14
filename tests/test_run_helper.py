@@ -1309,3 +1309,75 @@ class TestCompactRerun:
 
         runner.interrupt.assert_not_awaited()
         assert session_id == "sess-3"
+
+    @pytest.mark.asyncio
+    async def test_compact_interrupts_cloned_runner_not_original(self, thread: MagicMock) -> None:
+        """interrupt() must target the cloned runner (which owns the process), not config.runner.
+
+        Regression test for #306: when system_context causes runner.clone(), the
+        EventProcessor still held a reference to the original runner.  Calling
+        interrupt() on the original runner was a no-op (no process), so Claude
+        kept running invisibly while should_drain=True suppressed all output.
+        """
+        original_runner = MagicMock()
+        original_runner.working_dir = None
+        original_runner.image_urls = None
+        original_runner.interrupt = AsyncMock()
+        original_runner.model = "test-model"
+
+        cloned_runner = MagicMock()
+        cloned_runner.working_dir = None
+        cloned_runner.image_urls = None
+        cloned_runner.interrupt = AsyncMock()
+        cloned_runner.model = "test-model"
+
+        compact_events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-306"),
+            StreamEvent(message_type=MessageType.SYSTEM, is_compact=True),
+        ]
+        rerun_events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-306"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-306",
+                cost_usd=0.01,
+                duration_ms=100,
+            ),
+        ]
+
+        call_count = 0
+
+        async def mock_run(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            events = compact_events if call_count == 1 else rerun_events
+            for e in events:
+                yield e
+
+        # First clone (system context injection) returns cloned_runner.
+        # Second clone (rerun guardrail) also returns cloned_runner.
+        original_runner.clone = MagicMock(return_value=cloned_runner)
+        cloned_runner.clone = MagicMock(return_value=cloned_runner)
+        cloned_runner.run = mock_run
+        # original_runner.run should NOT be called (clone is used instead).
+
+        # Provide a registry so that _build_system_context() returns non-None,
+        # which triggers runner.clone() — the scenario where the bug occurs.
+        registry = MagicMock(spec=SessionRegistry)
+        registry.build_concurrency_notice.return_value = "notice"
+        registry.list_others.return_value = []
+
+        config = RunConfig(
+            thread=thread,
+            runner=original_runner,
+            prompt="check X",
+            session_id="sess-306",
+            registry=registry,
+        )
+        await run_claude_with_config(config)
+
+        # The cloned runner (with the active process) must be interrupted.
+        cloned_runner.interrupt.assert_awaited()
+        # The original runner must NOT be interrupted (it has no process).
+        original_runner.interrupt.assert_not_awaited()
