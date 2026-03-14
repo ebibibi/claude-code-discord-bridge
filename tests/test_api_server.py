@@ -97,6 +97,13 @@ class TestNotify:
         assert resp.status == 400
 
     @pytest.mark.asyncio
+    async def test_notify_text_format(self, client: TestClient, bot: MagicMock) -> None:
+        channel = bot.get_channel.return_value
+        resp = await client.post("/api/notify", json={"message": "Hello text!", "format": "text"})
+        assert resp.status == 200
+        channel.send.assert_called_once_with("Hello text!")
+
+    @pytest.mark.asyncio
     async def test_notify_no_channel(self, repo: NotificationRepository) -> None:
         bot = MagicMock()
         api = ApiServer(repo=repo, bot=bot, default_channel_id=None)

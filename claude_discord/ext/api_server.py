@@ -184,9 +184,13 @@ class ApiServer:
         if not hasattr(raw_channel, "send"):
             return web.json_response({"error": "Channel is not messageable"}, status=400)
 
-        title = data.get("title")
-        embed = self._build_embed(message=message, title=title, color=data.get("color"))
-        await raw_channel.send(embed=embed)  # type: ignore[union-attr]
+        fmt = data.get("format", "embed")
+        if fmt == "text":
+            await raw_channel.send(message)  # type: ignore[union-attr]
+        else:
+            title = data.get("title")
+            embed = self._build_embed(message=message, title=title, color=data.get("color"))
+            await raw_channel.send(embed=embed)  # type: ignore[union-attr]
 
         return web.json_response({"status": "sent"})
 
