@@ -206,19 +206,25 @@ class EventProcessor:
     # Event handlers
     # ------------------------------------------------------------------
 
+    @property
+    def _chat_only(self) -> bool:
+        """Shorthand for the chat_only flag on the config."""
+        return self._config.chat_only
+
     async def _on_system(self, event: StreamEvent) -> None:
         """Handle SYSTEM events — capture session_id, post start embed, compact notification."""
-        # Context compaction notification
+        # Context compaction notification (skip display in chat_only mode)
         if event.is_compact:
             if self._config.status:
                 await self._config.status.set_compact()
-            pre = event.compact_pre_tokens
-            trigger = event.compact_trigger or "auto"
-            label = f"\U0001f5dc\ufe0f Context compacted ({trigger})"
-            if pre:
-                label += f" \u2014 was {pre:,} tokens"
-            with contextlib.suppress(discord.HTTPException):
-                await self._config.thread.send(f"-# {label}")
+            if not self._chat_only:
+                pre = event.compact_pre_tokens
+                trigger = event.compact_trigger or "auto"
+                label = f"\U0001f5dc\ufe0f Context compacted ({trigger})"
+                if pre:
+                    label += f" \u2014 was {pre:,} tokens"
+                with contextlib.suppress(discord.HTTPException):
+                    await self._config.thread.send(f"-# {label}")
 
             # Interrupt the runner so _run_helper can rerun with a guardrail.
             # Skip when post_compact_rerun=True (guardrail already active; avoid loops).
@@ -226,12 +232,12 @@ class EventProcessor:
                 self._compact_occurred = True
                 await self._config.runner.interrupt()
 
-        # Permission request — show Allow/Deny buttons
+        # Permission request — show Allow/Deny buttons (always shown, even in chat_only)
         if event.permission_request is not None:
             await self._handle_permission_request(event)
             return
 
-        # MCP elicitation — show form or URL button
+        # MCP elicitation — show form or URL button (always shown, even in chat_only)
         if event.elicitation is not None:
             await self._handle_elicitation(event)
             return
@@ -244,37 +250,48 @@ class EventProcessor:
             await self._config.repo.save(self._config.thread.id, self._state.session_id)
 
         # Guard: post session_start_embed only once (Claude can emit multiple SYSTEM events).
-        if not self._config.session_id and not self._session_start_sent:
+        # Skip in chat_only mode — no session start embed.
+        if not self._chat_only and not self._config.session_id and not self._session_start_sent:
             await self._config.thread.send(embed=session_start_embed(self._state.session_id))
             self._session_start_sent = True
 
     async def _on_assistant(self, event: StreamEvent) -> None:
         """Handle ASSISTANT events — thinking, streaming text, tool use."""
         # Extended thinking — only post on complete events (not partials).
-        if event.thinking and not event.is_partial:
+        # Skip in chat_only mode.
+        if event.thinking and not event.is_partial and not self._chat_only:
             await self._config.thread.send(embed=thinking_embed(event.thinking))
 
-        # Redacted thinking — only post on complete events.
-        if event.has_redacted_thinking and not event.is_partial:
+        # Redacted thinking — only post on complete events. Skip in chat_only mode.
+        if event.has_redacted_thinking and not event.is_partial and not self._chat_only:
             await self._config.thread.send(embed=redacted_thinking_embed())
 
         # Text streaming — compute delta from last partial, edit in place.
+        # Always shown — this IS the chat content.
         if event.text:
             await self._handle_text(event)
 
-        # Tool use — post embed and start live timer.
+        # Tool use — post embed and start live timer. Skip in chat_only mode.
         if event.tool_use:
-            await self._handle_tool_use(event)
+            if self._chat_only:
+                # Still track tool use count and update status, but don't post embeds.
+                self._state.tool_use_count += 1
+                if self._config.status:
+                    await self._config.status.set_tool(event.tool_use.category)
+            else:
+                await self._handle_tool_use(event)
 
-        # TodoWrite — post or edit the live todo progress embed.
-        if event.todo_list is not None:
+        # TodoWrite — post or edit the live todo progress embed. Skip in chat_only mode.
+        if event.todo_list is not None and not self._chat_only:
             await self._handle_todo_write(event)
 
         # ExitPlanMode — show plan embed with Approve/Cancel buttons.
-        if event.is_plan_approval and not event.is_partial:
+        # Skip in chat_only mode.
+        if event.is_plan_approval and not event.is_partial and not self._chat_only:
             await self._handle_plan_approval(event)
 
         # AskUserQuestion — set pending and signal caller to interrupt runner.
+        # Always handled — interactive flow is needed regardless of mode.
         if event.ask_questions:
             self._pending_ask = event.ask_questions
             await self._config.runner.interrupt()
@@ -282,6 +299,12 @@ class EventProcessor:
     async def _on_tool_result(self, event: StreamEvent) -> None:
         """Handle USER events (tool results) — cancel timer, update embed."""
         if not event.tool_result_id:
+            return
+
+        # In chat_only mode, no tool embeds were posted — just reset status.
+        if self._chat_only:
+            if self._config.status:
+                await self._config.status.set_thinking()
             return
 
         if self._config.status:
@@ -375,49 +398,55 @@ class EventProcessor:
                 self._config.runner.working_dir,
             )
 
-            await self._config.thread.send(
-                embed=session_complete_embed(
-                    event.cost_usd,
-                    event.duration_ms,
-                    event.input_tokens,
-                    event.output_tokens,
-                    event.cache_read_tokens,
-                    event.context_window,
-                    event.cache_creation_tokens,
+            # In chat_only mode, skip session_complete embed, statusline, and inbox.
+            # Just set the done status emoji.
+            if self._chat_only:
+                if self._config.status:
+                    await self._config.status.set_done()
+            else:
+                await self._config.thread.send(
+                    embed=session_complete_embed(
+                        event.cost_usd,
+                        event.duration_ms,
+                        event.input_tokens,
+                        event.output_tokens,
+                        event.cache_read_tokens,
+                        event.context_window,
+                        event.cache_creation_tokens,
+                    )
                 )
-            )
-            if self._config.status:
-                await self._config.status.set_done()
+                if self._config.status:
+                    await self._config.status.set_done()
 
-            # Post the user's configured statusLine as Discord subtext.
-            # Runs only when statusLine.command is set in ~/.claude/settings.json.
-            asyncio.create_task(
-                _post_statusline_footer(
-                    thread=self._config.thread,
-                    working_dir=self._config.runner.working_dir,
-                    model=self._config.runner.model,
-                    context_window=event.context_window,
-                    input_tokens=event.input_tokens,
-                    cache_creation_tokens=event.cache_creation_tokens,
-                    cache_read_tokens=event.cache_read_tokens,
-                ),
-                name=f"statusline-{self._config.thread.id}",
-            )
-
-            # Schedule inbox classification as a background task (non-blocking).
-            # Only runs when inbox_repo is wired in (THREAD_INBOX_ENABLED=true).
-            if self._config.inbox_repo is not None and last_assistant_text:
+                # Post the user's configured statusLine as Discord subtext.
+                # Runs only when statusLine.command is set in ~/.claude/settings.json.
                 asyncio.create_task(
-                    _classify_and_update_inbox(
-                        thread_id=self._config.thread.id,
-                        last_text=last_assistant_text,
-                        last_message_url=last_assistant_url,
-                        inbox_repo=self._config.inbox_repo,
-                        dashboard=self._config.inbox_dashboard,
-                        claude_command=self._config.claude_command,
+                    _post_statusline_footer(
+                        thread=self._config.thread,
+                        working_dir=self._config.runner.working_dir,
+                        model=self._config.runner.model,
+                        context_window=event.context_window,
+                        input_tokens=event.input_tokens,
+                        cache_creation_tokens=event.cache_creation_tokens,
+                        cache_read_tokens=event.cache_read_tokens,
                     ),
-                    name=f"inbox-classify-{self._config.thread.id}",
+                    name=f"statusline-{self._config.thread.id}",
                 )
+
+                # Schedule inbox classification as a background task (non-blocking).
+                # Only runs when inbox_repo is wired in (THREAD_INBOX_ENABLED=true).
+                if self._config.inbox_repo is not None and last_assistant_text:
+                    asyncio.create_task(
+                        _classify_and_update_inbox(
+                            thread_id=self._config.thread.id,
+                            last_text=last_assistant_text,
+                            last_message_url=last_assistant_url,
+                            inbox_repo=self._config.inbox_repo,
+                            dashboard=self._config.inbox_dashboard,
+                            claude_command=self._config.claude_command,
+                        ),
+                        name=f"inbox-classify-{self._config.thread.id}",
+                    )
 
         if event.session_id:
             if self._config.repo:

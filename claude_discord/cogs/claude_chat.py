@@ -95,6 +95,7 @@ class ClaudeChatCog(commands.Cog):
         channel_ids: set[int] | None = None,
         mention_only_channel_ids: set[int] | None = None,
         inline_reply_channel_ids: set[int] | None = None,
+        chat_only_channel_ids: set[int] | None = None,
         auto_rename_threads: bool = False,
     ) -> None:
         self.bot = bot
@@ -114,6 +115,8 @@ class ClaudeChatCog(commands.Cog):
         self._mention_only_channel_ids: set[int] = mention_only_channel_ids or set()
         # Channels where the bot replies directly (no thread created).
         self._inline_reply_channel_ids: set[int] = inline_reply_channel_ids or set()
+        # Channels where only text responses are shown (no tool embeds, thinking, etc.).
+        self._chat_only_channel_ids: set[int] = chat_only_channel_ids or set()
         self._registry = registry or getattr(bot, "session_registry", None)
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, ClaudeRunner] = {}
@@ -423,20 +426,33 @@ class ClaudeChatCog(commands.Cog):
     async def _handle_new_conversation(self, message: discord.Message) -> None:
         """Start a Claude Code session, creating a thread unless inline-reply mode is active."""
         prompt, image_urls = await self._build_prompt_and_images(message)
+        chat_only = message.channel.id in self._chat_only_channel_ids
         if (
             isinstance(message.channel, discord.TextChannel)
             and message.channel.id in self._inline_reply_channel_ids
         ):
             # Inline-reply mode: respond directly in the channel without creating a thread.
             await self._run_claude(
-                message, message.channel, prompt, session_id=None, image_urls=image_urls
+                message,
+                message.channel,
+                prompt,
+                session_id=None,
+                image_urls=image_urls,
+                chat_only=chat_only,
             )
         else:
             thread_name = message.content[:100] if message.content else "Claude Chat"
             thread = await message.create_thread(name=thread_name)
             if self._auto_rename_threads and message.content:
                 asyncio.create_task(self._background_rename_thread(thread, message.content))
-            await self._run_claude(message, thread, prompt, session_id=None, image_urls=image_urls)
+            await self._run_claude(
+                message,
+                thread,
+                prompt,
+                session_id=None,
+                image_urls=image_urls,
+                chat_only=chat_only,
+            )
 
     async def _background_rename_thread(
         self,
@@ -677,6 +693,8 @@ class ClaudeChatCog(commands.Cog):
                 with contextlib.suppress(Exception):
                     await existing_task
 
+        # Determine chat_only from the parent channel of this thread.
+        chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
         await self._run_claude(
             message,
             thread,
@@ -684,6 +702,7 @@ class ClaudeChatCog(commands.Cog):
             session_id=session_id,
             image_urls=image_urls,
             working_dir_override=record.working_dir if record else None,
+            chat_only=chat_only,
         )
 
     async def _build_prompt_and_images(self, message: discord.Message) -> tuple[str, list[str]]:
@@ -699,6 +718,7 @@ class ClaudeChatCog(commands.Cog):
         image_urls: list[str] | None = None,
         fork: bool = False,
         working_dir_override: str | None = None,
+        chat_only: bool = False,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
         if self._semaphore.locked():
@@ -755,9 +775,12 @@ class ClaudeChatCog(commands.Cog):
             )
             self._active_runners[thread.id] = runner
 
-            stop_view = StopView(runner)
-            stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
-            stop_view.set_message(stop_msg)
+            # In chat_only mode, skip the "Session running" message and stop button.
+            stop_view: StopView | None = None
+            if not chat_only:
+                stop_view = StopView(runner)
+                stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
+                stop_view.set_message(stop_msg)
 
             try:
                 await run_claude_with_config(
@@ -778,10 +801,12 @@ class ClaudeChatCog(commands.Cog):
                         inbox_repo=getattr(self.bot, "inbox_repo", None),
                         inbox_dashboard=dashboard,
                         claude_command=runner.command,
+                        chat_only=chat_only,
                     )
                 )
             finally:
-                await stop_view.disable()
+                if stop_view is not None:
+                    await stop_view.disable()
                 self._active_runners.pop(thread.id, None)
                 self._active_tasks.pop(thread.id, None)
 

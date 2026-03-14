@@ -81,6 +81,10 @@ class RunConfig:
     # When True, a compact guardrail was already injected into --append-system-prompt
     # for this run. Prevents infinite interrupt→rerun loops if compact fires again.
     post_compact_rerun: bool = False
+    # When True, only text responses are shown to Discord. Tool embeds, thinking
+    # blocks, session start/complete embeds, and other technical details are hidden.
+    # Useful for public channels where non-technical users are watching.
+    chat_only: bool = False
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

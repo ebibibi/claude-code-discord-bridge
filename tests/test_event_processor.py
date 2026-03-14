@@ -1062,3 +1062,140 @@ class TestRateLimitEventProcessing:
             ),
         )
         await p.process(event)  # should not raise
+
+
+class TestChatOnlyMode:
+    """chat_only mode hides tool embeds, thinking, session chrome but keeps text."""
+
+    def _make_chat_only_config(self, thread: MagicMock, runner: MagicMock, **kwargs) -> RunConfig:
+        return _make_config(thread, runner, chat_only=True, **kwargs)
+
+    @pytest.mark.asyncio
+    async def test_no_session_start_embed(self, thread: MagicMock, runner: MagicMock) -> None:
+        """chat_only skips the session_start embed for new sessions."""
+        config = self._make_chat_only_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
+
+        # No embed should be sent
+        embed_sends = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert len(embed_sends) == 0
+
+    @pytest.mark.asyncio
+    async def test_thinking_not_shown(self, thread: MagicMock, runner: MagicMock) -> None:
+        """chat_only hides thinking embeds."""
+        config = self._make_chat_only_config(thread, runner)
+        p = EventProcessor(config)
+
+        event = StreamEvent(
+            message_type=MessageType.ASSISTANT,
+            thinking="I am thinking...",
+            is_partial=False,
+        )
+        await p.process(event)
+
+        embed_sends = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert len(embed_sends) == 0
+
+    @pytest.mark.asyncio
+    async def test_tool_use_no_embed(self, thread: MagicMock, runner: MagicMock) -> None:
+        """chat_only does not post tool use embeds but still counts them."""
+        config = self._make_chat_only_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(_make_tool_event("t1"))
+
+        # No embed sent
+        embed_sends = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert len(embed_sends) == 0
+        # But tool_use_count is incremented
+        assert p._state.tool_use_count == 1
+
+    @pytest.mark.asyncio
+    async def test_text_still_shown(self, thread: MagicMock, runner: MagicMock) -> None:
+        """chat_only still sends text responses."""
+        config = self._make_chat_only_config(thread, runner)
+        p = EventProcessor(config)
+
+        event = StreamEvent(message_type=MessageType.ASSISTANT, text="Hello!", is_partial=False)
+        await p.process(event)
+
+        text_sends = [
+            c for c in thread.send.call_args_list if c.args and isinstance(c.args[0], str)
+        ]
+        assert any("Hello!" in c.args[0] for c in text_sends)
+
+    @pytest.mark.asyncio
+    async def test_tool_result_resets_status_only(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """chat_only tool result resets status without updating embeds."""
+        status = MagicMock()
+        status.set_thinking = AsyncMock()
+        status.set_tool = AsyncMock()
+        config = self._make_chat_only_config(thread, runner, status=status)
+        p = EventProcessor(config)
+
+        result_event = StreamEvent(
+            message_type=MessageType.USER,
+            tool_result_id="t1",
+            tool_result_content="output",
+        )
+        await p.process(result_event)
+
+        status.set_thinking.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_complete_no_session_embed(self, thread: MagicMock, runner: MagicMock) -> None:
+        """chat_only skips session_complete embed on RESULT."""
+        status = MagicMock()
+        status.set_done = AsyncMock()
+        config = self._make_chat_only_config(thread, runner, status=status)
+        p = EventProcessor(config)
+
+        await p.process(_make_result_event(session_id="s1"))
+
+        # No session_complete embed sent
+        embed_sends = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert len(embed_sends) == 0
+        # But done status is set
+        status.set_done.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_ask_user_question_still_handled(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """AskUserQuestion is always processed even in chat_only mode."""
+        runner.interrupt = AsyncMock()
+        config = self._make_chat_only_config(thread, runner)
+        p = EventProcessor(config)
+
+        ask = AskQuestion(
+            question="Which option?",
+            options=[AskOption(label="A"), AskOption(label="B")],
+        )
+        event = StreamEvent(
+            message_type=MessageType.ASSISTANT,
+            ask_questions=[ask],
+        )
+        await p.process(event)
+
+        assert p.pending_ask == [ask]
+        runner.interrupt.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_compact_notification_hidden(self, thread: MagicMock, runner: MagicMock) -> None:
+        """chat_only hides the compact notification message."""
+        runner.interrupt = AsyncMock()
+        thread.send = AsyncMock(return_value=MagicMock(embeds=[]))
+        config = self._make_chat_only_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, is_compact=True))
+
+        # No compact message sent to thread (only interrupt happened)
+        text_sends = [
+            c for c in thread.send.call_args_list if c.args and isinstance(c.args[0], str)
+        ]
+        assert not any("compact" in str(c).lower() for c in text_sends)

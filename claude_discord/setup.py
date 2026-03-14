@@ -73,6 +73,7 @@ async def setup_bridge(
     claude_channel_ids: set[int] | None = None,
     mention_only_channel_ids: set[int] | None = None,
     inline_reply_channel_ids: set[int] | None = None,
+    chat_only_channel_ids: set[int] | None = None,
     cli_sessions_path: str | None = None,
     enable_scheduler: bool = True,
     task_db_path: str = "data/tasks.db",
@@ -110,6 +111,11 @@ async def setup_bridge(
                                   affected (they are already within an active session).
                                   Defaults to MENTION_ONLY_CHANNEL_IDS env var
                                   (comma-separated).
+        chat_only_channel_ids: Channel IDs where only text responses are shown.
+                               Tool embeds, thinking blocks, and session chrome are
+                               hidden.  Useful for public channels where non-technical
+                               users are watching.  Defaults to CHAT_ONLY_CHANNEL_IDS
+                               env var (comma-separated).
         cli_sessions_path: Path to ~/.claude/projects for session sync.
         enable_scheduler: Whether to enable SchedulerCog.
         task_db_path: Path for scheduled tasks SQLite DB.
@@ -161,6 +167,13 @@ async def setup_bridge(
         _env_inline = os.getenv("INLINE_REPLY_CHANNEL_IDS", "")
         inline_reply_channel_ids = {
             int(x.strip()) for x in _env_inline.split(",") if x.strip().isdigit()
+        } or None
+
+    # Chat-only channels — fall back to CHAT_ONLY_CHANNEL_IDS env var
+    if chat_only_channel_ids is None:
+        _env_chat_only = os.getenv("CHAT_ONLY_CHANNEL_IDS", "")
+        chat_only_channel_ids = {
+            int(x.strip()) for x in _env_chat_only.split(",") if x.strip().isdigit()
         } or None
 
     # Lounge channel — fall back to COORDINATION_CHANNEL_ID env var for backward compat
@@ -221,6 +234,7 @@ async def setup_bridge(
         channel_ids=_all_channel_ids or None,
         mention_only_channel_ids=mention_only_channel_ids or None,
         inline_reply_channel_ids=inline_reply_channel_ids or None,
+        chat_only_channel_ids=chat_only_channel_ids or None,
         auto_rename_threads=auto_rename_threads,
     )
     await bot.add_cog(chat_cog)
