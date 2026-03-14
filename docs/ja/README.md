@@ -715,11 +715,31 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/lounge` | AI Lounge にメッセージを投稿（`label` オプション） |
 
 ```bash
-# 通知の送信
+# 通知の送信（埋め込み形式、デフォルト）
 curl -X POST http://localhost:8080/api/notify \
   -H "Authorization: Bearer your-secret" \
   -H "Content-Type: application/json" \
   -d '{"message": "ビルド成功！", "title": "CI/CD"}'
+
+# プレーンテキスト通知の送信（埋め込みなし）
+curl -X POST http://localhost:8080/api/notify \
+  -H "Authorization: Bearer your-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "デプロイ完了！", "format": "text"}'
+
+# Discord Poll の送信
+curl -X POST http://localhost:8080/api/notify \
+  -H "Authorization: Bearer your-secret" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "投票してください",
+    "poll": {
+      "question": "次のリリーストラックは？",
+      "answers": ["安定版", "ベータ版", "ナイトリー"],
+      "duration_hours": 24,
+      "allow_multiselect": false
+    }
+  }'
 
 # 定期タスクの登録
 curl -X POST http://localhost:8080/api/tasks \

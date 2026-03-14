@@ -714,11 +714,31 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |
 
 ```bash
-# Send notification
+# Send notification (embed format, default)
 curl -X POST http://localhost:8080/api/notify \
   -H "Authorization: Bearer your-secret" \
   -H "Content-Type: application/json" \
   -d '{"message": "Build succeeded!", "title": "CI/CD"}'
+
+# Send plain text notification (no embed)
+curl -X POST http://localhost:8080/api/notify \
+  -H "Authorization: Bearer your-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Deployment done!", "format": "text"}'
+
+# Send a Discord Poll
+curl -X POST http://localhost:8080/api/notify \
+  -H "Authorization: Bearer your-secret" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Vote now",
+    "poll": {
+      "question": "Which release track?",
+      "answers": ["Stable", "Beta", "Nightly"],
+      "duration_hours": 24,
+      "allow_multiselect": false
+    }
+  }'
 
 # Register a recurring task
 curl -X POST http://localhost:8080/api/tasks \
