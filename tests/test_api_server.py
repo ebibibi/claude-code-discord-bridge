@@ -117,6 +117,133 @@ class TestNotify:
             await client.close()
 
 
+class TestNotifyPoll:
+    """Tests for poll parameter in /api/notify."""
+
+    @pytest.mark.asyncio
+    async def test_notify_with_poll(self, client: TestClient, bot: MagicMock) -> None:
+        """Poll object is constructed and passed to channel.send()."""
+        channel = bot.get_channel.return_value
+        resp = await client.post(
+            "/api/notify",
+            json={
+                "message": "投票してね",
+                "poll": {
+                    "question": "好きな言語は？",
+                    "answers": ["Python", "Go", "Rust"],
+                    "duration_hours": 24,
+                },
+            },
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "sent"
+        call_kwargs = channel.send.call_args.kwargs
+        assert "poll" in call_kwargs
+        poll = call_kwargs["poll"]
+        # discord.py may store question as str or PollMedia depending on version
+        q = poll.question
+        assert (q.text if hasattr(q, "text") else q) == "好きな言語は？"
+        assert len(poll.answers) == 3
+        assert poll.duration.total_seconds() == 24 * 3600
+
+    @pytest.mark.asyncio
+    async def test_notify_poll_with_multiselect(self, client: TestClient, bot: MagicMock) -> None:
+        """allow_multiselect flag is passed through."""
+        channel = bot.get_channel.return_value
+        resp = await client.post(
+            "/api/notify",
+            json={
+                "message": "複数選択OK",
+                "poll": {
+                    "question": "好きな食べ物は？",
+                    "answers": ["寿司", "ラーメン", "カレー"],
+                    "duration_hours": 48,
+                    "allow_multiselect": True,
+                },
+            },
+        )
+        assert resp.status == 200
+        poll = channel.send.call_args.kwargs["poll"]
+        assert poll.multiple is True
+
+    @pytest.mark.asyncio
+    async def test_notify_poll_default_duration(self, client: TestClient, bot: MagicMock) -> None:
+        """Default duration is 24 hours when not specified."""
+        channel = bot.get_channel.return_value
+        resp = await client.post(
+            "/api/notify",
+            json={
+                "message": "デフォルト期間テスト",
+                "poll": {
+                    "question": "テスト？",
+                    "answers": ["はい", "いいえ"],
+                },
+            },
+        )
+        assert resp.status == 200
+        poll = channel.send.call_args.kwargs["poll"]
+        assert poll.duration.total_seconds() == 24 * 3600
+
+    @pytest.mark.asyncio
+    async def test_notify_poll_missing_question(self, client: TestClient) -> None:
+        """Poll without question returns 400."""
+        resp = await client.post(
+            "/api/notify",
+            json={
+                "message": "テスト",
+                "poll": {"answers": ["A", "B"]},
+            },
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_notify_poll_missing_answers(self, client: TestClient) -> None:
+        """Poll without answers returns 400."""
+        resp = await client.post(
+            "/api/notify",
+            json={
+                "message": "テスト",
+                "poll": {"question": "テスト？"},
+            },
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_notify_poll_too_few_answers(self, client: TestClient) -> None:
+        """Poll with fewer than 2 answers returns 400."""
+        resp = await client.post(
+            "/api/notify",
+            json={
+                "message": "テスト",
+                "poll": {"question": "テスト？", "answers": ["ひとつだけ"]},
+            },
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_notify_poll_with_emoji_answers(self, client: TestClient, bot: MagicMock) -> None:
+        """Answers with emoji objects are supported."""
+        channel = bot.get_channel.return_value
+        resp = await client.post(
+            "/api/notify",
+            json={
+                "message": "絵文字付き",
+                "poll": {
+                    "question": "どれがいい？",
+                    "answers": [
+                        {"text": "Python", "emoji": "🐍"},
+                        {"text": "Go", "emoji": "🐹"},
+                    ],
+                    "duration_hours": 24,
+                },
+            },
+        )
+        assert resp.status == 200
+        poll = channel.send.call_args.kwargs["poll"]
+        assert len(poll.answers) == 2
+
+
 class TestSchedule:
     @pytest.mark.asyncio
     async def test_schedule_creates_notification(self, client: TestClient) -> None:

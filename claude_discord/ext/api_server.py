@@ -19,7 +19,7 @@ import logging
 import os
 import re
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -184,8 +184,19 @@ class ApiServer:
         if not hasattr(raw_channel, "send"):
             return web.json_response({"error": "Channel is not messageable"}, status=400)
 
+        # Build poll if specified
+        poll_data = data.get("poll")
+        poll_obj = None
+        if poll_data:
+            result = self._build_poll(poll_data)
+            if isinstance(result, web.Response):
+                return result
+            poll_obj = result
+
         fmt = data.get("format", "embed")
-        if fmt == "text":
+        if poll_obj:
+            await raw_channel.send(content=message, poll=poll_obj)  # type: ignore[union-attr]
+        elif fmt == "text":
             await raw_channel.send(message)  # type: ignore[union-attr]
         else:
             title = data.get("title")
@@ -627,6 +638,44 @@ class ApiServer:
                 await channel.send(f"**[{label}]** {message} *({timestamp})*")  # type: ignore[union-attr]
         except Exception:
             logger.warning("Failed to forward lounge message to Discord", exc_info=True)
+
+    @staticmethod
+    def _build_poll(poll_data: dict) -> discord.Poll | web.Response:
+        """Build a discord.Poll from API request data.
+
+        Returns a Poll on success, or a web.Response (400) on validation error.
+        """
+        import discord
+
+        question = poll_data.get("question")
+        if not question:
+            return web.json_response({"error": "poll.question is required"}, status=400)
+
+        answers = poll_data.get("answers")
+        if not answers or len(answers) < 2:
+            return web.json_response(
+                {"error": "poll.answers must have at least 2 items"}, status=400
+            )
+
+        duration_hours = poll_data.get("duration_hours", 24)
+        allow_multiselect = poll_data.get("allow_multiselect", False)
+
+        poll = discord.Poll(
+            question=question,
+            duration=timedelta(hours=duration_hours),
+            multiple=allow_multiselect,
+        )
+
+        for answer in answers:
+            if isinstance(answer, str):
+                poll.add_answer(text=answer)
+            elif isinstance(answer, dict):
+                kwargs: dict = {"text": answer["text"]}
+                if "emoji" in answer:
+                    kwargs["emoji"] = answer["emoji"]
+                poll.add_answer(**kwargs)
+
+        return poll
 
     @staticmethod
     def _build_embed(
