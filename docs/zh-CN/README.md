@@ -629,7 +629,7 @@ claude_discord/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-906+ 个测试覆盖解析器、分块器、仓库、运行器、流式传输、webhook 触发、自动升级（含 `/upgrade` 斜杠命令、线程调用和批准按钮）、REST API、AskUserQuestion UI、线程面板、计划任务、会话同步、AI Lounge、启动恢复、模型切换、压缩检测、TodoWrite 进度 embed，以及权限/elicitation/plan-mode 事件解析。
+1050+ 个测试覆盖解析器、分块器、仓库、运行器、流式传输、webhook 触发、自动升级（含 `/upgrade` 斜杠命令、线程调用和批准按钮）、REST API、AskUserQuestion UI、线程面板、计划任务、会话同步、AI Lounge、启动恢复、模型切换、压缩检测、TodoWrite 进度 embed，以及权限/elicitation/plan-mode 事件解析。
 
 ---
 
