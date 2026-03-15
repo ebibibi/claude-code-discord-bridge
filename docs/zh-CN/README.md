@@ -318,6 +318,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLI_SESSIONS_PATH` | CLI 会话发现的路径（`~/.claude/projects`），启用 `/sync-sessions` | （可选） |
 | `MENTION_ONLY_CHANNEL_IDS` | 仅在 @提及时响应的频道 ID（逗号分隔） | （可选） |
 | `INLINE_REPLY_CHANNEL_IDS` | 内联回复的频道 ID（逗号分隔，不创建线程） | （可选） |
+| `CHAT_ONLY_CHANNEL_IDS` | 仅显示 Claude 文本回复的频道 ID（逗号分隔，工具嵌入/thinking/Todo 隐藏） | （可选） |
 | `THREAD_INBOX_ENABLED` | 启用持久线程收件箱（通过 `claude -p` 将会话分类为 `waiting`/`done`/`ambiguous`；显示在线程面板中） | `false` |
 | `THREAD_AUTO_RENAME` | 使用 Claude AI 自动重命名新线程标题 — 通过后台 `claude -p` 调用从首条用户消息生成简短描述性标题（不影响会话启动速度） | `false` |
 

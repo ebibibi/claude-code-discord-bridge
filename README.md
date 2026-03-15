@@ -160,7 +160,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 #### 🔌 Input & Skills
 - **Attachment support** — Text files auto-appended to prompt (up to 5 files, 200 KB each / 500 KB total; oversized files are truncated with a notice rather than skipped); images sent as Discord CDN URLs via `--input-format stream-json` (up to 4 × 5 MB); long pasted messages that Discord auto-converts to file attachments (without `content_type`) are handled via extension-based detection
 - **On-demand file delivery** — Ask Claude to "send me" or "attach" a file and it writes the path to `.ccdb-attachments`; the bot reads it and delivers the file as a Discord attachment when the session completes
-- **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume
+- **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume; skills from installed plugins are auto-discovered alongside `~/.claude/skills/`
 - **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
 
 ### Concurrency & Coordination
@@ -192,6 +192,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Startup resume** — Interrupted sessions restart automatically after any bot reboot; `AutoUpgradeCog` (upgrade restarts) and `ClaudeChatCog.cog_unload()` (all other shutdowns) mark them automatically, or use `POST /api/mark-resume` manually
 - **Programmatic spawn** — `POST /api/spawn` creates a new Discord thread + Claude session from any script or Claude subprocess; returns non-blocking 201 immediately after thread creation
 - **Thread ID injection** — `DISCORD_THREAD_ID` env var is passed to every Claude subprocess, enabling sessions to spawn child sessions via `$CCDB_API_URL/api/spawn`
+- **StatusLine display** — If your Claude Code `settings.json` has a `statusLine` configured, its output is shown in Discord after each session response
 - **Worktree management** — `/worktree-list` shows all active session worktrees with clean/dirty status; `/worktree-cleanup` removes orphaned clean worktrees (supports `dry_run` preview)
 - **Runtime model switching** — `/model-show` displays the current global model and per-thread session model; `/model-set` changes the model for all new sessions without restart
 - **Runtime tool permissions** — `/tools-show` displays the current allowed tools; `/tools-set` opens a select menu to toggle tools on/off; `/tools-reset` reverts to `.env` default — all without restart
@@ -460,6 +461,28 @@ INLINE_REPLY_CHANNEL_IDS=333,444
 
 In inline-reply mode, Claude's response is sent directly as a message in the channel rather than spawning a new thread. Sessions are still tracked internally, so follow-up messages in the channel continue the same Claude session.
 
+#### Chat-Only Channels
+
+To hide technical UI (tool embeds, thinking blocks, session start/complete notices, todo lists) and show **only Claude's text responses** in specific channels — useful for public-facing channels where non-technical users are watching:
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_ids={111, 444},
+    chat_only_channel_ids={444},  # only text shown in #444; tool details hidden
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+Or via environment variable (comma-separated channel IDs):
+
+```
+CHAT_ONLY_CHANNEL_IDS=444,555
+```
+
+In chat-only mode, permission requests and `AskUserQuestion` prompts are **always shown** regardless of the setting — they require human input and must be visible.
+
 ---
 
 ## Configuration
@@ -479,6 +502,7 @@ In inline-reply mode, Claude's response is sent directly as a message in the cha
 | `COORDINATION_CHANNEL_ID` | Channel ID used as default fallback for AI Lounge channel | (optional) |
 | `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot only responds when @mentioned | (optional) |
 | `INLINE_REPLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot replies inline (no thread created) | (optional) |
+| `CHAT_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where only Claude's text responses are shown (tool embeds, thinking, todos hidden) | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
 | `CLI_SESSIONS_PATH` | Path to `~/.claude/projects` for CLI session discovery (enables `/sync-sessions`) | (optional) |
 | `CUSTOM_COGS_DIR` | Directory containing custom Cog files to load at startup (see [Custom Cogs](#custom-cogs-extend-without-forking)) | (optional) |
@@ -863,6 +887,7 @@ The project started on 2026-02-18 and continues to evolve through iterative conv
 - **WatchdogCog** — Todoist overdue task monitor (30-minute check, daily dedup, severity-based alerts)
 - **AutoUpgradeCog** — Self-updating via GitHub webhook + systemctl restart
 - **DocsSyncCog** — Auto-translate documentation on push via webhook
+- **AlertResponderCog** — Generic alert-monitoring Cog; watches a configurable source and posts severity-annotated notifications to Discord
 
 Run it with: `ccdb start --cogs-dir examples/ebibot/cogs/`
 

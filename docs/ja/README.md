@@ -161,7 +161,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 #### 🔌 入力とスキル
 - **添付ファイル対応** — テキストファイルをプロンプトに自動追加（最大 5 ファイル、1 ファイルあたり 200 KB / 合計 500 KB まで；上限を超えたファイルはスキップせずに先頭部分を切り取って通知付きで追加）；画像は Discord CDN URL として `--input-format stream-json` 経由で送信（最大 4 枚 × 5 MB）；Discord が長文貼り付けを自動的にファイル添付（`content_type` なし）に変換した場合も、拡張子ベースの検出で正しく処理
 - **オンデマンドファイル配信** — 「送って」「添付して」などと指示すると Claude が `.ccdb-attachments` にパスを書き込み、セッション完了時に Bot がファイルを Discord に添付して送信
-- **スキル実行** — `/skill` コマンド（オートコンプリート付き）、オプション引数、スレッド内リジューム
+- **スキル実行** — `/skill` コマンド（オートコンプリート付き）、オプション引数、スレッド内リジューム。インストール済みプラグインのスキルも `~/.claude/skills/` と並んで自動検出
 - **ホットリロード** — `~/.claude/skills/` に追加した新スキルを自動検出（60 秒更新、再起動不要）
 
 ### 並行処理と協調
@@ -193,6 +193,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **スタートアップリジューム** — 任意のBot 再起動後に中断セッションを自動再開。`AutoUpgradeCog`（アップグレード再起動）および `ClaudeChatCog.cog_unload()`（その他すべてのシャットダウン）が自動登録、または `POST /api/mark-resume` で手動登録
 - **プログラム的スポーン** — `POST /api/spawn` でスクリプトや Claude サブプロセスから新しい Discord スレッド + Claude セッションを作成。スレッド作成後すぐに非ブロッキング 201 を返す
 - **スレッド ID 注入** — すべての Claude サブプロセスに `DISCORD_THREAD_ID` 環境変数を渡し、セッションから `$CCDB_API_URL/api/spawn` で子セッションを起動可能
+- **StatusLine 表示** — Claude Code の `settings.json` に `statusLine` が設定されている場合、各セッション返信後に Discord に表示
 - **Worktree 管理** — `/worktree-list` でアクティブなセッション Worktree を clean/dirty ステータス付きで表示、`/worktree-cleanup` で孤立した clean な Worktree を削除（`dry_run` プレビューあり）
 - **実行時モデル切り替え** — `/model-show` で現在のグローバルモデルとスレッドごとのセッションモデルを表示、`/model-set` で再起動不要のまま全新規セッションのモデルを変更
 - **実行時ツールパーミッション** — `/tools-show` で現在の許可ツールを表示、`/tools-set` でトグルメニューからツールのオン/オフを切り替え、`/tools-reset` で `.env` デフォルト設定に戻す — すべて再起動不要
@@ -461,6 +462,28 @@ INLINE_REPLY_CHANNEL_IDS=333,444
 
 インライン返信モードでは、Claude の返信は新しいスレッドではなくチャンネル内のメッセージとして直接送信されます。セッションは内部で追跡されているため、その後のメッセージも同じ Claude セッションとして継続します。
 
+#### チャットのみチャンネル
+
+特定のチャンネルで技術的な UI（ツール埋め込み、thinking ブロック、セッション開始/完了通知、Todo リスト）を非表示にし、**Claude のテキスト返信のみ**を表示する — 非技術系ユーザーが見ている公開チャンネルに便利です:
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_ids={111, 444},
+    chat_only_channel_ids={444},  # #444 ではテキストのみ表示、ツール詳細は非表示
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+環境変数でも設定可能（カンマ区切りのチャンネル ID）:
+
+```
+CHAT_ONLY_CHANNEL_IDS=444,555
+```
+
+チャットのみモードでも、パーミッションリクエストと `AskUserQuestion` プロンプトは**常に表示**されます — 人間の入力が必要なため、必ず表示する必要があります。
+
 ---
 
 ## 設定
@@ -480,6 +503,7 @@ INLINE_REPLY_CHANNEL_IDS=333,444
 | `COORDINATION_CHANNEL_ID` | AI Lounge チャンネルのデフォルトフォールバック用チャンネル ID | （オプション） |
 | `MENTION_ONLY_CHANNEL_IDS` | @メンション時のみ応答するチャンネル ID（カンマ区切り） | （オプション） |
 | `INLINE_REPLY_CHANNEL_IDS` | インライン返信チャンネル ID（カンマ区切り、スレッドを作成しない） | （オプション） |
+| `CHAT_ONLY_CHANNEL_IDS` | Claude のテキスト返信のみ表示するチャンネル ID（カンマ区切り、ツール埋め込み・thinking・Todo 非表示） | （オプション） |
 | `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
 | `CLI_SESSIONS_PATH` | CLI セッション検出用のパス（`~/.claude/projects`）。`/sync-sessions` の有効化に必要 | （オプション） |
 | `CUSTOM_COGS_DIR` | 起動時に読み込むカスタム Cog ファイルを含むディレクトリ（[カスタム Cog](#カスタム-cogフォーク不要で機能拡張) 参照） | （オプション） |
@@ -864,6 +888,7 @@ uv run pytest tests/ -v --cov=claude_discord
 - **WatchdogCog** — Todoist 期限切れタスクモニター（30 分チェック、デイリー重複排除、重要度別アラート）
 - **AutoUpgradeCog** — GitHub webhook + systemctl restart による自己更新
 - **DocsSyncCog** — push 時の Webhook 経由でドキュメントを自動翻訳
+- **AlertResponderCog** — 汎用アラート監視 Cog。設定可能なソースを監視し、重要度付き通知を Discord に投稿
 
 実行方法: `ccdb start --cogs-dir examples/ebibot/cogs/`
 

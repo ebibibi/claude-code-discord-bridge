@@ -173,6 +173,7 @@ Si le bot redémarre en cours de session, les sessions Claude interrompues repre
 - **Reprise au démarrage** — Les sessions interrompues redémarrent automatiquement après tout redémarrage du bot ; `AutoUpgradeCog` (redémarrages par mise à jour) et `ClaudeChatCog.cog_unload()` (tous les autres arrêts) les marquent automatiquement, ou utilisez `POST /api/mark-resume` manuellement
 - **Création programmatique** — `POST /api/spawn` crée un nouveau fil Discord + session Claude depuis n'importe quel script ou sous-processus Claude ; retourne un 201 non bloquant immédiatement après la création du fil
 - **Injection d'ID de fil** — La variable d'environnement `DISCORD_THREAD_ID` est passée à chaque sous-processus Claude, permettant aux sessions de créer des sessions enfants via `$CCDB_API_URL/api/spawn`
+- **Affichage de StatusLine** — Si `settings.json` de Claude Code a `statusLine` configuré, sa sortie est affichée dans Discord après chaque réponse de session
 - **Gestion des worktrees** — `/worktree-list` affiche tous les worktrees de session actifs avec leur statut propre/sale ; `/worktree-cleanup` supprime les worktrees propres orphelins (supporte la prévisualisation avec `dry_run`)
 - **Rembobiner la conversation** — `/rewind` réinitialise l'historique des échanges tout en conservant les fichiers de travail créés par Claude ; le message de confirmation affiche le % d'utilisation du contexte au moment du rembobinage
 - **Bifurquer la conversation** — `/fork` utilise `--fork-session` pour créer un nouveau fil depuis le même état de session, vous permettant d'explorer une direction différente sans affecter le fil original
@@ -300,6 +301,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLI_SESSIONS_PATH` | Chemin vers `~/.claude/projects` pour la découverte de sessions CLI (active `/sync-sessions`) | (optionnel) |
 | `MENTION_ONLY_CHANNEL_IDS` | IDs de canal séparés par des virgules où le bot répond uniquement quand il est @mentionné | (optionnel) |
 | `INLINE_REPLY_CHANNEL_IDS` | IDs de canal séparés par des virgules où le bot répond en ligne (sans créer de fil) | (optionnel) |
+| `CHAT_ONLY_CHANNEL_IDS` | IDs de canal séparés par des virgules où seules les réponses texte de Claude sont affichées (embeds d'outils/thinking/Todo masqués) | (optionnel) |
 | `THREAD_INBOX_ENABLED` | Active la boîte de réception persistante des fils (classe les sessions en `waiting`/`done`/`ambiguous` via `claude -p` ; affiché dans le tableau de bord des fils) | `false` |
 | `THREAD_AUTO_RENAME` | Renomme automatiquement les titres des nouveaux fils avec Claude AI — génère un titre court et descriptif du premier message utilisateur via un appel `claude -p` en arrière-plan (sans délai de démarrage de session) | `false` |
 
