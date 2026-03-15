@@ -479,8 +479,9 @@ class ClaudeChatCog(commands.Cog):
         thread_name: str | None = None,
         session_id: str | None = None,
         fork: bool = False,
+        auto_start: bool = True,
     ) -> discord.Thread:
-        """Create a new thread and start a Claude Code session without a user message.
+        """Create a new thread and optionally start a Claude Code session.
 
         This is the API-initiated equivalent of ``_handle_new_conversation``.
         It bypasses the ``on_message`` bot-author guard, enabling programmatic
@@ -497,6 +498,10 @@ class ClaudeChatCog(commands.Cog):
             session_id: Optional Claude session ID to resume via ``--resume``.
                         When supplied the new Claude process continues the
                         previous conversation rather than starting fresh.
+            auto_start: Whether to immediately start a Claude Code session.
+                        When ``False``, only the thread and seed message are
+                        created — a Claude session will start when a user
+                        replies in the thread.  Defaults to ``True``.
 
         Returns:
             The newly created :class:`discord.Thread`.
@@ -509,11 +514,12 @@ class ClaudeChatCog(commands.Cog):
         )
         # Post the prompt so StatusManager has a Message to add reactions to.
         seed_message = await thread.send(prompt)
-        # Run Claude in the background so /api/spawn returns immediately.
-        # The caller gets the thread reference without waiting for Claude to finish.
-        asyncio.create_task(
-            self._run_claude(seed_message, thread, prompt, session_id=session_id, fork=fork)
-        )
+        if auto_start:
+            # Run Claude in the background so /api/spawn returns immediately.
+            # The caller gets the thread reference without waiting for Claude to finish.
+            asyncio.create_task(
+                self._run_claude(seed_message, thread, prompt, session_id=session_id, fork=fork)
+            )
         return thread
 
     async def cog_unload(self) -> None:

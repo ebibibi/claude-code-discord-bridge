@@ -466,7 +466,7 @@ class ApiServer:
     # ------------------------------------------------------------------
 
     async def spawn(self, request: web.Request) -> web.Response:
-        """POST /api/spawn — create a new Discord thread and start Claude Code.
+        """POST /api/spawn — create a new Discord thread and optionally start Claude Code.
 
         Unlike posting a message to the channel directly, this endpoint
         bypasses the ``on_message`` bot-author guard and works even when
@@ -478,6 +478,10 @@ class ApiServer:
                 ``default_channel_id`` configured at startup).
             thread_name: Custom thread title (optional; defaults to the
                 first 100 characters of *prompt*).
+            auto_start: Whether to immediately start a Claude Code session
+                (optional; defaults to ``true``).  When ``false``, only the
+                thread and seed message are created — a Claude session will
+                start when a user replies in the thread.
 
         Returns (201):
             ``{"status": "spawned", "thread_id": "...", "thread_name": "..."}``
@@ -526,9 +530,15 @@ class ApiServer:
             )
 
         thread_name: str | None = data.get("thread_name") or None
+        auto_start: bool = data.get("auto_start", True)
 
         try:
-            thread = await cog.spawn_session(raw, prompt, thread_name=thread_name)
+            thread = await cog.spawn_session(
+                raw,
+                prompt,
+                thread_name=thread_name,
+                auto_start=auto_start,
+            )
         except Exception as exc:
             logger.error("spawn_session failed: %s", exc, exc_info=True)
             return web.json_response({"error": str(exc)}, status=500)

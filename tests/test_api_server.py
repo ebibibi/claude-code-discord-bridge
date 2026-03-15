@@ -482,6 +482,25 @@ class TestSpawn:
             await client.close()
 
     @pytest.mark.asyncio
+    async def test_spawn_auto_start_defaults_to_true(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post("/api/spawn", json={"prompt": "Hello"})
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("auto_start") is True
+
+    @pytest.mark.asyncio
+    async def test_spawn_auto_start_false_passed_to_cog(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post(
+            "/api/spawn",
+            json={"prompt": "Notify only", "auto_start": False},
+        )
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("auto_start") is False
+
+    @pytest.mark.asyncio
     async def test_spawn_invalid_json_returns_400(self, spawn_client: TestClient) -> None:
         resp = await spawn_client.post(
             "/api/spawn",
