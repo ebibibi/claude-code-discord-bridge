@@ -128,6 +128,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 ### Interactive Chat
 
 #### 🔗 Session Basics
+- **Chat-only mode** — When `CHAT_ONLY_CHANNEL_IDS` includes a channel, only Claude's text responses are shown; tool embeds, thinking blocks, session start/complete embeds, and todo lists are hidden. Permission requests and `AskUserQuestion` are always shown. Ideal for public channels where non-technical users are watching.
 - **Thread = Session** — 1:1 mapping between Discord thread and Claude Code session
 - **Session persistence** — Resume conversations across messages via `--resume`
 - **Concurrent sessions** — Multiple parallel sessions with configurable limit
@@ -155,12 +156,13 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Compact detection** — Notifies in-thread when context compaction occurs (trigger type + token count before compact)
 - **Hard stall notification** — Thread message after no activity (extended thinking or context compression); resets automatically when Claude resumes. Thresholds are model-aware: 30 s for standard models, 120 s for Opus (which has longer thinking pauses)
 - **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
+- **StatusLine display** — When Claude configures a `statusLine` (via `/statusline-setup`), the current status is shown in Discord after each session as a concise, always-visible indicator
 - **Thread inbox** — When `THREAD_INBOX_ENABLED=true`, the dashboard shows a persistent 📬 inbox section: after each session ends, Claude classifies the final message (`waiting` / `done` / `ambiguous`) via a lightweight `claude -p` call; threads awaiting your reply survive bot restarts and are surfaced until you respond
 
 #### 🔌 Input & Skills
 - **Attachment support** — Text files auto-appended to prompt (up to 5 files, 200 KB each / 500 KB total; oversized files are truncated with a notice rather than skipped); images sent as Discord CDN URLs via `--input-format stream-json` (up to 4 × 5 MB); long pasted messages that Discord auto-converts to file attachments (without `content_type`) are handled via extension-based detection
 - **On-demand file delivery** — Ask Claude to "send me" or "attach" a file and it writes the path to `.ccdb-attachments`; the bot reads it and delivers the file as a Discord attachment when the session completes
-- **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume
+- **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume; skills from installed plugins are also auto-discovered
 - **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
 
 ### Concurrency & Coordination
@@ -346,6 +348,16 @@ Files prefixed with `_` are skipped. If one Cog fails to load, others still load
 
 See [`examples/ebibot/`](examples/ebibot/) for a full real-world example with reminders, Todoist watchdog, auto-upgrade, and docs sync.
 
+**Built-in examples in `examples/ebibot/cogs/`:**
+
+| Cog | Purpose |
+|-----|---------|
+| `ReminderCog` | Discord-based reminder scheduling |
+| `WatchdogCog` | Todoist / external service watchdog |
+| `AutoUpgradeCog` | Webhook-triggered package upgrade |
+| `DocsSyncCog` | Automated documentation sync on push |
+| `AlertResponderCog` | Generic alert monitoring — forwards alerts from monitoring systems to Discord and triggers a Claude Code investigation session |
+
 ---
 
 ### Minimal Bot (Install as a Package)
@@ -479,6 +491,7 @@ In inline-reply mode, Claude's response is sent directly as a message in the cha
 | `COORDINATION_CHANNEL_ID` | Channel ID used as default fallback for AI Lounge channel | (optional) |
 | `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot only responds when @mentioned | (optional) |
 | `INLINE_REPLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot replies inline (no thread created) | (optional) |
+| `CHAT_ONLY_CHANNEL_IDS` | Comma-separated channel IDs in chat-only mode — only Claude's text responses are shown; all technical embeds (tools, thinking, session info, todos) are hidden | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
 | `CLI_SESSIONS_PATH` | Path to `~/.claude/projects` for CLI session discovery (enables `/sync-sessions`) | (optional) |
 | `CUSTOM_COGS_DIR` | Directory containing custom Cog files to load at startup (see [Custom Cogs](#custom-cogs-extend-without-forking)) | (optional) |
