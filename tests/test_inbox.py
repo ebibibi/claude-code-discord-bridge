@@ -41,7 +41,6 @@ def repo(db_path):
 def _make_channel():
     channel = MagicMock(spec=discord.TextChannel)
     msg = MagicMock(spec=discord.Message)
-    msg.pin = AsyncMock()
     msg.edit = AsyncMock()
     channel.send = AsyncMock(return_value=msg)
     return channel
