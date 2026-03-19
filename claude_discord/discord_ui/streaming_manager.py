@@ -50,9 +50,12 @@ class StreamingMessageManager:
 
         # If buffer exceeds limit, finalize current message and start new one
         if len(self._buffer) > STREAM_MAX_CHARS and self._current_message:
+            # 先にオーバーフロー分を退避してからflush（切り捨て防止）
+            overflow = self._buffer[STREAM_MAX_CHARS:]
+            self._buffer = self._buffer[:STREAM_MAX_CHARS]
             await self._flush()
             self._current_message = None
-            self._buffer = self._buffer[STREAM_MAX_CHARS:]
+            self._buffer = overflow
 
         now = time.monotonic()
         if now - self._last_edit_time >= STREAM_EDIT_INTERVAL:
@@ -83,11 +86,19 @@ class StreamingMessageManager:
             return
 
         display_text = self._buffer
-        if len(display_text) > 2000:
-            display_text = display_text[:1997] + "..."
 
         try:
-            if self._current_message is None:
+            if len(display_text) > 2000:
+                # 2000文字超は切り捨てずにchunk分割して複数メッセージ送信
+                from .chunker import chunk_message
+
+                chunks = chunk_message(display_text)
+                for i, chunk_text in enumerate(chunks):
+                    if i == 0 and self._current_message is not None:
+                        await self._current_message.edit(content=chunk_text)
+                    else:
+                        self._current_message = await self._thread.send(chunk_text)
+            elif self._current_message is None:
                 self._current_message = await self._thread.send(display_text)
             else:
                 await self._current_message.edit(content=display_text)
