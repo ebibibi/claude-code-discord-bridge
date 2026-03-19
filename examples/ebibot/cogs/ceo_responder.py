@@ -39,15 +39,17 @@ logger = logging.getLogger(__name__)
 _raw_ceo_id = os.environ.get("CEO_USER_ID", "")
 CEO_USER_ID: int | None = int(_raw_ceo_id) if _raw_ceo_id else None
 
-# Default channels to monitor (strategy room + all department channels)
+# Default channels to monitor (strategy room + all department channels + CEO channels)
 _DEFAULT_CHANNELS = {
     1483328145380872294,  # #戦略会議室
-    1483460916572979233,  # #秘書室
+    1483460916572979233,  # #COO室
     1483460920024760437,  # #営業部
     1483460923162103838,  # #開発部
     1483460926643372052,  # #情報収集部
     1483460929222868994,  # #財務部
     1483460933039947936,  # #戦略推進部
+    1483686132364476448,  # #会長メモ
+    1483328670331306014,  # #AI運用ログ
 }
 
 _raw_channels = os.environ.get("CEO_RESPONDER_CHANNELS", "")
