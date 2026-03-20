@@ -244,6 +244,128 @@ class TestNotifyPoll:
         assert len(poll.answers) == 2
 
 
+class TestNotifyThread:
+    """Tests for thread_name parameter in /api/notify."""
+
+    @pytest.fixture
+    def bot_with_thread(self) -> MagicMock:
+        """Bot mock whose channel supports create_thread()."""
+        b = MagicMock()
+        channel = MagicMock()
+        channel.send = AsyncMock()
+        thread = MagicMock()
+        thread.id = 111222333
+        thread.name = "PR Review"
+        thread.send = AsyncMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+        b.get_channel.return_value = channel
+        return b
+
+    @pytest.fixture
+    async def thread_client(
+        self, repo: NotificationRepository, bot_with_thread: MagicMock
+    ) -> TestClient:
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_thread,
+            default_channel_id=12345,
+        )
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        yield client
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_notify_thread_creates_thread_and_sends_text(
+        self, thread_client: TestClient, bot_with_thread: MagicMock
+    ) -> None:
+        """When thread_name is given, creates a thread and sends message as text."""
+        channel = bot_with_thread.get_channel.return_value
+        thread = channel.create_thread.return_value
+        resp = await thread_client.post(
+            "/api/notify",
+            json={
+                "message": "PR #42 needs review",
+                "thread_name": "PR Review",
+                "format": "text",
+            },
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "sent"
+        assert data["thread_id"] == "111222333"
+        channel.create_thread.assert_called_once_with(name="PR Review")
+        thread.send.assert_called_once_with("PR #42 needs review")
+        # Channel.send should NOT be called — message goes to thread
+        channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notify_thread_with_embed(
+        self, thread_client: TestClient, bot_with_thread: MagicMock
+    ) -> None:
+        """When thread_name + embed format, embed goes to thread."""
+        channel = bot_with_thread.get_channel.return_value
+        thread = channel.create_thread.return_value
+        resp = await thread_client.post(
+            "/api/notify",
+            json={
+                "message": "Summary here",
+                "thread_name": "Summary Thread",
+                "format": "embed",
+            },
+        )
+        assert resp.status == 200
+        channel.create_thread.assert_called_once_with(name="Summary Thread")
+        call_kwargs = thread.send.call_args.kwargs
+        assert "embed" in call_kwargs
+        channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notify_thread_default_format_is_text(
+        self, thread_client: TestClient, bot_with_thread: MagicMock
+    ) -> None:
+        """When thread_name is given without format, default to text (not embed)."""
+        channel = bot_with_thread.get_channel.return_value
+        thread = channel.create_thread.return_value
+        resp = await thread_client.post(
+            "/api/notify",
+            json={
+                "message": "Auto text",
+                "thread_name": "Auto Thread",
+            },
+        )
+        assert resp.status == 200
+        thread.send.assert_called_once_with("Auto text")
+
+    @pytest.mark.asyncio
+    async def test_notify_without_thread_name_sends_to_channel(
+        self, thread_client: TestClient, bot_with_thread: MagicMock
+    ) -> None:
+        """Without thread_name, behaves as before — sends to channel."""
+        channel = bot_with_thread.get_channel.return_value
+        resp = await thread_client.post(
+            "/api/notify",
+            json={"message": "Channel message", "format": "text"},
+        )
+        assert resp.status == 200
+        channel.send.assert_called_once_with("Channel message")
+        channel.create_thread.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_notify_thread_returns_thread_id(
+        self, thread_client: TestClient, bot_with_thread: MagicMock
+    ) -> None:
+        """Response includes thread_id when a thread is created."""
+        resp = await thread_client.post(
+            "/api/notify",
+            json={"message": "test", "thread_name": "Test"},
+        )
+        data = await resp.json()
+        assert data["thread_id"] == "111222333"
+        assert data["thread_name"] == "PR Review"
+
+
 class TestSchedule:
     @pytest.mark.asyncio
     async def test_schedule_creates_notification(self, client: TestClient) -> None:
