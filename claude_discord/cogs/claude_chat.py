@@ -97,12 +97,15 @@ class ClaudeChatCog(commands.Cog):
         inline_reply_channel_ids: set[int] | None = None,
         chat_only_channel_ids: set[int] | None = None,
         auto_rename_threads: bool = False,
+        monitor_all_channels: bool = False,
     ) -> None:
         self.bot = bot
         self.repo = repo
         self.runner = runner
         self._max_concurrent = max_concurrent
         self._allowed_user_ids = allowed_user_ids
+        # When True, skip channel-ID filtering and accept all guild channels.
+        self._monitor_all_channels = monitor_all_channels
         # Set of channel IDs to listen on.  When provided, overrides bot.channel_id.
         # Falls back to {bot.channel_id} for backward compatibility.
         if channel_ids is not None:
@@ -200,8 +203,28 @@ class ClaudeChatCog(commands.Cog):
         if self._allowed_user_ids is not None and message.author.id not in self._allowed_user_ids:
             return
 
+        # Determine whether this channel/thread is a valid target.
+        # When monitor_all_channels is True, accept any guild text/forum channel.
+        is_target_channel = message.channel.id in self._channel_ids
+        is_target_thread = (
+            isinstance(message.channel, discord.Thread)
+            and message.channel.parent_id in self._channel_ids
+        )
+
+        if (
+            self._monitor_all_channels
+            and not is_target_channel
+            and not is_target_thread
+            and hasattr(message.channel, "guild")
+            and message.channel.guild is not None
+        ):
+            if isinstance(message.channel, discord.Thread):
+                is_target_thread = True
+            else:
+                is_target_channel = True
+
         # Check if message is in one of the configured channels (new conversation)
-        if message.channel.id in self._channel_ids:
+        if is_target_channel:
             # In mention-only channels, only respond when the bot is @mentioned
             if (
                 message.channel.id in self._mention_only_channel_ids
@@ -212,10 +235,7 @@ class ClaudeChatCog(commands.Cog):
             return
 
         # Check if message is in a thread under one of the configured channels
-        if (
-            isinstance(message.channel, discord.Thread)
-            and message.channel.parent_id in self._channel_ids
-        ):
+        if is_target_thread:
             await self._handle_thread_reply(message)
 
     @app_commands.command(name="help", description="Show available commands and how to use the bot")
