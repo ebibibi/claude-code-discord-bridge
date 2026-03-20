@@ -249,15 +249,22 @@ class TestNotifyThread:
 
     @pytest.fixture
     def bot_with_thread(self) -> MagicMock:
-        """Bot mock whose channel supports create_thread()."""
+        """Bot mock whose channel supports create_thread().
+
+        Simulates ThreadWithMessage (NamedTuple with .thread attribute)
+        returned by TextChannel.create_thread() in discord.py v2.
+        """
         b = MagicMock()
         channel = MagicMock()
         channel.send = AsyncMock()
-        thread = MagicMock()
+        thread = MagicMock(spec=["id", "name", "send"])
         thread.id = 111222333
         thread.name = "PR Review"
         thread.send = AsyncMock()
-        channel.create_thread = AsyncMock(return_value=thread)
+        # Wrap in ThreadWithMessage-like object
+        thread_with_msg = MagicMock(spec=["thread", "message"])
+        thread_with_msg.thread = thread
+        channel.create_thread = AsyncMock(return_value=thread_with_msg)
         b.get_channel.return_value = channel
         return b
 
@@ -282,7 +289,7 @@ class TestNotifyThread:
     ) -> None:
         """When thread_name is given, creates a thread and sends message as text."""
         channel = bot_with_thread.get_channel.return_value
-        thread = channel.create_thread.return_value
+        thread = channel.create_thread.return_value.thread
         resp = await thread_client.post(
             "/api/notify",
             json={
@@ -306,7 +313,7 @@ class TestNotifyThread:
     ) -> None:
         """When thread_name + embed format, embed goes to thread."""
         channel = bot_with_thread.get_channel.return_value
-        thread = channel.create_thread.return_value
+        thread = channel.create_thread.return_value.thread
         resp = await thread_client.post(
             "/api/notify",
             json={
@@ -327,7 +334,7 @@ class TestNotifyThread:
     ) -> None:
         """When thread_name is given without format, default to text (not embed)."""
         channel = bot_with_thread.get_channel.return_value
-        thread = channel.create_thread.return_value
+        thread = channel.create_thread.return_value.thread
         resp = await thread_client.post(
             "/api/notify",
             json={
