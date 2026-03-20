@@ -64,6 +64,54 @@ class TestTaskRepoCreate:
         assert task is not None
         assert task["working_dir"] == "/home/user/project"
 
+    async def test_create_with_anchor_time(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(
+            name="anchored",
+            prompt="prompt",
+            interval_seconds=86400,
+            channel_id=1,
+            anchor_hour=18,
+            anchor_minute=30,
+        )
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["anchor_hour"] == 18
+        assert task["anchor_minute"] == 30
+
+    async def test_create_without_anchor_has_none(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(
+            name="no-anchor",
+            prompt="prompt",
+            interval_seconds=3600,
+            channel_id=1,
+        )
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["anchor_hour"] is None
+        assert task["anchor_minute"] is None
+
+    async def test_create_with_anchor_sets_next_run_to_anchor_time(
+        self, repo: TaskRepository
+    ) -> None:
+        """When anchor is set and run_immediately=False, next_run_at should be
+        the next occurrence of anchor time."""
+        from datetime import datetime
+
+        task_id = await repo.create(
+            name="anchor-schedule",
+            prompt="prompt",
+            interval_seconds=86400,
+            channel_id=1,
+            anchor_hour=18,
+            anchor_minute=0,
+            run_immediately=False,
+        )
+        task = await repo.get(task_id)
+        assert task is not None
+        next_dt = datetime.fromtimestamp(task["next_run_at"])
+        assert next_dt.hour == 18
+        assert next_dt.minute == 0
+
     async def test_duplicate_name_raises(self, repo: TaskRepository) -> None:
         import aiosqlite
 
@@ -136,6 +184,45 @@ class TestTaskRepoUpdateNextRun:
         assert task["next_run_at"] >= before + 3600 - 1  # allow 1s skew
         assert task["last_run_at"] is not None
 
+    async def test_update_next_run_with_anchor_snaps_to_wall_clock(
+        self, repo: TaskRepository
+    ) -> None:
+        """When anchor_hour/anchor_minute are set, next_run_at should snap to
+        the next occurrence of that wall-clock time instead of now + interval."""
+        task_id = await repo.create(
+            name="anchored",
+            prompt="p",
+            interval_seconds=86400,  # daily
+            channel_id=1,
+            anchor_hour=18,
+            anchor_minute=0,
+        )
+        await repo.update_next_run(task_id, interval_seconds=86400)
+        task = await repo.get(task_id)
+        assert task is not None
+
+        from datetime import datetime
+
+        next_dt = datetime.fromtimestamp(task["next_run_at"])
+        assert next_dt.hour == 18
+        assert next_dt.minute == 0
+        assert next_dt.second == 0
+        # Must be in the future
+        assert task["next_run_at"] > time.time()
+
+    async def test_update_next_run_without_anchor_uses_relative(self, repo: TaskRepository) -> None:
+        """Without anchor, update_next_run still uses now + interval (backward compat)."""
+        before = time.time()
+        task_id = await repo.create(
+            name="no-anchor", prompt="p", interval_seconds=600, channel_id=1
+        )
+        await repo.update_next_run(task_id, interval_seconds=600)
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["next_run_at"] >= before + 600 - 1
+        assert task["anchor_hour"] is None
+        assert task["anchor_minute"] is None
+
 
 class TestTaskRepoDelete:
     async def test_delete_existing(self, repo: TaskRepository) -> None:
@@ -187,6 +274,34 @@ class TestTaskRepoUpdate:
         task = await repo.get(task_id)
         assert task is not None
         assert task["interval_seconds"] == 7200
+
+    async def test_update_anchor_time(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(
+            name="u-anchor", prompt="p", interval_seconds=86400, channel_id=1
+        )
+        result = await repo.update(task_id, anchor_hour=9, anchor_minute=30)
+        assert result is True
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["anchor_hour"] == 9
+        assert task["anchor_minute"] == 30
+
+    async def test_update_clear_anchor(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(
+            name="u-clear",
+            prompt="p",
+            interval_seconds=86400,
+            channel_id=1,
+            anchor_hour=18,
+            anchor_minute=0,
+        )
+        # Clear anchor by setting to -1 (sentinel for None)
+        result = await repo.update(task_id, anchor_hour=-1)
+        assert result is True
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["anchor_hour"] is None
+        assert task["anchor_minute"] is None
 
     async def test_update_nonexistent_returns_false(self, repo: TaskRepository) -> None:
         result = await repo.update(99999, prompt="x")

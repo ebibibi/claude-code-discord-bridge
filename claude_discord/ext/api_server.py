@@ -291,6 +291,16 @@ class ApiServer:
             )
         return None
 
+    @staticmethod
+    def _parse_anchor_time(raw: str | None) -> tuple[int | None, int | None]:
+        """Parse ``"HH:MM"`` into (hour, minute).  Returns (None, None) if absent."""
+        if not raw:
+            return None, None
+        parts = raw.split(":")
+        if len(parts) != 2:  # noqa: PLR2004
+            raise ValueError(f"anchor_time must be HH:MM, got {raw!r}")
+        return int(parts[0]), int(parts[1])
+
     async def create_task(self, request: web.Request) -> web.Response:
         """POST /api/tasks — register a scheduled Claude Code task.
 
@@ -301,6 +311,9 @@ class ApiServer:
             channel_id: Discord channel ID for thread creation.
             working_dir: (optional) Working directory for Claude.
             run_immediately: (optional, default true) Fire on next loop tick.
+            anchor_time: (optional) Wall-clock time ``"HH:MM"`` to snap to,
+                preventing time drift. When set, next_run_at is calculated as
+                the next future occurrence of that time.
         """
         if err := self._require_task_repo():
             return err
@@ -314,6 +327,11 @@ class ApiServer:
                 return web.json_response({"error": f"{field} is required"}, status=400)
 
         try:
+            anchor_hour, anchor_minute = self._parse_anchor_time(data.get("anchor_time"))
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+        try:
             task_id = await self.task_repo.create(  # type: ignore[union-attr]
                 name=str(data["name"]),
                 prompt=str(data["prompt"]),
@@ -321,6 +339,8 @@ class ApiServer:
                 channel_id=int(data["channel_id"]),
                 working_dir=data.get("working_dir"),
                 run_immediately=bool(data.get("run_immediately", True)),
+                anchor_hour=anchor_hour,
+                anchor_minute=anchor_minute,
             )
         except Exception as exc:
             # Most likely a UNIQUE constraint violation on name
@@ -352,7 +372,16 @@ class ApiServer:
         return web.json_response({"error": "Task not found"}, status=404)
 
     async def patch_task(self, request: web.Request) -> web.Response:
-        """PATCH /api/tasks/{id} — update a task (enable/disable, prompt, interval)."""
+        """PATCH /api/tasks/{id} — update a task.
+
+        Body (JSON, all optional):
+            enabled: bool
+            prompt: str
+            interval_seconds: int
+            working_dir: str
+            anchor_time: ``"HH:MM"`` to set, or ``null`` to clear
+            next_run_at: float (epoch) — manual schedule reset
+        """
         if err := self._require_task_repo():
             return err
         try:
@@ -378,9 +407,30 @@ class ApiServer:
         if "working_dir" in data:
             patch_kwargs["working_dir"] = str(data["working_dir"])
 
+        # anchor_time: "HH:MM" to set, null to clear
+        if "anchor_time" in data:
+            raw_anchor = data["anchor_time"]
+            if raw_anchor is None:
+                patch_kwargs["anchor_hour"] = -1  # sentinel: clear
+            else:
+                try:
+                    h, m = self._parse_anchor_time(raw_anchor)
+                except ValueError as exc:
+                    return web.json_response({"error": str(exc)}, status=400)
+                patch_kwargs["anchor_hour"] = h
+                patch_kwargs["anchor_minute"] = m
+
         if patch_kwargs:
             result = await self.task_repo.update(task_id, **patch_kwargs)  # type: ignore[union-attr]
             updated = updated or result
+
+        # Manual next_run_at override
+        if "next_run_at" in data:
+            await self.task_repo._db_execute(  # type: ignore[union-attr]
+                "UPDATE scheduled_tasks SET next_run_at = ? WHERE id = ?",
+                (float(data["next_run_at"]), task_id),
+            )
+            updated = True
 
         if updated:
             return web.json_response({"status": "updated"})
