@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from claude_discord.claude.runner import ClaudeRunner, _resolve_windows_cmd
+from claude_discord.claude.types import ImageData
 
 
 class TestBuildArgs:
@@ -467,47 +468,36 @@ class TestSignalKillSuppression:
 class TestImageStreamJson:
     """Tests for --input-format stream-json image attachment support.
 
-    Regression tests for the bug where --image flags were added to the CLI
-    args even though the flag does not exist in claude CLI.  Images must be
-    passed via --input-format stream-json / stdin instead.
-
-    Images are passed as HTTPS URL content blocks (``{"type": "url", "url": ...}``),
-    not base64.  Claude Code CLI silently drops base64 image blocks in stream-json
-    input mode (confirmed with CLI 2.1.59); URL type is the only format that
-    reaches the Anthropic API through the CLI's stream-json input pipeline.
-
-    See: https://github.com/ebibibi/claude-code-discord-bridge/issues/177
+    Images are downloaded by prompt_builder, base64-encoded, and passed as
+    ``ImageData`` objects.  The runner sends them as base64-type content blocks
+    via stream-json stdin.
     """
+
+    _SAMPLE_IMG = ImageData(data="aGVsbG8=", media_type="image/png")
 
     def test_no_image_flag_in_args(self) -> None:
         """_build_args() must NOT produce --image flags (flag does not exist)."""
-        runner = ClaudeRunner(image_urls=["https://cdn.discordapp.com/photo.png"])
+        runner = ClaudeRunner(images=[self._SAMPLE_IMG])
         args = runner._build_args("look at this", session_id=None)
         assert "--image" not in args
 
     def test_stream_json_input_format_added_for_images(self) -> None:
-        """_build_args() adds --input-format stream-json when image_urls is set."""
-        runner = ClaudeRunner(image_urls=["https://cdn.discordapp.com/photo.png"])
+        """_build_args() adds --input-format stream-json when images is set."""
+        runner = ClaudeRunner(images=[self._SAMPLE_IMG])
         args = runner._build_args("look at this", session_id=None)
         assert "--input-format" in args
         idx = args.index("--input-format")
         assert args[idx + 1] == "stream-json"
 
     def test_prompt_not_in_cli_args_when_images_present(self) -> None:
-        """Prompt must NOT appear as a CLI arg when using stream-json input.
-
-        In stream-json mode the prompt is part of the JSON sent to stdin.
-        Passing it as a CLI arg as well would cause a duplicate-input error.
-        """
-        runner = ClaudeRunner(image_urls=["https://cdn.discordapp.com/photo.png"])
+        """Prompt must NOT appear as a CLI arg when using stream-json input."""
+        runner = ClaudeRunner(images=[self._SAMPLE_IMG])
         args = runner._build_args("look at this", session_id=None)
-        # Double-dash separator must not be present
         assert "--" not in args
-        # Prompt must not appear as a positional arg
         assert "look at this" not in args
 
     def test_no_stream_json_input_format_without_images(self) -> None:
-        """Without image_urls, --input-format stream-json is NOT added."""
+        """Without images, --input-format stream-json is NOT added."""
         runner = ClaudeRunner()
         args = runner._build_args("hello", session_id=None)
         assert "--input-format" not in args
@@ -519,20 +509,13 @@ class TestImageStreamJson:
         assert args[-1] == "hello"
         assert args[-2] == "--"
 
-    # ── tests ─────────────────────────────────────────────────────────────────
-
     @pytest.mark.asyncio
-    async def test_send_stream_json_message_url_format(self) -> None:
-        """Images are sent as url-type blocks, NOT base64.
-
-        Claude Code CLI silently drops base64 image blocks in stream-json input
-        mode.  URL-type image blocks are the only format that reaches the
-        Anthropic API through the CLI's stream-json pipeline.
-        """
+    async def test_send_stream_json_message_base64_format(self) -> None:
+        """Images are sent as base64-type blocks with media_type."""
         import json
 
-        image_url = "https://cdn.discordapp.com/attachments/123/456/photo.png"
-        runner = ClaudeRunner(image_urls=[image_url])
+        img = ImageData(data="aW1hZ2VkYXRh", media_type="image/png")
+        runner = ClaudeRunner(images=[img])
 
         written: list[bytes] = []
 
@@ -549,18 +532,17 @@ class TestImageStreamJson:
 
         await runner._send_stream_json_message("describe this image")
 
-        assert len(written) == 1, "stdin.write should be called exactly once"
+        assert len(written) == 1
         payload = json.loads(written[0].decode())
 
         content = payload["message"]["content"]
-        assert len(content) == 2, "should have one image block + one text block"
+        assert len(content) == 2
 
         img_block = content[0]
         assert img_block["type"] == "image"
-        assert img_block["source"]["type"] == "url", (
-            "image source must be 'url' type — base64 is silently dropped by Claude Code CLI"
-        )
-        assert img_block["source"]["url"] == image_url
+        assert img_block["source"]["type"] == "base64"
+        assert img_block["source"]["media_type"] == "image/png"
+        assert img_block["source"]["data"] == "aW1hZ2VkYXRh"
 
         text_block = content[1]
         assert text_block["type"] == "text"
@@ -568,16 +550,11 @@ class TestImageStreamJson:
 
     @pytest.mark.asyncio
     async def test_send_stream_json_message_empty_prompt_omits_text_block(self) -> None:
-        """Empty prompt must NOT add a text block.
-
-        The Anthropic API rejects empty text blocks when cache_control is set:
-        "cache_control cannot be set for empty text blocks"
-        This happens when the user sends just an image with no text in Discord.
-        """
+        """Empty prompt must NOT add a text block."""
         import json
 
-        image_url = "https://cdn.discordapp.com/attachments/123/456/photo.png"
-        runner = ClaudeRunner(image_urls=[image_url])
+        img = ImageData(data="aW1hZ2VkYXRh", media_type="image/jpeg")
+        runner = ClaudeRunner(images=[img])
 
         written: list[bytes] = []
 
@@ -598,17 +575,17 @@ class TestImageStreamJson:
         payload = json.loads(written[0].decode())
         content = payload["message"]["content"]
 
-        assert len(content) == 1, "empty prompt: only the image block, no text block"
+        assert len(content) == 1
         assert content[0]["type"] == "image"
 
     @pytest.mark.asyncio
-    async def test_run_uses_pipe_stdin_and_sends_image_url_via_stdin(self) -> None:
-        """run() uses stdin=PIPE and the JSON written to stdin contains the image URL."""
+    async def test_run_uses_pipe_stdin_and_sends_base64_image(self) -> None:
+        """run() uses stdin=PIPE and sends base64 image data via stdin."""
         import asyncio as _asyncio
         import json
 
-        image_url = "https://cdn.discordapp.com/attachments/123/456/photo.png"
-        runner = ClaudeRunner(image_urls=[image_url])
+        img = ImageData(data="aW1hZ2VkYXRh", media_type="image/png")
+        runner = ClaudeRunner(images=[img])
 
         written: list[bytes] = []
 
@@ -638,30 +615,18 @@ class TestImageStreamJson:
         ):
             _ = [event async for event in runner.run("what do you see?")]
 
-        # 1. subprocess must have been started with stdin=PIPE
         call_kwargs = mock_exec.call_args[1]
-        assert call_kwargs["stdin"] == _asyncio.subprocess.PIPE, (
-            "stdin must be PIPE when images are present, not DEVNULL"
-        )
+        assert call_kwargs["stdin"] == _asyncio.subprocess.PIPE
 
-        # 2. stdin.write must have been called — image data was actually sent
-        assert len(written) == 1, "stdin.write should be called once with the user message"
+        assert len(written) == 1
 
         payload = json.loads(written[0].decode())
         content = payload["message"]["content"]
 
-        # 3. image block must be present and use url type
         image_blocks = [c for c in content if c.get("type") == "image"]
-        assert len(image_blocks) == 1, "exactly one image block expected"
-        assert image_blocks[0]["source"]["type"] == "url", (
-            "image source must be 'url' type — base64 is silently dropped by Claude Code CLI"
-        )
-        assert image_blocks[0]["source"]["url"] == image_url
-
-        # 4. text prompt must also be present
-        text_blocks = [c for c in content if c.get("type") == "text"]
-        assert len(text_blocks) == 1
-        assert text_blocks[0]["text"] == "what do you see?"
+        assert len(image_blocks) == 1
+        assert image_blocks[0]["source"]["type"] == "base64"
+        assert image_blocks[0]["source"]["media_type"] == "image/png"
 
     @pytest.mark.asyncio
     async def test_run_uses_devnull_stdin_without_images(self) -> None:
@@ -677,7 +642,7 @@ class TestImageStreamJson:
         mock_process.stdout.readline = AsyncMock(return_value=b"")
         mock_process.stderr = AsyncMock()
         mock_process.stderr.read = AsyncMock(return_value=b"")
-        mock_process.stdin = None  # DEVNULL → no stdin attribute
+        mock_process.stdin = None
         mock_process.wait = AsyncMock(return_value=0)
 
         with (
@@ -690,20 +655,18 @@ class TestImageStreamJson:
             _ = [event async for event in runner.run("hello")]
 
         call_kwargs = mock_exec.call_args[1]
-        assert call_kwargs["stdin"] == _asyncio.subprocess.DEVNULL, (
-            "text-only sessions must use DEVNULL to avoid stdin-hang"
-        )
+        assert call_kwargs["stdin"] == _asyncio.subprocess.DEVNULL
 
     @pytest.mark.asyncio
-    async def test_multiple_image_urls_all_sent(self) -> None:
-        """Multiple image URLs are all included as separate url-type image blocks."""
+    async def test_multiple_images_all_sent(self) -> None:
+        """Multiple images are all included as separate base64-type image blocks."""
         import json
 
-        urls = [
-            "https://cdn.discordapp.com/attachments/1/2/a.png",
-            "https://cdn.discordapp.com/attachments/1/2/b.jpg",
+        imgs = [
+            ImageData(data="aW1n", media_type="image/png"),
+            ImageData(data="anBn", media_type="image/jpeg"),
         ]
-        runner = ClaudeRunner(image_urls=urls)
+        runner = ClaudeRunner(images=imgs)
 
         written: list[bytes] = []
 
@@ -724,9 +687,9 @@ class TestImageStreamJson:
         content = payload["message"]["content"]
 
         image_blocks = [c for c in content if c.get("type") == "image"]
-        assert len(image_blocks) == 2, "both image URLs must appear as image blocks"
-        sent_urls = [b["source"]["url"] for b in image_blocks]
-        assert sent_urls == urls
+        assert len(image_blocks) == 2
+        assert image_blocks[0]["source"]["data"] == "aW1n"
+        assert image_blocks[1]["source"]["data"] == "anBn"
 
 
 class TestResolveWindowsCmd:

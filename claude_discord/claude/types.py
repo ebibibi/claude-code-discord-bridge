@@ -11,6 +11,18 @@ if TYPE_CHECKING:
     import discord
 
 
+@dataclass(frozen=True)
+class ImageData:
+    """Base64-encoded image data with its media type.
+
+    Used to pass downloaded Discord image attachments to the Claude Code CLI
+    via stream-json base64 image blocks.
+    """
+
+    data: str  # base64-encoded string (no data: URI prefix)
+    media_type: str  # e.g. "image/jpeg", "image/png"
+
+
 class MessageType(Enum):
     """Top-level message types in stream-json output."""
 

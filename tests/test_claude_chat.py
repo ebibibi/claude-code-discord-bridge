@@ -784,15 +784,15 @@ class TestImageOnlyMessage:
 
     @pytest.mark.asyncio
     async def test_build_prompt_and_images_returns_empty_prompt(self) -> None:
-        """Image-only message should return empty prompt + image URL list."""
+        """Image-only message should return empty prompt + ImageData list."""
         cog = _make_cog()
         msg = self._make_image_message()
 
-        prompt, image_urls = await cog._build_prompt_and_images(msg)
+        prompt, images = await cog._build_prompt_and_images(msg)
 
         assert prompt == ""
-        assert len(image_urls) == 1
-        assert "photo.png" in image_urls[0]
+        assert len(images) == 1
+        assert images[0].media_type == "image/png"
 
     @pytest.mark.asyncio
     async def test_handle_thread_reply_does_not_crash(self) -> None:
@@ -805,11 +805,10 @@ class TestImageOnlyMessage:
         await cog._handle_thread_reply(msg)
 
         cog._run_claude.assert_called_once()
-        # Verify image_urls were passed through
+        # Verify images were passed through
         call_kwargs = cog._run_claude.call_args
-        assert call_kwargs.kwargs.get("image_urls") == [
-            "https://cdn.discordapp.com/attachments/111/222/photo.png"
-        ]
+        images = call_kwargs.kwargs.get("images")
+        assert images is not None and len(images) == 1
 
     @pytest.mark.asyncio
     async def test_handle_thread_reply_skips_empty_message(self) -> None:

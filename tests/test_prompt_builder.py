@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -60,23 +61,57 @@ class TestBuildPromptAndImages:
         assert "file content here" in prompt
 
     @pytest.mark.asyncio
-    async def test_image_attachment_returns_cdn_url(self) -> None:
-        """Images are returned as Discord CDN URLs, NOT downloaded to tempfiles."""
-        cdn_url = "https://cdn.discordapp.com/attachments/111/222/image.png"
+    async def test_image_attachment_returns_base64_data(self) -> None:
+        """Images are downloaded and returned as base64-encoded ImageData."""
+        image_bytes = b"\x89PNG\r\n\x1a\nfake-png-data"
         att = _make_attachment(
             filename="image.png",
             content_type="image/png",
-            size=100,
-            url=cdn_url,
+            size=len(image_bytes),
+            content=image_bytes,
         )
         msg = _make_message(content="see image", attachments=[att])
 
-        prompt, image_urls = await build_prompt_and_images(msg)
+        prompt, images = await build_prompt_and_images(msg)
 
         assert prompt == "see image"
-        assert len(image_urls) == 1
-        assert image_urls[0] == cdn_url
-        att.read.assert_not_called()
+        assert len(images) == 1
+        assert images[0].media_type == "image/png"
+        assert images[0].data == base64.standard_b64encode(image_bytes).decode("ascii")
+        att.read.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_jpeg_image_media_type(self) -> None:
+        """JPEG images get the correct media_type."""
+        jpeg_bytes = b"\xff\xd8\xff\xe0fake-jpeg"
+        att = _make_attachment(
+            filename="photo.jpg",
+            content_type="image/jpeg",
+            size=len(jpeg_bytes),
+            content=jpeg_bytes,
+        )
+        msg = _make_message(content="", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/jpeg"
+
+    @pytest.mark.asyncio
+    async def test_webp_image_media_type(self) -> None:
+        """WebP images get the correct media_type."""
+        att = _make_attachment(
+            filename="pic.webp",
+            content_type="image/webp",
+            size=100,
+            content=b"webp-data",
+        )
+        msg = _make_message(content="", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/webp"
 
     @pytest.mark.asyncio
     async def test_binary_non_image_skipped(self) -> None:
@@ -190,6 +225,22 @@ class TestBuildPromptAndImages:
         assert "b.md" in prompt
         assert "beta" in prompt
 
+    @pytest.mark.asyncio
+    async def test_image_download_failure_skipped(self) -> None:
+        """If image download fails, it's silently skipped."""
+        att = _make_attachment(
+            filename="broken.png",
+            content_type="image/png",
+            size=100,
+        )
+        att.read = AsyncMock(side_effect=Exception("download failed"))
+        msg = _make_message(content="see this", attachments=[att])
+
+        prompt, images = await build_prompt_and_images(msg)
+
+        assert prompt == "see this"
+        assert images == []
+
 
 class TestNoContentType:
     """content_type が None のとき（Discord のロングテキスト自動変換等）の動作。"""
@@ -206,11 +257,11 @@ class TestNoContentType:
         att.content_type = None  # content_type を明示的に None に
         msg = _make_message(content="", attachments=[att])
 
-        prompt, image_urls = await build_prompt_and_images(msg)
+        prompt, images = await build_prompt_and_images(msg)
 
         assert "message.txt" in prompt
         assert "long message" in prompt
-        assert image_urls == []
+        assert images == []
 
     @pytest.mark.asyncio
     async def test_no_content_type_py_extension_treated_as_text(self) -> None:
@@ -239,27 +290,28 @@ class TestNoContentType:
         att.content_type = None
         msg = _make_message(content="what is this", attachments=[att])
 
-        prompt, image_urls = await build_prompt_and_images(msg)
+        prompt, images = await build_prompt_and_images(msg)
 
         assert "data.bin" not in prompt
-        assert image_urls == []
+        assert images == []
 
     @pytest.mark.asyncio
-    async def test_no_content_type_png_extension_not_sent_as_image(self) -> None:
-        """content_type なし＋.png 拡張子でも、CDN URL が image_urls に入るべき。"""
+    async def test_no_content_type_png_extension_downloaded_as_image(self) -> None:
+        """content_type なし＋.png 拡張子 → ダウンロードして base64 ImageData に。"""
+        image_bytes = b"\x89PNGfakedata"
         att = _make_attachment(
             filename="screenshot.png",
             content_type=None,
-            url="https://cdn.discordapp.com/attachments/1/2/screenshot.png",
-            content=b"",
+            content=image_bytes,
         )
         att.content_type = None
         msg = _make_message(content="see this", attachments=[att])
 
-        _, image_urls = await build_prompt_and_images(msg)
+        _, images = await build_prompt_and_images(msg)
 
-        assert len(image_urls) == 1
-        assert "screenshot.png" in image_urls[0]
+        assert len(images) == 1
+        assert images[0].media_type == "image/png"
+        assert images[0].data == base64.standard_b64encode(image_bytes).decode("ascii")
 
 
 class TestLargeTextAttachment:

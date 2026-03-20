@@ -10,6 +10,7 @@ import discord
 import pytest
 
 from claude_discord.claude.types import (
+    ImageData,
     MessageType,
     StreamEvent,
     ToolCategory,
@@ -1113,8 +1114,10 @@ class TestImageOnlyRunConfig:
     """Regression tests: image-only messages (empty prompt) through run_claude_with_config.
 
     The bug: RunConfig.__post_init__ rejected empty prompts unconditionally,
-    but image-only Discord messages produce prompt="" with valid image_urls.
+    but image-only Discord messages produce prompt="" with valid images.
     """
+
+    _SAMPLE_IMAGE = ImageData(data="aGVsbG8=", media_type="image/png")
 
     @pytest.fixture
     def thread(self) -> MagicMock:
@@ -1146,39 +1149,39 @@ class TestImageOnlyRunConfig:
 
     @pytest.mark.asyncio
     async def test_empty_prompt_with_images_completes(self, thread: MagicMock) -> None:
-        """run_claude_with_config with prompt='' and image_urls must complete without error."""
+        """run_claude_with_config with prompt='' and images must complete without error."""
         runner = MagicMock()
         runner.working_dir = None
-        runner.image_urls = None
+        runner.images = None
         runner.run = self._make_async_gen(self._simple_events())
 
         config = RunConfig(
             thread=thread,
             runner=runner,
             prompt="",
-            image_urls=["https://cdn.discordapp.com/attachments/111/222/photo.png"],
+            images=[self._SAMPLE_IMAGE],
         )
 
         session_id = await run_claude_with_config(config)
         assert session_id == "sess-img"
 
     @pytest.mark.asyncio
-    async def test_image_urls_injected_into_runner(self, thread: MagicMock) -> None:
-        """Image URLs from config must be set on the runner before run() is called."""
+    async def test_images_injected_into_runner(self, thread: MagicMock) -> None:
+        """Images from config must be set on the runner before run() is called."""
         runner = MagicMock()
         runner.working_dir = None
-        runner.image_urls = None
+        runner.images = None
         runner.run = self._make_async_gen(self._simple_events())
 
         config = RunConfig(
             thread=thread,
             runner=runner,
             prompt="",
-            image_urls=["https://example.com/img.png"],
+            images=[self._SAMPLE_IMAGE],
         )
 
         await run_claude_with_config(config)
-        assert runner.image_urls == ["https://example.com/img.png"]
+        assert runner.images == [self._SAMPLE_IMAGE]
 
 
 class TestCompactRerun:
@@ -1210,7 +1213,7 @@ class TestCompactRerun:
         """After compact_boundary, run_claude_with_config must call runner.run() a second time."""
         runner = MagicMock()
         runner.working_dir = None
-        runner.image_urls = None
+        runner.images = None
         runner.interrupt = AsyncMock()
 
         compact_events = [
@@ -1251,7 +1254,7 @@ class TestCompactRerun:
         """The rerun invokes runner.clone() with an append_system_prompt guardrail."""
         runner = MagicMock()
         runner.working_dir = None
-        runner.image_urls = None
+        runner.images = None
         runner.interrupt = AsyncMock()
 
         compact_events = [
@@ -1281,7 +1284,7 @@ class TestCompactRerun:
         # Clone returns a runner that delivers rerun_events.
         cloned_runner = MagicMock()
         cloned_runner.working_dir = None
-        cloned_runner.image_urls = None
+        cloned_runner.images = None
         cloned_runner.interrupt = AsyncMock()
         cloned_runner.run = mock_run  # same mock; call_count distinguishes runs
 
@@ -1304,7 +1307,7 @@ class TestCompactRerun:
         """When compact fires during a post_compact_rerun, do NOT interrupt again (no loop)."""
         runner = MagicMock()
         runner.working_dir = None
-        runner.image_urls = None
+        runner.images = None
         runner.interrupt = AsyncMock()
 
         events = [
@@ -1340,13 +1343,13 @@ class TestCompactRerun:
         """
         original_runner = MagicMock()
         original_runner.working_dir = None
-        original_runner.image_urls = None
+        original_runner.images = None
         original_runner.interrupt = AsyncMock()
         original_runner.model = "test-model"
 
         cloned_runner = MagicMock()
         cloned_runner.working_dir = None
-        cloned_runner.image_urls = None
+        cloned_runner.images = None
         cloned_runner.interrupt = AsyncMock()
         cloned_runner.model = "test-model"
 

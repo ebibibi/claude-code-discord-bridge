@@ -21,6 +21,7 @@ from discord.ext import commands
 
 from ..claude.rewind import find_session_jsonl, parse_user_turns
 from ..claude.runner import ClaudeRunner
+from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
@@ -425,7 +426,7 @@ class ClaudeChatCog(commands.Cog):
 
     async def _handle_new_conversation(self, message: discord.Message) -> None:
         """Start a Claude Code session, creating a thread unless inline-reply mode is active."""
-        prompt, image_urls = await self._build_prompt_and_images(message)
+        prompt, images = await self._build_prompt_and_images(message)
         chat_only = message.channel.id in self._chat_only_channel_ids
         if (
             isinstance(message.channel, discord.TextChannel)
@@ -437,7 +438,7 @@ class ClaudeChatCog(commands.Cog):
                 message.channel,
                 prompt,
                 session_id=None,
-                image_urls=image_urls,
+                images=images,
                 chat_only=chat_only,
             )
         else:
@@ -450,7 +451,7 @@ class ClaudeChatCog(commands.Cog):
                 thread,
                 prompt,
                 session_id=None,
-                image_urls=image_urls,
+                images=images,
                 chat_only=chat_only,
             )
 
@@ -661,10 +662,10 @@ class ClaudeChatCog(commands.Cog):
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
-        prompt, image_urls = await self._build_prompt_and_images(message)
+        prompt, images = await self._build_prompt_and_images(message)
 
         # Nothing to send — ignore silently (e.g. unsupported attachment only).
-        if not prompt and not image_urls:
+        if not prompt and not images:
             return
 
         # User replied — remove this thread from the inbox immediately so the
@@ -700,12 +701,14 @@ class ClaudeChatCog(commands.Cog):
             thread,
             prompt,
             session_id=session_id,
-            image_urls=image_urls,
+            images=images,
             working_dir_override=record.working_dir if record else None,
             chat_only=chat_only,
         )
 
-    async def _build_prompt_and_images(self, message: discord.Message) -> tuple[str, list[str]]:
+    async def _build_prompt_and_images(
+        self, message: discord.Message
+    ) -> tuple[str, list[ImageData]]:
         """Delegate to the standalone prompt_builder module."""
         return await build_prompt_and_images(message)
 
@@ -715,7 +718,7 @@ class ClaudeChatCog(commands.Cog):
         thread: discord.Thread | discord.TextChannel,
         prompt: str,
         session_id: str | None,
-        image_urls: list[str] | None = None,
+        images: list[ImageData] | None = None,
         fork: bool = False,
         working_dir_override: str | None = None,
         chat_only: bool = False,
@@ -796,7 +799,7 @@ class ClaudeChatCog(commands.Cog):
                         lounge_repo=self._lounge_repo,
                         stop_view=stop_view,
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
-                        image_urls=image_urls,
+                        images=images,
                         attach_on_request=wants_file_attachment(prompt),
                         inbox_repo=getattr(self.bot, "inbox_repo", None),
                         inbox_dashboard=dashboard,
