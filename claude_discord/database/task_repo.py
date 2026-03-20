@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -31,6 +32,12 @@ CREATE INDEX IF NOT EXISTS idx_tasks_next_run
     ON scheduled_tasks(next_run_at, enabled);
 """
 
+# Migration: add anchor columns (nullable, backward compatible)
+_MIGRATION_ANCHOR = """
+ALTER TABLE scheduled_tasks ADD COLUMN anchor_hour INTEGER;
+ALTER TABLE scheduled_tasks ADD COLUMN anchor_minute INTEGER DEFAULT 0;
+"""
+
 
 class TaskRepository:
     """Async CRUD for scheduled_tasks table."""
@@ -39,15 +46,40 @@ class TaskRepository:
         self.db_path = db_path
 
     async def init_db(self) -> None:
-        """Initialize the task schema."""
+        """Initialize the task schema and run migrations."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(TASK_SCHEMA)
+            # Migration: add anchor columns if they don't exist yet
+            cursor = await db.execute("PRAGMA table_info(scheduled_tasks)")
+            columns = {row[1] for row in await cursor.fetchall()}
+            if "anchor_hour" not in columns:
+                for stmt in _MIGRATION_ANCHOR.strip().split(";"):
+                    stmt = stmt.strip()
+                    if stmt:
+                        await db.execute(stmt)
+                logger.info("Migrated scheduled_tasks: added anchor_hour, anchor_minute")
             await db.commit()
         logger.info("Task DB initialized at %s", self.db_path)
 
     # ------------------------------------------------------------------
-    # Internal helper
+    # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _next_anchor(anchor_hour: int, anchor_minute: int, interval_seconds: int) -> float:
+        """Calculate the next future wall-clock occurrence of anchor_hour:anchor_minute.
+
+        Advances by ``interval_seconds`` from the anchor time until the result
+        is strictly in the future.  This prevents drift — the schedule always
+        snaps to the anchor regardless of how long the previous run took.
+        """
+        local_tz = datetime.now(timezone.utc).astimezone().tzinfo  # noqa: UP017
+        now = datetime.now(local_tz)
+        candidate = now.replace(hour=anchor_hour, minute=anchor_minute, second=0, microsecond=0)
+        interval = timedelta(seconds=interval_seconds)
+        while candidate <= now:
+            candidate += interval
+        return candidate.timestamp()
 
     async def _db_execute(self, sql: str, params: tuple = ()) -> None:
         """Execute a DML statement (for tests and internal use)."""
@@ -116,6 +148,8 @@ class TaskRepository:
         *,
         working_dir: str | None = None,
         run_immediately: bool = True,
+        anchor_hour: int | None = None,
+        anchor_minute: int | None = None,
     ) -> int:
         """Create a new scheduled task. Returns the created ID.
 
@@ -124,16 +158,35 @@ class TaskRepository:
                 task fires on the next master-loop tick. If False, delay by
                 interval_seconds (useful for tasks that should wait one full
                 cycle before the first run).
+            anchor_hour: Optional wall-clock hour (0-23) to snap to.
+            anchor_minute: Optional wall-clock minute (0-59) to snap to.
+                When anchor_hour is set, next_run_at is calculated as the
+                next future occurrence of that time, preventing drift.
         """
         now = time.time()
-        next_run = now if run_immediately else now + interval_seconds
+        if anchor_hour is not None and not run_immediately:
+            next_run = self._next_anchor(anchor_hour, anchor_minute or 0, interval_seconds)
+        elif run_immediately:
+            next_run = now
+        else:
+            next_run = now + interval_seconds
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """INSERT INTO scheduled_tasks
                    (name, prompt, interval_seconds, channel_id, working_dir,
-                    enabled, next_run_at, created_at)
-                   VALUES (?, ?, ?, ?, ?, 1, ?, ?)""",
-                (name, prompt, interval_seconds, channel_id, working_dir, next_run, now),
+                    enabled, next_run_at, created_at, anchor_hour, anchor_minute)
+                   VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)""",
+                (
+                    name,
+                    prompt,
+                    interval_seconds,
+                    channel_id,
+                    working_dir,
+                    next_run,
+                    now,
+                    anchor_hour,
+                    anchor_minute,
+                ),
             )
             await db.commit()
             row_id = cursor.lastrowid
@@ -144,14 +197,31 @@ class TaskRepository:
         return row_id
 
     async def update_next_run(self, task_id: int, interval_seconds: int) -> None:
-        """Advance next_run_at by interval_seconds and record last_run_at."""
+        """Advance next_run_at and record last_run_at.
+
+        When the task has anchor_hour set, snaps to the next wall-clock
+        occurrence instead of using ``now + interval_seconds``.
+        """
         now = time.time()
+        # Check if this task has an anchor
         async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT anchor_hour, anchor_minute FROM scheduled_tasks WHERE id = ?",
+                (task_id,),
+            )
+            row = await cursor.fetchone()
+            if row is not None and row["anchor_hour"] is not None:
+                next_run = self._next_anchor(
+                    row["anchor_hour"], row["anchor_minute"] or 0, interval_seconds
+                )
+            else:
+                next_run = now + interval_seconds
             await db.execute(
                 """UPDATE scheduled_tasks
                    SET next_run_at = ?, last_run_at = ?
                    WHERE id = ?""",
-                (now + interval_seconds, now, task_id),
+                (next_run, now, task_id),
             )
             await db.commit()
 
@@ -179,8 +249,13 @@ class TaskRepository:
         prompt: str | None = None,
         interval_seconds: int | None = None,
         working_dir: str | None = None,
+        anchor_hour: int | None = None,
+        anchor_minute: int | None = None,
     ) -> bool:
-        """Partially update a task. Returns True if updated."""
+        """Partially update a task. Returns True if updated.
+
+        Set ``anchor_hour=-1`` to clear the anchor (reset to relative mode).
+        """
         fields: list[str] = []
         values: list[object] = []
         if prompt is not None:
@@ -192,6 +267,18 @@ class TaskRepository:
         if working_dir is not None:
             fields.append("working_dir = ?")
             values.append(working_dir)
+        if anchor_hour is not None:
+            if anchor_hour < 0:
+                # Sentinel: clear anchor
+                fields.append("anchor_hour = ?")
+                values.append(None)
+                fields.append("anchor_minute = ?")
+                values.append(None)
+            else:
+                fields.append("anchor_hour = ?")
+                values.append(anchor_hour)
+                fields.append("anchor_minute = ?")
+                values.append(anchor_minute if anchor_minute is not None else 0)
         if not fields:
             return False
         values.append(task_id)
