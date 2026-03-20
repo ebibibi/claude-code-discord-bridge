@@ -141,7 +141,7 @@ class ApiServer:
         """Start the API server."""
         self._runner = web.AppRunner(self.app)
         await self._runner.setup()
-        site = web.TCPSite(self._runner, self.host, self.port)
+        site = web.TCPSite(self._runner, self.host, self.port, reuse_address=True)
         await site.start()
         logger.info("REST API started: http://%s:%d", self.host, self.port)
 

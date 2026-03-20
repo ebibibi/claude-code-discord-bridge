@@ -311,7 +311,10 @@ class ClaudeRunner:
         within 10 seconds.
         """
         if self._process and self._process.returncode is None:
-            self._process.send_signal(signal.SIGINT)
+            if os.name == "nt":
+                self._process.terminate()
+            else:
+                self._process.send_signal(signal.SIGINT)
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=10)
             except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10

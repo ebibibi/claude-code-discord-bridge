@@ -81,6 +81,7 @@ async def setup_bridge(
     worktree_base_dir: str | None = None,
     enable_thread_inbox: bool = False,
     auto_rename_threads: bool | None = None,
+    monitor_all_channels: bool | None = None,
 ) -> BridgeComponents:
     """Initialize and register all ccdb Cogs in one call.
 
@@ -130,6 +131,11 @@ async def setup_bridge(
                              title derived from the first user message.  Runs as a
                              background task so it never delays the session start.
                              Defaults to THREAD_AUTO_RENAME env var (off by default).
+        monitor_all_channels: When True, the bot responds to messages in ALL guild
+                              text and forum channels without requiring explicit
+                              channel IDs.  New channels are automatically monitored.
+                              Defaults to CLAUDE_MONITOR_ALL_CHANNELS env var (off
+                              by default).
 
     Returns:
         BridgeComponents with references to initialized repositories.
@@ -191,6 +197,16 @@ async def setup_bridge(
     if auto_rename_threads:
         logger.info("Thread auto-rename enabled (THREAD_AUTO_RENAME)")
 
+    # Monitor all channels — fall back to CLAUDE_MONITOR_ALL_CHANNELS env var (off by default)
+    if monitor_all_channels is None:
+        monitor_all_channels = os.getenv("CLAUDE_MONITOR_ALL_CHANNELS", "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+    if monitor_all_channels:
+        logger.info("Monitor all channels enabled (CLAUDE_MONITOR_ALL_CHANNELS)")
+
     # WorktreeManager — attach to bot so cogs can access it via bot.worktree_manager
     if worktree_base_dir is None:
         worktree_base_dir = os.getenv("WORKTREE_BASE_DIR")
@@ -236,6 +252,7 @@ async def setup_bridge(
         inline_reply_channel_ids=inline_reply_channel_ids or None,
         chat_only_channel_ids=chat_only_channel_ids or None,
         auto_rename_threads=auto_rename_threads,
+        monitor_all_channels=monitor_all_channels,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")
