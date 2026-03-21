@@ -278,7 +278,7 @@ class TestInterrupt:
 
     @pytest.mark.asyncio
     async def test_interrupt_sends_sigint(self) -> None:
-        """interrupt() sends SIGINT to the running process."""
+        """interrupt() sends SIGINT (Unix) or terminate (Windows) to the running process."""
         runner = ClaudeRunner()
         mock_process = MagicMock()
         mock_process.returncode = None
@@ -287,7 +287,10 @@ class TestInterrupt:
 
         await runner.interrupt()
 
-        mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
+        if os.name == "nt":
+            mock_process.terminate.assert_called_once()
+        else:
+            mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
 
     @pytest.mark.asyncio
     async def test_interrupt_falls_back_to_kill_on_timeout(self) -> None:
@@ -304,7 +307,10 @@ class TestInterrupt:
         ):
             await runner.interrupt()
 
-        mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
+        if os.name == "nt":
+            mock_process.terminate.assert_called_once()
+        else:
+            mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
         mock_kill.assert_called_once()
 
     @pytest.mark.asyncio
@@ -329,7 +335,10 @@ class TestInterrupt:
         ):
             await runner.interrupt()  # must not raise
 
-        mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
+        if os.name == "nt":
+            mock_process.terminate.assert_called_once()
+        else:
+            mock_process.send_signal.assert_called_once_with(signal_module.SIGINT)
         mock_kill.assert_called_once()
 
 
