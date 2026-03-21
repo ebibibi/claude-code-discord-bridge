@@ -76,6 +76,12 @@ _IMAGE_EXTENSIONS: frozenset[str] = frozenset(
         ".gif",
         ".webp",
         ".bmp",
+        ".tiff",
+        ".tif",
+        ".avif",
+        ".heic",
+        ".heif",
+        ".ico",
         ".svg",
     }
 )
@@ -99,8 +105,14 @@ _EXT_TO_MEDIA_TYPE: dict[str, str] = {
     ".jpeg": "image/jpeg",
     ".gif": "image/gif",
     ".webp": "image/webp",
-    ".bmp": "image/jpeg",  # BMP will be treated as JPEG after download
-    ".svg": "image/png",  # SVG not supported by API
+    ".bmp": "image/bmp",
+    ".tiff": "image/tiff",
+    ".tif": "image/tiff",
+    ".avif": "image/avif",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".ico": "image/x-icon",
+    ".svg": "image/svg+xml",
 }
 
 
@@ -109,11 +121,67 @@ def _detect_media_type(content_type: str, filename: str) -> str:
     # Try content_type first (e.g. "image/png; charset=utf-8" → "image/png")
     if content_type:
         mt = content_type.split(";")[0].strip().lower()
-        if mt in _SUPPORTED_MEDIA_TYPES:
+        if mt.startswith("image/"):
             return mt
     # Fallback to extension
     ext = os.path.splitext(filename.lower())[1]
     return _EXT_TO_MEDIA_TYPE.get(ext, "image/jpeg")
+
+
+def _convert_image_if_needed(raw: bytes, media_type: str) -> tuple[bytes, str]:
+    """Convert image to an API-supported format if necessary.
+
+    If the media_type is already supported by the Anthropic API, return as-is.
+    Otherwise, attempt to convert using Pillow (if available) to PNG (for
+    images with transparency) or JPEG (for opaque images).
+
+    Returns:
+        (image_bytes, media_type) — possibly converted.
+    """
+    if media_type in _SUPPORTED_MEDIA_TYPES:
+        return raw, media_type
+
+    try:
+        import io
+
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(raw))
+
+        # Choose output format: PNG for images with alpha, JPEG for opaque
+        if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+            out_format = "PNG"
+            out_media_type = "image/png"
+        else:
+            out_format = "JPEG"
+            out_media_type = "image/jpeg"
+            # Convert modes that JPEG doesn't support
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+
+        buf = io.BytesIO()
+        img.save(buf, format=out_format)
+        converted = buf.getvalue()
+        logger.info(
+            "Converted image from %s to %s (%d → %d bytes)",
+            media_type,
+            out_media_type,
+            len(raw),
+            len(converted),
+        )
+        return converted, out_media_type
+
+    except ImportError:
+        logger.warning(
+            "Pillow not installed — cannot convert %s to a supported format. "
+            "Install Pillow to enable automatic image conversion.",
+            media_type,
+        )
+        # Fall back to sending as-is with image/png — API may reject it
+        return raw, "image/png"
+    except Exception:
+        logger.warning("Failed to convert image from %s", media_type, exc_info=True)
+        return raw, "image/png"
 
 
 # Keywords that indicate the user wants a file sent/attached.
@@ -199,6 +267,7 @@ async def build_prompt_and_images(
             try:
                 raw = await attachment.read()
                 media_type = _detect_media_type(content_type, attachment.filename)
+                raw, media_type = _convert_image_if_needed(raw, media_type)
                 encoded = base64.standard_b64encode(raw).decode("ascii")
                 images.append(ImageData(data=encoded, media_type=media_type))
                 logger.debug(

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import base64
-from unittest.mock import AsyncMock, MagicMock
+import io
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
+from PIL import Image
 
 from claude_discord.cogs.prompt_builder import (
     MAX_ATTACHMENT_BYTES,
     MAX_ATTACHMENTS,
     MAX_TOTAL_BYTES,
+    _convert_image_if_needed,
     build_prompt_and_images,
 )
 
@@ -312,6 +315,159 @@ class TestNoContentType:
         assert len(images) == 1
         assert images[0].media_type == "image/png"
         assert images[0].data == base64.standard_b64encode(image_bytes).decode("ascii")
+
+
+class TestConvertImageIfNeeded:
+    """Tests for _convert_image_if_needed — automatic format conversion."""
+
+    def _make_bmp_bytes(self, mode: str = "RGB", size: tuple[int, int] = (2, 2)) -> bytes:
+        """Create a real BMP image in memory."""
+        img = Image.new(mode, size, color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="BMP")
+        return buf.getvalue()
+
+    def _make_tiff_bytes(self, mode: str = "RGB") -> bytes:
+        """Create a real TIFF image in memory."""
+        img = Image.new(mode, (2, 2), color="blue")
+        buf = io.BytesIO()
+        img.save(buf, format="TIFF")
+        return buf.getvalue()
+
+    def test_supported_format_returned_as_is(self) -> None:
+        """JPEG/PNG/GIF/WebP are returned without conversion."""
+        raw = b"fake-jpeg-data"
+        result_bytes, result_type = _convert_image_if_needed(raw, "image/jpeg")
+        assert result_bytes is raw
+        assert result_type == "image/jpeg"
+
+    def test_png_returned_as_is(self) -> None:
+        raw = b"fake-png-data"
+        result_bytes, result_type = _convert_image_if_needed(raw, "image/png")
+        assert result_bytes is raw
+        assert result_type == "image/png"
+
+    def test_bmp_converted_to_jpeg(self) -> None:
+        """BMP (opaque) should be converted to JPEG."""
+        bmp_bytes = self._make_bmp_bytes("RGB")
+        result_bytes, result_type = _convert_image_if_needed(bmp_bytes, "image/bmp")
+        assert result_type == "image/jpeg"
+        assert result_bytes != bmp_bytes
+        # Verify it's a valid JPEG
+        img = Image.open(io.BytesIO(result_bytes))
+        assert img.format == "JPEG"
+
+    def test_bmp_rgba_converted_to_png(self) -> None:
+        """BMP with alpha should be converted to PNG to preserve transparency."""
+        img = Image.new("RGBA", (2, 2), color=(255, 0, 0, 128))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")  # BMP doesn't support RGBA natively
+        rgba_bytes = buf.getvalue()
+        # Use a PNG with RGBA as input but pretend it's unsupported type
+        result_bytes, result_type = _convert_image_if_needed(rgba_bytes, "image/x-test")
+        assert result_type == "image/png"
+
+    def test_tiff_converted_to_jpeg(self) -> None:
+        """TIFF should be converted to JPEG."""
+        tiff_bytes = self._make_tiff_bytes("RGB")
+        result_bytes, result_type = _convert_image_if_needed(tiff_bytes, "image/tiff")
+        assert result_type == "image/jpeg"
+        img = Image.open(io.BytesIO(result_bytes))
+        assert img.format == "JPEG"
+
+    def test_pillow_not_installed_fallback(self) -> None:
+        """Without Pillow, returns raw bytes with image/png fallback."""
+        raw = b"some-data"
+        with patch.dict("sys.modules", {"PIL": None, "PIL.Image": None}):
+            # Force re-import failure by patching builtins
+            original_import = (
+                __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+            )
+
+            def mock_import(name, *args, **kwargs):
+                if name == "PIL" or name == "PIL.Image":
+                    raise ImportError("No module named 'PIL'")
+                return original_import(name, *args, **kwargs)
+
+            with patch("builtins.__import__", side_effect=mock_import):
+                result_bytes, result_type = _convert_image_if_needed(raw, "image/bmp")
+                assert result_bytes is raw
+                assert result_type == "image/png"
+
+    def test_corrupt_image_fallback(self) -> None:
+        """Corrupt image data falls back gracefully."""
+        raw = b"not-a-valid-image"
+        result_bytes, result_type = _convert_image_if_needed(raw, "image/bmp")
+        assert result_bytes is raw
+        assert result_type == "image/png"
+
+
+class TestBmpImageConversionIntegration:
+    """Integration test: BMP attachment → converted JPEG ImageData."""
+
+    @pytest.mark.asyncio
+    async def test_bmp_attachment_converted_to_jpeg(self) -> None:
+        """BMP image attached in Discord should be auto-converted to JPEG."""
+        img = Image.new("RGB", (4, 4), color="green")
+        buf = io.BytesIO()
+        img.save(buf, format="BMP")
+        bmp_bytes = buf.getvalue()
+
+        att = _make_attachment(
+            filename="photo.bmp",
+            content_type="image/bmp",
+            size=len(bmp_bytes),
+            content=bmp_bytes,
+        )
+        msg = _make_message(content="look at this", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/jpeg"
+        # Verify the base64 decodes to valid JPEG
+        decoded = base64.standard_b64decode(images[0].data)
+        result_img = Image.open(io.BytesIO(decoded))
+        assert result_img.format == "JPEG"
+
+    @pytest.mark.asyncio
+    async def test_tiff_attachment_converted_to_jpeg(self) -> None:
+        """TIFF image should be auto-converted to JPEG."""
+        img = Image.new("RGB", (4, 4), color="blue")
+        buf = io.BytesIO()
+        img.save(buf, format="TIFF")
+        tiff_bytes = buf.getvalue()
+
+        att = _make_attachment(
+            filename="scan.tiff",
+            content_type="image/tiff",
+            size=len(tiff_bytes),
+            content=tiff_bytes,
+        )
+        msg = _make_message(content="", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/jpeg"
+
+    @pytest.mark.asyncio
+    async def test_supported_format_not_converted(self) -> None:
+        """PNG/JPEG/GIF/WebP should pass through without conversion."""
+        png_bytes = b"\x89PNG\r\n\x1a\nfake"
+        att = _make_attachment(
+            filename="pic.png",
+            content_type="image/png",
+            size=len(png_bytes),
+            content=png_bytes,
+        )
+        msg = _make_message(content="", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/png"
+        assert images[0].data == base64.standard_b64encode(png_bytes).decode("ascii")
 
 
 class TestLargeTextAttachment:
