@@ -38,7 +38,8 @@ send_webhook() {
 
 # ── Step 1: Pull latest code (skip in local dev mode) ──
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-LOCAL_CHANGES=$(git status --porcelain 2>/dev/null)
+# Ignore uv.lock changes — uv sync regenerates it on every run.
+LOCAL_CHANGES=$(git status --porcelain 2>/dev/null | grep -v '^ M uv.lock$' | grep -v '^M  uv.lock$' || true)
 
 if [ "$CURRENT_BRANCH" != "main" ] || [ -n "$LOCAL_CHANGES" ]; then
     echo "[pre-start] Local dev mode (branch: $CURRENT_BRANCH) — skipping git pull" >&2
