@@ -195,6 +195,13 @@ async def setup_bridge(
     await bot.add_cog(repo_viewer_cog)
     logger.info("Registered RepoViewerCog")
 
+    # --- ChannelManageCog ---
+    from .cogs.channel_manage import ChannelManageCog
+
+    channel_manage_cog = ChannelManageCog(bot)
+    await bot.add_cog(channel_manage_cog)
+    logger.info("Registered ChannelManageCog")
+
     # --- SchedulerCog (optional) ---
     task_repo: TaskRepository | None = None
     if enable_scheduler:

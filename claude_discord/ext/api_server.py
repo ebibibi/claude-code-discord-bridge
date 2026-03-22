@@ -107,6 +107,14 @@ class ApiServer:
         self.app.router.add_post("/api/mark-resume", self.mark_resume)
         # Repository push notification route
         self.app.router.add_post("/api/repo/push-notify", self.push_notify)
+        # Channel management routes (requires ChannelManageCog)
+        self.app.router.add_post("/api/channels", self.create_channel)
+        self.app.router.add_get("/api/channels", self.list_channels)
+        self.app.router.add_patch("/api/channels/{id}", self.update_channel)
+        self.app.router.add_delete("/api/channels/{id}", self.delete_channel)
+        self.app.router.add_post("/api/channels/{id}/webhooks", self.create_channel_webhook)
+        self.app.router.add_get("/api/channels/{id}/webhooks", self.list_channel_webhooks)
+        self.app.router.add_get("/api/categories", self.list_categories)
 
     @web.middleware
     async def _auth_middleware(
@@ -605,6 +613,204 @@ class ApiServer:
                 await channel.send(f"**[{label}]** {message} *({timestamp})*")  # type: ignore[union-attr]
         except Exception:
             logger.warning("Failed to forward lounge message to Discord", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Channel management endpoints (/api/channels)
+    # ------------------------------------------------------------------
+
+    def _get_channel_cog(self):
+        """Lazily resolve ChannelManageCog from the bot."""
+        from ..cogs.channel_manage import ChannelManageCog
+
+        cog: ChannelManageCog | None = self.bot.cogs.get("ChannelManageCog")  # type: ignore[assignment]
+        return cog
+
+    async def create_channel(self, request: web.Request) -> web.Response:
+        """POST /api/channels — create a text channel with optional webhook.
+
+        Body (JSON):
+            name: Channel name (required).
+            category: Category name — finds existing or creates new (optional).
+            topic: Channel topic/description (optional).
+            create_webhook: If true, also create a webhook (default false).
+            webhook_name: Custom webhook name (optional).
+
+        Returns (201):
+            {"channel_id": "...", "channel_name": "...", "webhook_url": "..."}
+        """
+        cog = self._get_channel_cog()
+        if cog is None:
+            return web.json_response(
+                {"error": "ChannelManageCog not loaded"},
+                status=503,
+            )
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        name = (data.get("name") or "").strip()
+        if not name:
+            return web.json_response({"error": "name is required"}, status=400)
+
+        try:
+            result = await cog.create_channel(
+                name,
+                category=data.get("category"),
+                topic=data.get("topic"),
+                create_webhook=bool(data.get("create_webhook", False)),
+                webhook_name=data.get("webhook_name"),
+            )
+        except Exception as exc:
+            logger.error("Failed to create channel: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        return web.json_response(result, status=201)
+
+    async def list_channels(self, request: web.Request) -> web.Response:
+        """GET /api/channels — list all text channels."""
+        cog = self._get_channel_cog()
+        if cog is None:
+            return web.json_response(
+                {"error": "ChannelManageCog not loaded"},
+                status=503,
+            )
+
+        channels = await cog.list_channels()
+        return web.json_response({"channels": channels})
+
+    async def update_channel(self, request: web.Request) -> web.Response:
+        """PATCH /api/channels/{id} — update channel name/topic."""
+        cog = self._get_channel_cog()
+        if cog is None:
+            return web.json_response(
+                {"error": "ChannelManageCog not loaded"},
+                status=503,
+            )
+
+        try:
+            channel_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid channel ID"}, status=400)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        try:
+            result = await cog.update_channel(
+                channel_id,
+                name=data.get("name"),
+                topic=data.get("topic"),
+            )
+        except Exception as exc:
+            logger.error("Failed to update channel: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        return web.json_response(result)
+
+    async def delete_channel(self, request: web.Request) -> web.Response:
+        """DELETE /api/channels/{id} — delete a channel.
+
+        Query params:
+            confirm: Must be "true" to actually delete (safety guard).
+        """
+        cog = self._get_channel_cog()
+        if cog is None:
+            return web.json_response(
+                {"error": "ChannelManageCog not loaded"},
+                status=503,
+            )
+
+        try:
+            channel_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid channel ID"}, status=400)
+
+        confirm = request.rel_url.query.get("confirm", "").lower()
+        if confirm != "true":
+            return web.json_response(
+                {"error": "Add ?confirm=true to actually delete the channel"},
+                status=400,
+            )
+
+        try:
+            result = await cog.delete_channel(channel_id, reason="Deleted via REST API")
+        except Exception as exc:
+            logger.error("Failed to delete channel: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        return web.json_response(result)
+
+    async def create_channel_webhook(self, request: web.Request) -> web.Response:
+        """POST /api/channels/{id}/webhooks — create a webhook for a channel.
+
+        Body (JSON):
+            webhook_name: Custom webhook name (optional).
+        """
+        cog = self._get_channel_cog()
+        if cog is None:
+            return web.json_response(
+                {"error": "ChannelManageCog not loaded"},
+                status=503,
+            )
+
+        try:
+            channel_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid channel ID"}, status=400)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            data = {}
+
+        try:
+            result = await cog.create_webhook_for_channel(
+                channel_id,
+                webhook_name=data.get("webhook_name"),
+            )
+        except Exception as exc:
+            logger.error("Failed to create webhook: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        return web.json_response(result, status=201)
+
+    async def list_channel_webhooks(self, request: web.Request) -> web.Response:
+        """GET /api/channels/{id}/webhooks — list webhooks for a channel."""
+        cog = self._get_channel_cog()
+        if cog is None:
+            return web.json_response(
+                {"error": "ChannelManageCog not loaded"},
+                status=503,
+            )
+
+        try:
+            channel_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid channel ID"}, status=400)
+
+        try:
+            webhooks = await cog.list_webhooks(channel_id)
+        except Exception as exc:
+            logger.error("Failed to list webhooks: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        return web.json_response({"webhooks": webhooks})
+
+    async def list_categories(self, request: web.Request) -> web.Response:
+        """GET /api/categories — list all channel categories."""
+        cog = self._get_channel_cog()
+        if cog is None:
+            return web.json_response(
+                {"error": "ChannelManageCog not loaded"},
+                status=503,
+            )
+
+        categories = await cog.list_categories()
+        return web.json_response({"categories": categories})
 
     # ------------------------------------------------------------------
     # Repository push notification (/api/repo/push-notify)
