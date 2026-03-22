@@ -59,6 +59,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "context": "📌 Session",
     "usage": "📌 Session",
     "sessions": "📌 Session",
+    "resume": "📌 Session",
     "resume-info": "📌 Session",
     "sync-sessions": "📌 Session",
     "sync-settings": "📌 Session",
