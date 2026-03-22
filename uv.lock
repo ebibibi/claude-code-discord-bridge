@@ -242,7 +242,7 @@ wheels = [
 
 [[package]]
 name = "claude-code-discord-bridge"
-version = "2.1.6"
+version = "2.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -253,6 +253,9 @@ dependencies = [
 [package.optional-dependencies]
 api = [
     { name = "aiohttp" },
+]
+images = [
+    { name = "pillow" },
 ]
 
 [package.dev-dependencies]
@@ -271,9 +274,10 @@ requires-dist = [
     { name = "aiohttp", marker = "extra == 'api'", specifier = ">=3.9" },
     { name = "aiosqlite", specifier = ">=0.20,<1.0" },
     { name = "discord-py", specifier = ">=2.4,<3.0" },
+    { name = "pillow", marker = "extra == 'images'", specifier = ">=10.0" },
     { name = "python-dotenv", specifier = ">=1.0,<2.0" },
 ]
-provides-extras = ["api"]
+provides-extras = ["api", "images"]
 
 [package.metadata.requires-dev]
 dev = [

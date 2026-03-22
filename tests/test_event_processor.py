@@ -100,7 +100,10 @@ class TestOnSystem:
         assert p.session_id == "sess-abc"
 
     @pytest.mark.asyncio
-    async def test_saves_to_repo(self, thread: MagicMock, runner: MagicMock) -> None:
+    async def test_saves_to_repo_with_summary_for_new_session(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """New sessions save the prompt as summary."""
         repo = MagicMock()
         repo.save = AsyncMock()
         config = _make_config(thread, runner, repo=repo)
@@ -108,7 +111,36 @@ class TestOnSystem:
 
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
 
-        repo.save.assert_called_once_with(thread.id, "s1")
+        repo.save.assert_called_once_with(thread.id, "s1", summary="test prompt")
+
+    @pytest.mark.asyncio
+    async def test_saves_to_repo_without_summary_for_resumed_session(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Resumed sessions do not overwrite the existing summary."""
+        repo = MagicMock()
+        repo.save = AsyncMock()
+        config = _make_config(thread, runner, repo=repo, session_id="existing-sess")
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="existing-sess"))
+
+        repo.save.assert_called_once_with(thread.id, "existing-sess")
+
+    @pytest.mark.asyncio
+    async def test_summary_truncated_to_100_chars(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Summary is truncated to 100 characters."""
+        repo = MagicMock()
+        repo.save = AsyncMock()
+        long_prompt = "x" * 200
+        config = RunConfig(thread=thread, runner=runner, prompt=long_prompt, repo=repo)
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
+
+        repo.save.assert_called_once_with(thread.id, "s1", summary="x" * 100)
 
     @pytest.mark.asyncio
     async def test_sends_start_embed_for_new_session(
