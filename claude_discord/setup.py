@@ -188,6 +188,13 @@ async def setup_bridge(
         await bot.add_cog(skill_cog)
         logger.info("Registered SkillCommandCog")
 
+    # --- RepoViewerCog ---
+    from .cogs.repo_viewer import RepoViewerCog
+
+    repo_viewer_cog = RepoViewerCog(bot)
+    await bot.add_cog(repo_viewer_cog)
+    logger.info("Registered RepoViewerCog")
+
     # --- SchedulerCog (optional) ---
     task_repo: TaskRepository | None = None
     if enable_scheduler:

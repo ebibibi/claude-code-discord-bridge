@@ -105,6 +105,8 @@ class ApiServer:
         self.app.router.add_post("/api/spawn", self.spawn)
         # Startup resume routes
         self.app.router.add_post("/api/mark-resume", self.mark_resume)
+        # Repository push notification route
+        self.app.router.add_post("/api/repo/push-notify", self.push_notify)
 
     @web.middleware
     async def _auth_middleware(
@@ -603,6 +605,144 @@ class ApiServer:
                 await channel.send(f"**[{label}]** {message} *({timestamp})*")  # type: ignore[union-attr]
         except Exception:
             logger.warning("Failed to forward lounge message to Discord", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Repository push notification (/api/repo/push-notify)
+    # ------------------------------------------------------------------
+
+    async def push_notify(self, request: web.Request) -> web.Response:
+        """POST /api/repo/push-notify — send a rich commit notification.
+
+        Called by a git post-push hook to notify Discord about new commits.
+
+        Body (JSON):
+            repo_name: Repository name (e.g. "ec-automation-system").
+            branch: Branch that was pushed (e.g. "main").
+            commits: List of commit objects, each with:
+                - sha: Full commit hash.
+                - message: Commit message (subject line).
+                - author: Author name.
+                - files: List of {"status": "M/A/D", "path": "file/path"}.
+                - insertions: Number of lines added (optional).
+                - deletions: Number of lines deleted (optional).
+            github_url: Base GitHub URL (optional).
+            channel_id: Target Discord channel (optional; uses default).
+        """
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        repo_name = data.get("repo_name", "unknown")
+        branch = data.get("branch", "main")
+        commits = data.get("commits", [])
+        github_url = data.get("github_url", "")
+
+        if not commits:
+            return web.json_response({"error": "No commits provided"}, status=400)
+
+        channel_id = data.get("channel_id") or self.default_channel_id
+        if not channel_id:
+            return web.json_response({"error": "No channel specified"}, status=400)
+
+        raw_channel = self.bot.get_channel(channel_id)
+        if not raw_channel:
+            try:
+                raw_channel = await self.bot.fetch_channel(channel_id)
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        if not hasattr(raw_channel, "send"):
+            return web.json_response({"error": "Channel is not messageable"}, status=400)
+
+        embed = self._build_push_embed(repo_name, branch, commits, github_url)
+        await raw_channel.send(embed=embed)  # type: ignore[union-attr]
+
+        return web.json_response({"status": "sent", "commit_count": len(commits)})
+
+    @staticmethod
+    def _build_push_embed(
+        repo_name: str,
+        branch: str,
+        commits: list[dict],
+        github_url: str,
+    ) -> discord.Embed:
+        """Build a rich embed for push notification."""
+        import discord as _discord
+
+        # Summary
+        total_commits = len(commits)
+        label = "push" if total_commits == 1 else f"{total_commits} commits"
+        title = f"\U0001f514 {repo_name} \u2014 {label} ({branch})"
+
+        lines: list[str] = []
+        total_insertions = 0
+        total_deletions = 0
+        all_files: list[str] = []
+
+        for commit in commits:
+            sha_short = commit.get("sha", "")[:7]
+            msg = commit.get("message", "(no message)")
+            author = commit.get("author", "")
+            insertions = commit.get("insertions", 0)
+            deletions = commit.get("deletions", 0)
+            total_insertions += insertions
+            total_deletions += deletions
+
+            commit_line = f"**{msg}**"
+            if github_url and sha_short:
+                commit_line = f"[`{sha_short}`]({github_url}/commit/{commit.get('sha', '')}) {msg}"
+            else:
+                commit_line = f"`{sha_short}` {msg}"
+            lines.append(f"{commit_line}\nby {author}")
+
+            # Collect files
+            for f in commit.get("files", []):
+                status = f.get("status", "M")
+                path = f.get("path", "")
+                icon = {"M": "\u270f\ufe0f", "A": "\U0001f195", "D": "\U0001f5d1\ufe0f"}.get(
+                    status, "\U0001f4c4"
+                )
+                entry = f"{icon} `{path}`"
+                if entry not in all_files:
+                    all_files.append(entry)
+
+        # Build description
+        desc_parts = lines[:5]
+        if len(lines) > 5:
+            desc_parts.append(f"... +{len(lines) - 5} more commits")
+
+        description = "\n\n".join(desc_parts)
+
+        # Stats line
+        stats = f"\n\n**\u5909\u66f4:** {len(all_files)}\u30d5\u30a1\u30a4\u30eb"
+        if total_insertions or total_deletions:
+            stats += f"\uff08+{total_insertions} / -{total_deletions}\u884c\uff09"
+
+        description += stats
+
+        # File list
+        if all_files:
+            file_display = "\n".join(all_files[:10])
+            if len(all_files) > 10:
+                file_display += f"\n... +{len(all_files) - 10}\u30d5\u30a1\u30a4\u30eb"
+            description += f"\n\n{file_display}"
+
+        # Truncate to Discord limit
+        if len(description) > 4096:
+            description = description[:4090] + "\n..."
+
+        embed = _discord.Embed(
+            title=title[:256],
+            description=description,
+            color=0x2ECC71,
+            timestamp=datetime.now(),
+        )
+
+        if github_url:
+            embed.set_footer(text=f"GitHub: {github_url}")
+
+        return embed
 
     @staticmethod
     def _build_embed(
