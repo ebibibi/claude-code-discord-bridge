@@ -126,9 +126,15 @@ async def main() -> None:
     except Exception:
         logger.warning("API server setup failed — continuing without it", exc_info=True)
 
+    # ChannelManageCog — /channel-create, /channel-list, etc.
+    from .cogs.channel_manage import ChannelManageCog
+
+    channel_manage_cog = ChannelManageCog(bot)
+
     async with bot:
         await bot.add_cog(cog)
         await bot.add_cog(repo_viewer_cog)
+        await bot.add_cog(channel_manage_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)
