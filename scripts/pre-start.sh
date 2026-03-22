@@ -44,6 +44,8 @@ LOCAL_CHANGES=$(git status --porcelain 2>/dev/null | grep -v '^ M uv.lock$' | gr
 if [ "$CURRENT_BRANCH" != "main" ] || [ -n "$LOCAL_CHANGES" ]; then
     echo "[pre-start] Local dev mode (branch: $CURRENT_BRANCH) — skipping git pull" >&2
 else
+    # Discard uv.lock changes before pull — uv sync regenerates it afterwards.
+    git checkout -- uv.lock 2>/dev/null || true
     echo "[pre-start] Pulling latest code..." >&2
     set +e
     git pull --ff-only origin main 2>&1
