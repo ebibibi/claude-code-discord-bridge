@@ -48,6 +48,7 @@ def load_config() -> dict[str, str]:
         "timeout": os.getenv("SESSION_TIMEOUT_SECONDS", "300"),
         "owner_id": os.getenv("DISCORD_OWNER_ID", ""),
         "coordination_channel_id": os.getenv("COORDINATION_CHANNEL_ID", ""),
+        "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
     }
 
 
@@ -72,6 +73,7 @@ async def main() -> None:
         permission_mode=config["claude_permission_mode"],
         working_dir=config["claude_working_dir"] or None,
         timeout_seconds=int(config["timeout"]),
+        append_system_prompt=config["append_system_prompt"] or None,
     )
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None
@@ -97,13 +99,48 @@ async def main() -> None:
         lounge_repo=lounge_repo,
     )
 
+    # RepoViewerCog — /recent slash command
+    from .cogs.repo_viewer import RepoViewerCog
+
+    repo_viewer_cog = RepoViewerCog(bot)
+
+    # API server (optional — enables push notifications, lounge, etc.)
+    api_server = None
+    api_port_str = os.getenv("API_PORT", "8080")
+    try:
+        from .database.notification_repo import NotificationRepository
+        from .ext.api_server import ApiServer
+
+        notif_db_path = str(data_dir / "notifications.db")
+        notif_repo = NotificationRepository(notif_db_path)
+        await notif_repo.init_db()
+        api_server = ApiServer(
+            repo=notif_repo,
+            bot=bot,
+            default_channel_id=int(config["channel_id"]),
+            port=int(api_port_str),
+            lounge_repo=lounge_repo,
+            session_repo=repo,
+        )
+        runner.api_port = int(api_port_str)
+    except Exception:
+        logger.warning("API server setup failed — continuing without it", exc_info=True)
+
     async with bot:
         await bot.add_cog(cog)
+        await bot.add_cog(repo_viewer_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)
         if deleted:
             logger.info("Cleaned up %d old sessions", deleted)
+
+        # Start API server if configured
+        if api_server is not None:
+            try:
+                await api_server.start()
+            except Exception:
+                logger.warning("API server start failed", exc_info=True)
 
         # Handle signals (add_signal_handler is not supported on Windows)
         if sys.platform != "win32":
@@ -111,7 +148,11 @@ async def main() -> None:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 loop.add_signal_handler(sig, lambda: asyncio.create_task(bot.close()))
 
-        await bot.start(config["token"])
+        try:
+            await bot.start(config["token"])
+        finally:
+            if api_server is not None:
+                await api_server.stop()
 
 
 if __name__ == "__main__":
