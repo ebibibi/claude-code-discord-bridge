@@ -167,9 +167,11 @@ Si el bot se reinicia a mitad de sesión, las sesiones de Claude interrumpidas s
 - **Aprobación de reinicio** — Compuerta opcional para confirmar actualizaciones antes de aplicarlas
 
 ### Gestión de Sesiones
-- **Sincronización de sesiones** — Importa sesiones CLI como hilos de Discord (`/sync-sessions`)
+- **Sincronización de sesiones** — Importa sesiones CLI como hilos de Discord (`/sync-sessions`); `/sync-settings` para ver o cambiar preferencias de sincronización (estilo de hilo, ventana de tiempo, resultados mínimos)
 - **Lista de sesiones** — `/sessions` con filtrado por origen (Discord / CLI / todas) y ventana de tiempo
-- **Información de reanudación** — `/resume-info` muestra el comando CLI para continuar la sesión actual en un terminal
+- **Reanudación de sesión** — `/resume` muestra un menú de selección con sesiones recientes (hasta 25) y reanuda la seleccionada en un nuevo hilo; funciona desde cualquier canal o hilo — siempre crea un nuevo hilo en el canal principal configurado
+- **Información de reanudación** — `/resume-info` muestra el comando CLI para continuar la sesión actual en un terminal (solo en hilos)
+- **Limpiar sesión** — `/clear` reinicia la sesión de Claude Code para el hilo actual, empezando de cero sin crear un nuevo hilo
 - **Reanudación al inicio** — Las sesiones interrumpidas se reinician automáticamente tras cualquier reinicio del bot; `AutoUpgradeCog` (reinicios por actualización) y `ClaudeChatCog.cog_unload()` (todos los demás apagados) las marcan automáticamente, o usa `POST /api/mark-resume` manualmente
 - **Creación programática** — `POST /api/spawn` crea un nuevo hilo de Discord + sesión de Claude desde cualquier script o subproceso de Claude; devuelve un 201 no bloqueante inmediatamente tras la creación del hilo
 - **Inyección de ID de hilo** — La variable de entorno `DISCORD_THREAD_ID` se pasa a cada subproceso de Claude, permitiendo que las sesiones creen sesiones hijas via `$CCDB_API_URL/api/spawn`
@@ -549,7 +551,7 @@ claude_discord/
   cogs/
     claude_chat.py         # Chat interactivo (creación de hilos, manejo de mensajes)
     skill_command.py       # Comando slash /skill con autocompletado
-    session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_manage.py      # /sessions, /sync-sessions, /resume, /resume-info, /sync-settings
     session_sync.py        # Lógica de creación de hilos y publicación de mensajes para sync-sessions
     prompt_builder.py      # build_prompt_and_images() — función pura, sin estado Cog/Bot
     scheduler.py           # Ejecutor de tareas periódicas de Claude Code

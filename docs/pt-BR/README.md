@@ -167,9 +167,11 @@ Se o bot reiniciar no meio de uma sessão, as sessões do Claude interrompidas s
 - **Aprovação de reinício** — Portão opcional para confirmar atualizações antes de aplicá-las
 
 ### Gerenciamento de Sessões
-- **Sincronização de sessões** — Importa sessões CLI como threads do Discord (`/sync-sessions`)
+- **Sincronização de sessões** — Importa sessões CLI como threads do Discord (`/sync-sessions`); `/sync-settings` para visualizar ou alterar preferências de sincronização (estilo de thread, janela de tempo, resultados mínimos)
 - **Lista de sessões** — `/sessions` com filtragem por origem (Discord / CLI / todas) e janela de tempo
-- **Informações de retomada** — `/resume-info` mostra o comando CLI para continuar a sessão atual em um terminal
+- **Retomada de sessão** — `/resume` mostra um menu de seleção com sessões recentes (até 25) e retoma a selecionada em uma nova thread; funciona de qualquer canal ou thread — sempre cria uma nova thread no canal principal configurado
+- **Informações de retomada** — `/resume-info` mostra o comando CLI para continuar a sessão atual em um terminal (apenas em threads)
+- **Limpar sessão** — `/clear` redefine a sessão do Claude Code para a thread atual, começando do zero sem criar uma nova thread
 - **Retomada ao iniciar** — Sessões interrompidas reiniciam automaticamente após qualquer reinício do bot; `AutoUpgradeCog` (reinícios por atualização) e `ClaudeChatCog.cog_unload()` (todos os outros encerramentos) as marcam automaticamente, ou use `POST /api/mark-resume` manualmente
 - **Criação programática** — `POST /api/spawn` cria uma nova thread do Discord + sessão do Claude de qualquer script ou subprocesso do Claude; retorna um 201 não bloqueante imediatamente após a criação da thread
 - **Injeção de ID da thread** — A variável de ambiente `DISCORD_THREAD_ID` é passada para cada subprocesso do Claude, permitindo que sessões criem sessões filhas via `$CCDB_API_URL/api/spawn`
@@ -549,7 +551,7 @@ claude_discord/
   cogs/
     claude_chat.py         # Chat interativo (criação de threads, manipulação de mensagens)
     skill_command.py       # Comando slash /skill com autocomplete
-    session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_manage.py      # /sessions, /sync-sessions, /resume, /resume-info, /sync-settings
     session_sync.py        # Lógica de criação de threads e publicação para sync-sessions
     prompt_builder.py      # build_prompt_and_images() — função pura, sem estado Cog/Bot
     scheduler.py           # Executor de tarefas periódicas do Claude Code

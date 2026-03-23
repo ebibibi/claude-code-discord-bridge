@@ -167,9 +167,11 @@ Si le bot redémarre en cours de session, les sessions Claude interrompues repre
 - **Approbation de redémarrage** — Portail optionnel pour confirmer les mises à jour avant de les appliquer
 
 ### Gestion des Sessions
-- **Synchronisation de sessions** — Importe les sessions CLI comme fils Discord (`/sync-sessions`)
+- **Synchronisation de sessions** — Importe les sessions CLI comme fils Discord (`/sync-sessions`) ; `/sync-settings` pour afficher ou modifier les préférences de synchronisation (style de fil, fenêtre temporelle, résultats minimum)
 - **Liste des sessions** — `/sessions` avec filtrage par origine (Discord / CLI / toutes) et fenêtre temporelle
-- **Informations de reprise** — `/resume-info` affiche la commande CLI pour continuer la session actuelle dans un terminal
+- **Reprise de session** — `/resume` affiche un menu de sélection des sessions récentes (jusqu'à 25) et reprend celle sélectionnée dans un nouveau fil ; fonctionne depuis n'importe quel canal ou fil — crée toujours un nouveau fil dans le canal principal configuré
+- **Informations de reprise** — `/resume-info` affiche la commande CLI pour continuer la session actuelle dans un terminal (fils uniquement)
+- **Effacer la session** — `/clear` réinitialise la session Claude Code pour le fil actuel, repartant de zéro sans créer un nouveau fil
 - **Reprise au démarrage** — Les sessions interrompues redémarrent automatiquement après tout redémarrage du bot ; `AutoUpgradeCog` (redémarrages par mise à jour) et `ClaudeChatCog.cog_unload()` (tous les autres arrêts) les marquent automatiquement, ou utilisez `POST /api/mark-resume` manuellement
 - **Création programmatique** — `POST /api/spawn` crée un nouveau fil Discord + session Claude depuis n'importe quel script ou sous-processus Claude ; retourne un 201 non bloquant immédiatement après la création du fil
 - **Injection d'ID de fil** — La variable d'environnement `DISCORD_THREAD_ID` est passée à chaque sous-processus Claude, permettant aux sessions de créer des sessions enfants via `$CCDB_API_URL/api/spawn`
@@ -549,7 +551,7 @@ claude_discord/
   cogs/
     claude_chat.py         # Chat interactif (création de fils, gestion des messages)
     skill_command.py       # Commande slash /skill avec autocomplétion
-    session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_manage.py      # /sessions, /sync-sessions, /resume, /resume-info, /sync-settings
     session_sync.py        # Logique de création de fils et de publication pour sync-sessions
     prompt_builder.py      # build_prompt_and_images() — fonction pure, sans état Cog/Bot
     scheduler.py           # Exécuteur de tâches Claude Code périodiques
