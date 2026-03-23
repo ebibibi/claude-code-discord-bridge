@@ -104,6 +104,30 @@ async def main() -> None:
 
     repo_viewer_cog = RepoViewerCog(bot)
 
+    # SkillCommandCog — /skill slash command (skills from ~/.claude/skills/)
+    from .cogs.skill_command import SkillCommandCog
+    from .database.settings_repo import SettingsRepository
+    from .cogs.session_manage import SessionManageCog
+
+    channel_id_int = int(config["channel_id"])
+    allowed_user_ids = {int(config["owner_id"])} if config["owner_id"] else None
+
+    skill_cog = SkillCommandCog(
+        bot,
+        repo=repo,
+        runner=runner,
+        claude_channel_id=channel_id_int,
+        allowed_user_ids=allowed_user_ids,
+    )
+
+    settings_repo = SettingsRepository(db_path)
+    session_manage_cog = SessionManageCog(
+        bot,
+        repo=repo,
+        runner=runner,
+        settings_repo=settings_repo,
+    )
+
     # API server (optional — enables push notifications, lounge, etc.)
     api_server = None
     api_port_str = os.getenv("API_PORT", "8080")
@@ -131,10 +155,18 @@ async def main() -> None:
 
     channel_manage_cog = ChannelManageCog(bot)
 
+    # ShellExecCog — /exec (owner-only shell command execution)
+    from .cogs.shell_exec import ShellExecCog
+
+    shell_exec_cog = ShellExecCog(bot)
+
     async with bot:
         await bot.add_cog(cog)
         await bot.add_cog(repo_viewer_cog)
         await bot.add_cog(channel_manage_cog)
+        await bot.add_cog(skill_cog)
+        await bot.add_cog(session_manage_cog)
+        await bot.add_cog(shell_exec_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)

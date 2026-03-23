@@ -60,6 +60,11 @@ async def _build_system_context(config: RunConfig) -> str | None:
     """
     parts: list[str] = []
 
+    # Layer 0: Base system prompt from runner config (e.g. APPEND_SYSTEM_PROMPT env var).
+    base_prompt = getattr(config.runner, "append_system_prompt", None)
+    if isinstance(base_prompt, str) and base_prompt:
+        parts.append(base_prompt)
+
     # Layer 3: AI Lounge context (recent messages + invitation).
     if config.lounge_repo is not None:
         try:
