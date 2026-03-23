@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import tempfile
 from typing import TYPE_CHECKING
 
 import discord
@@ -736,8 +738,17 @@ class ClaudeChatCog(commands.Cog):
     async def _build_prompt_and_images(
         self, message: discord.Message
     ) -> tuple[str, list[ImageData]]:
-        """Delegate to the standalone prompt_builder module."""
-        return await build_prompt_and_images(message)
+        """Delegate to the standalone prompt_builder module.
+
+        When the message has attachments, creates a temporary directory so all
+        files (including PDF, Excel, etc.) are saved to disk and their paths
+        are listed in a header prepended to the prompt.
+        """
+        save_dir: str | None = None
+        if message.attachments:
+            save_dir = os.path.join(tempfile.gettempdir(), "ccdb-uploads", str(message.id))
+            os.makedirs(save_dir, exist_ok=True)
+        return await build_prompt_and_images(message, save_dir=save_dir)
 
     async def _run_claude(
         self,

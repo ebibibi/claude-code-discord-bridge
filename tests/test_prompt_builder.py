@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import io
+import os
+import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -510,3 +512,179 @@ class TestLargeTextAttachment:
         assert "START" in prompt
         # 末尾の END は切り詰められて含まれない
         assert "END" not in prompt
+
+
+class TestSaveAttachmentsToDisk:
+    """save_dir が指定されたとき、全添付ファイルがディスクに保存される。"""
+
+    @pytest.mark.asyncio
+    async def test_text_attachment_saved_to_disk(self) -> None:
+        """テキスト添付はディスクに保存され、パスがプロンプトヘッダーに含まれる。"""
+        att = _make_attachment(filename="notes.txt", content=b"file content here")
+        msg = _make_message(content="check this", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            # ファイルがディスクに保存されている
+            saved_path = os.path.join(save_dir, "notes.txt")
+            assert os.path.exists(saved_path)
+            with open(saved_path, "rb") as f:
+                assert f.read() == b"file content here"
+
+            # プロンプトにヘッダーが含まれる
+            assert "notes.txt" in prompt
+            assert saved_path in prompt
+
+    @pytest.mark.asyncio
+    async def test_image_saved_to_disk(self) -> None:
+        """画像添付もディスクに保存される。"""
+        image_bytes = b"\x89PNG\r\n\x1a\nfake-png-data"
+        att = _make_attachment(
+            filename="screenshot.png",
+            content_type="image/png",
+            size=len(image_bytes),
+            content=image_bytes,
+        )
+        msg = _make_message(content="see image", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, images = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            # ディスクに保存されている
+            saved_path = os.path.join(save_dir, "screenshot.png")
+            assert os.path.exists(saved_path)
+
+            # base64エンコードも返される（既存動作を維持）
+            assert len(images) == 1
+
+            # ヘッダーにパスが含まれる
+            assert saved_path in prompt
+
+    @pytest.mark.asyncio
+    async def test_pdf_saved_to_disk(self) -> None:
+        """PDFなど非テキスト・非画像ファイルもディスクに保存される。"""
+        pdf_content = b"%PDF-1.4 fake pdf content"
+        att = _make_attachment(
+            filename="report.pdf",
+            content_type="application/pdf",
+            size=len(pdf_content),
+            content=pdf_content,
+        )
+        msg = _make_message(content="see report", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            # ディスクに保存されている
+            saved_path = os.path.join(save_dir, "report.pdf")
+            assert os.path.exists(saved_path)
+            with open(saved_path, "rb") as f:
+                assert f.read() == pdf_content
+
+            # ヘッダーにパスが含まれる
+            assert saved_path in prompt
+            assert "report.pdf" in prompt
+
+    @pytest.mark.asyncio
+    async def test_excel_saved_to_disk(self) -> None:
+        """Excelファイルもディスクに保存される。"""
+        xlsx_content = b"PK\x03\x04fake xlsx"
+        att = _make_attachment(
+            filename="data.xlsx",
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            size=len(xlsx_content),
+            content=xlsx_content,
+        )
+        msg = _make_message(content="see data", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            saved_path = os.path.join(save_dir, "data.xlsx")
+            assert os.path.exists(saved_path)
+            assert saved_path in prompt
+
+    @pytest.mark.asyncio
+    async def test_zip_saved_to_disk(self) -> None:
+        """ZIPファイルもディスクに保存される（以前はサイレントスキップだった）。"""
+        zip_content = b"PK\x03\x04fake zip"
+        att = _make_attachment(
+            filename="archive.zip",
+            content_type="application/zip",
+            size=len(zip_content),
+            content=zip_content,
+        )
+        msg = _make_message(content="see zip", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            saved_path = os.path.join(save_dir, "archive.zip")
+            assert os.path.exists(saved_path)
+            assert saved_path in prompt
+
+    @pytest.mark.asyncio
+    async def test_header_lists_all_files(self) -> None:
+        """複数の添付ファイルのヘッダーがまとめて表示される。"""
+        attachments = [
+            _make_attachment(filename="a.txt", content=b"alpha"),
+            _make_attachment(
+                filename="b.pdf",
+                content_type="application/pdf",
+                content=b"%PDF",
+            ),
+        ]
+        msg = _make_message(content="two files", attachments=attachments)
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            assert "a.txt" in prompt
+            assert "b.pdf" in prompt
+            # ヘッダーセクションが存在する
+            assert "Attached" in prompt or "添付" in prompt
+
+    @pytest.mark.asyncio
+    async def test_no_save_dir_keeps_old_behavior(self) -> None:
+        """save_dir=None（デフォルト）のとき、既存の動作が維持される。"""
+        att = _make_attachment(
+            filename="archive.zip",
+            content_type="application/zip",
+            content=b"PK...",
+        )
+        msg = _make_message(content="see zip", attachments=[att])
+
+        # save_dir なし → 従来通りzipはスキップ
+        prompt, _ = await build_prompt_and_images(msg)
+        assert prompt == "see zip"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_filenames_handled(self) -> None:
+        """同名ファイルが複数あっても衝突しない。"""
+        attachments = [
+            _make_attachment(filename="file.txt", content=b"first"),
+            _make_attachment(filename="file.txt", content=b"second"),
+        ]
+        msg = _make_message(content="dupes", attachments=attachments)
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            # 両方のファイルが存在する（リネームされている）
+            files = os.listdir(save_dir)
+            assert len(files) == 2
+
+    @pytest.mark.asyncio
+    async def test_header_appears_before_user_message(self) -> None:
+        """ヘッダーはユーザーメッセージの前に表示される。"""
+        att = _make_attachment(filename="data.csv", content=b"a,b,c")
+        msg = _make_message(content="analyze this", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            header_pos = prompt.find("data.csv")
+            message_pos = prompt.find("analyze this")
+            # ヘッダーがユーザーメッセージより先に出現する
+            assert header_pos < message_pos

@@ -830,13 +830,14 @@ class TestImageOnlyMessage:
 
     @pytest.mark.asyncio
     async def test_build_prompt_and_images_returns_empty_prompt(self) -> None:
-        """Image-only message should return empty prompt + ImageData list."""
+        """Image-only message should return header + ImageData list."""
         cog = _make_cog()
         msg = self._make_image_message()
 
         prompt, images = await cog._build_prompt_and_images(msg)
 
-        assert prompt == ""
+        # With save_dir enabled, image-only messages get an attachment header.
+        assert "photo.png" in prompt
         assert len(images) == 1
         assert images[0].media_type == "image/png"
 
