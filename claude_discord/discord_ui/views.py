@@ -14,6 +14,7 @@ from ..claude.runner import ClaudeRunner
 from .embeds import COLOR_SUCCESS, stopped_embed, tool_result_embed, tool_result_preview_embed
 
 if TYPE_CHECKING:
+    from ..database.repository import SessionRecord
     from ..database.settings_repo import SettingsRepository
 
 logger = logging.getLogger(__name__)
@@ -268,6 +269,109 @@ class RewindSelectView(discord.ui.View):
 
     async def _on_cancel(self, interaction: discord.Interaction) -> None:
         await interaction.response.edit_message(content="Rewind cancelled.", view=None)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        """No-op: the message remains but the view becomes inactive."""
+
+
+_ORIGIN_ICON = {
+    "discord": "\U0001f4ac",  # 💬
+    "cli": "\U0001f5a5\ufe0f",  # 🖥️
+}
+
+
+class ResumeSelectView(discord.ui.View):
+    """Select menu for choosing a session to resume in a new thread.
+
+    Shows a list of recent sessions with their summary and origin.
+    When the user picks one, a new thread is created and the selected
+    session is resumed via ``--resume``.
+    """
+
+    def __init__(
+        self,
+        records: list[SessionRecord],
+        bot: Any,
+    ) -> None:
+        super().__init__(timeout=60)
+        self._records = records
+        self._bot = bot
+
+        options = [
+            discord.SelectOption(
+                label=self._build_label(record),
+                value=str(i),
+                description=self._build_description(record),
+            )
+            for i, record in enumerate(records[:25])
+        ]
+
+        select = discord.ui.Select(
+            placeholder="Select a session to resume...",
+            options=options,
+        )
+        select.callback = self._on_select
+        self.add_item(select)
+
+    @staticmethod
+    def _build_label(record: SessionRecord) -> str:
+        icon = _ORIGIN_ICON.get(record.origin, "")
+        summary = record.summary or "(no summary)"
+        prefix = f"{icon} " if icon else ""
+        return f"{prefix}{summary}"[:100]
+
+    @staticmethod
+    def _build_description(record: SessionRecord) -> str | None:
+        parts: list[str] = []
+        if record.working_dir:
+            dir_short = record.working_dir.rsplit("/", 1)[-1]
+            parts.append(dir_short)
+        parts.append(record.last_used_at[:16])
+        desc = " | ".join(parts)
+        return desc[:100] if desc else None
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        data = cast(dict[str, Any], interaction.data)
+        idx = int(data["values"][0])
+        record = self._records[idx]
+
+        chat_cog = self._bot.get_cog("ClaudeChatCog")
+        if chat_cog is None:
+            await interaction.response.edit_message(
+                content="\u274c ClaudeChatCog is not loaded — cannot resume.",
+                view=None,
+            )
+            self.stop()
+            return
+
+        channel = self._bot.get_channel(self._bot.channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.edit_message(
+                content="\u274c Channel not found — cannot create thread.",
+                view=None,
+            )
+            self.stop()
+            return
+
+        await interaction.response.edit_message(
+            content=f"\U0001f504 Resuming session: _{record.summary or record.session_id[:8]}_...",
+            view=None,
+        )
+
+        thread_name = f"\u25b6 {record.summary or 'Resumed session'}"[:100]
+        await chat_cog.spawn_session(
+            channel=channel,
+            prompt="Resuming previous session. Continue from where we left off.",
+            thread_name=thread_name,
+            session_id=record.session_id,
+        )
+
+        with contextlib.suppress(discord.HTTPException):
+            await interaction.followup.send(
+                "\u2705 Resumed in a new thread!",
+                ephemeral=True,
+            )
         self.stop()
 
     async def on_timeout(self) -> None:

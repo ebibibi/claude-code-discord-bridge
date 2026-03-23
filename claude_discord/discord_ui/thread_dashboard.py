@@ -100,17 +100,10 @@ class ThreadStatusDashboard:
     # ------------------------------------------------------------------
 
     async def initialize(self) -> None:
-        """Post the initial (empty) dashboard embed and pin it."""
+        """Post the initial (empty) dashboard embed."""
         async with self._lock:
             embed = self._build_embed()
             self._dashboard_message = await self._channel.send(embed=embed)
-            try:
-                await self._dashboard_message.pin()
-            except discord.HTTPException:
-                logger.debug(
-                    "Could not pin dashboard message "
-                    "(missing Manage Messages permission or pin limit reached)"
-                )
 
     async def set_state(
         self,

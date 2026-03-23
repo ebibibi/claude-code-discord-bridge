@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import base64
+import io
+import os
+import tempfile
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
+from PIL import Image
 
 from claude_discord.cogs.prompt_builder import (
     MAX_ATTACHMENT_BYTES,
     MAX_ATTACHMENTS,
     MAX_TOTAL_BYTES,
+    _convert_image_if_needed,
     build_prompt_and_images,
 )
 
@@ -60,23 +66,57 @@ class TestBuildPromptAndImages:
         assert "file content here" in prompt
 
     @pytest.mark.asyncio
-    async def test_image_attachment_returns_cdn_url(self) -> None:
-        """Images are returned as Discord CDN URLs, NOT downloaded to tempfiles."""
-        cdn_url = "https://cdn.discordapp.com/attachments/111/222/image.png"
+    async def test_image_attachment_returns_base64_data(self) -> None:
+        """Images are downloaded and returned as base64-encoded ImageData."""
+        image_bytes = b"\x89PNG\r\n\x1a\nfake-png-data"
         att = _make_attachment(
             filename="image.png",
             content_type="image/png",
-            size=100,
-            url=cdn_url,
+            size=len(image_bytes),
+            content=image_bytes,
         )
         msg = _make_message(content="see image", attachments=[att])
 
-        prompt, image_urls = await build_prompt_and_images(msg)
+        prompt, images = await build_prompt_and_images(msg)
 
         assert prompt == "see image"
-        assert len(image_urls) == 1
-        assert image_urls[0] == cdn_url
-        att.read.assert_not_called()
+        assert len(images) == 1
+        assert images[0].media_type == "image/png"
+        assert images[0].data == base64.standard_b64encode(image_bytes).decode("ascii")
+        att.read.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_jpeg_image_media_type(self) -> None:
+        """JPEG images get the correct media_type."""
+        jpeg_bytes = b"\xff\xd8\xff\xe0fake-jpeg"
+        att = _make_attachment(
+            filename="photo.jpg",
+            content_type="image/jpeg",
+            size=len(jpeg_bytes),
+            content=jpeg_bytes,
+        )
+        msg = _make_message(content="", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/jpeg"
+
+    @pytest.mark.asyncio
+    async def test_webp_image_media_type(self) -> None:
+        """WebP images get the correct media_type."""
+        att = _make_attachment(
+            filename="pic.webp",
+            content_type="image/webp",
+            size=100,
+            content=b"webp-data",
+        )
+        msg = _make_message(content="", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/webp"
 
     @pytest.mark.asyncio
     async def test_binary_non_image_skipped(self) -> None:
@@ -190,6 +230,22 @@ class TestBuildPromptAndImages:
         assert "b.md" in prompt
         assert "beta" in prompt
 
+    @pytest.mark.asyncio
+    async def test_image_download_failure_skipped(self) -> None:
+        """If image download fails, it's silently skipped."""
+        att = _make_attachment(
+            filename="broken.png",
+            content_type="image/png",
+            size=100,
+        )
+        att.read = AsyncMock(side_effect=Exception("download failed"))
+        msg = _make_message(content="see this", attachments=[att])
+
+        prompt, images = await build_prompt_and_images(msg)
+
+        assert prompt == "see this"
+        assert images == []
+
 
 class TestNoContentType:
     """content_type が None のとき（Discord のロングテキスト自動変換等）の動作。"""
@@ -206,11 +262,11 @@ class TestNoContentType:
         att.content_type = None  # content_type を明示的に None に
         msg = _make_message(content="", attachments=[att])
 
-        prompt, image_urls = await build_prompt_and_images(msg)
+        prompt, images = await build_prompt_and_images(msg)
 
         assert "message.txt" in prompt
         assert "long message" in prompt
-        assert image_urls == []
+        assert images == []
 
     @pytest.mark.asyncio
     async def test_no_content_type_py_extension_treated_as_text(self) -> None:
@@ -239,27 +295,181 @@ class TestNoContentType:
         att.content_type = None
         msg = _make_message(content="what is this", attachments=[att])
 
-        prompt, image_urls = await build_prompt_and_images(msg)
+        prompt, images = await build_prompt_and_images(msg)
 
         assert "data.bin" not in prompt
-        assert image_urls == []
+        assert images == []
 
     @pytest.mark.asyncio
-    async def test_no_content_type_png_extension_not_sent_as_image(self) -> None:
-        """content_type なし＋.png 拡張子でも、CDN URL が image_urls に入るべき。"""
+    async def test_no_content_type_png_extension_downloaded_as_image(self) -> None:
+        """content_type なし＋.png 拡張子 → ダウンロードして base64 ImageData に。"""
+        image_bytes = b"\x89PNGfakedata"
         att = _make_attachment(
             filename="screenshot.png",
             content_type=None,
-            url="https://cdn.discordapp.com/attachments/1/2/screenshot.png",
-            content=b"",
+            content=image_bytes,
         )
         att.content_type = None
         msg = _make_message(content="see this", attachments=[att])
 
-        _, image_urls = await build_prompt_and_images(msg)
+        _, images = await build_prompt_and_images(msg)
 
-        assert len(image_urls) == 1
-        assert "screenshot.png" in image_urls[0]
+        assert len(images) == 1
+        assert images[0].media_type == "image/png"
+        assert images[0].data == base64.standard_b64encode(image_bytes).decode("ascii")
+
+
+class TestConvertImageIfNeeded:
+    """Tests for _convert_image_if_needed — automatic format conversion."""
+
+    def _make_bmp_bytes(self, mode: str = "RGB", size: tuple[int, int] = (2, 2)) -> bytes:
+        """Create a real BMP image in memory."""
+        img = Image.new(mode, size, color="red")
+        buf = io.BytesIO()
+        img.save(buf, format="BMP")
+        return buf.getvalue()
+
+    def _make_tiff_bytes(self, mode: str = "RGB") -> bytes:
+        """Create a real TIFF image in memory."""
+        img = Image.new(mode, (2, 2), color="blue")
+        buf = io.BytesIO()
+        img.save(buf, format="TIFF")
+        return buf.getvalue()
+
+    def test_supported_format_returned_as_is(self) -> None:
+        """JPEG/PNG/GIF/WebP are returned without conversion."""
+        raw = b"fake-jpeg-data"
+        result_bytes, result_type = _convert_image_if_needed(raw, "image/jpeg")
+        assert result_bytes is raw
+        assert result_type == "image/jpeg"
+
+    def test_png_returned_as_is(self) -> None:
+        raw = b"fake-png-data"
+        result_bytes, result_type = _convert_image_if_needed(raw, "image/png")
+        assert result_bytes is raw
+        assert result_type == "image/png"
+
+    def test_bmp_converted_to_jpeg(self) -> None:
+        """BMP (opaque) should be converted to JPEG."""
+        bmp_bytes = self._make_bmp_bytes("RGB")
+        result_bytes, result_type = _convert_image_if_needed(bmp_bytes, "image/bmp")
+        assert result_type == "image/jpeg"
+        assert result_bytes != bmp_bytes
+        # Verify it's a valid JPEG
+        img = Image.open(io.BytesIO(result_bytes))
+        assert img.format == "JPEG"
+
+    def test_bmp_rgba_converted_to_png(self) -> None:
+        """BMP with alpha should be converted to PNG to preserve transparency."""
+        img = Image.new("RGBA", (2, 2), color=(255, 0, 0, 128))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")  # BMP doesn't support RGBA natively
+        rgba_bytes = buf.getvalue()
+        # Use a PNG with RGBA as input but pretend it's unsupported type
+        result_bytes, result_type = _convert_image_if_needed(rgba_bytes, "image/x-test")
+        assert result_type == "image/png"
+
+    def test_tiff_converted_to_jpeg(self) -> None:
+        """TIFF should be converted to JPEG."""
+        tiff_bytes = self._make_tiff_bytes("RGB")
+        result_bytes, result_type = _convert_image_if_needed(tiff_bytes, "image/tiff")
+        assert result_type == "image/jpeg"
+        img = Image.open(io.BytesIO(result_bytes))
+        assert img.format == "JPEG"
+
+    def test_pillow_not_installed_fallback(self) -> None:
+        """Without Pillow, returns raw bytes with image/png fallback."""
+        raw = b"some-data"
+        with patch.dict("sys.modules", {"PIL": None, "PIL.Image": None}):
+            # Force re-import failure by patching builtins
+            original_import = (
+                __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+            )
+
+            def mock_import(name, *args, **kwargs):
+                if name == "PIL" or name == "PIL.Image":
+                    raise ImportError("No module named 'PIL'")
+                return original_import(name, *args, **kwargs)
+
+            with patch("builtins.__import__", side_effect=mock_import):
+                result_bytes, result_type = _convert_image_if_needed(raw, "image/bmp")
+                assert result_bytes is raw
+                assert result_type == "image/png"
+
+    def test_corrupt_image_fallback(self) -> None:
+        """Corrupt image data falls back gracefully."""
+        raw = b"not-a-valid-image"
+        result_bytes, result_type = _convert_image_if_needed(raw, "image/bmp")
+        assert result_bytes is raw
+        assert result_type == "image/png"
+
+
+class TestBmpImageConversionIntegration:
+    """Integration test: BMP attachment → converted JPEG ImageData."""
+
+    @pytest.mark.asyncio
+    async def test_bmp_attachment_converted_to_jpeg(self) -> None:
+        """BMP image attached in Discord should be auto-converted to JPEG."""
+        img = Image.new("RGB", (4, 4), color="green")
+        buf = io.BytesIO()
+        img.save(buf, format="BMP")
+        bmp_bytes = buf.getvalue()
+
+        att = _make_attachment(
+            filename="photo.bmp",
+            content_type="image/bmp",
+            size=len(bmp_bytes),
+            content=bmp_bytes,
+        )
+        msg = _make_message(content="look at this", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/jpeg"
+        # Verify the base64 decodes to valid JPEG
+        decoded = base64.standard_b64decode(images[0].data)
+        result_img = Image.open(io.BytesIO(decoded))
+        assert result_img.format == "JPEG"
+
+    @pytest.mark.asyncio
+    async def test_tiff_attachment_converted_to_jpeg(self) -> None:
+        """TIFF image should be auto-converted to JPEG."""
+        img = Image.new("RGB", (4, 4), color="blue")
+        buf = io.BytesIO()
+        img.save(buf, format="TIFF")
+        tiff_bytes = buf.getvalue()
+
+        att = _make_attachment(
+            filename="scan.tiff",
+            content_type="image/tiff",
+            size=len(tiff_bytes),
+            content=tiff_bytes,
+        )
+        msg = _make_message(content="", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/jpeg"
+
+    @pytest.mark.asyncio
+    async def test_supported_format_not_converted(self) -> None:
+        """PNG/JPEG/GIF/WebP should pass through without conversion."""
+        png_bytes = b"\x89PNG\r\n\x1a\nfake"
+        att = _make_attachment(
+            filename="pic.png",
+            content_type="image/png",
+            size=len(png_bytes),
+            content=png_bytes,
+        )
+        msg = _make_message(content="", attachments=[att])
+
+        _, images = await build_prompt_and_images(msg)
+
+        assert len(images) == 1
+        assert images[0].media_type == "image/png"
+        assert images[0].data == base64.standard_b64encode(png_bytes).decode("ascii")
 
 
 class TestLargeTextAttachment:
@@ -302,3 +512,179 @@ class TestLargeTextAttachment:
         assert "START" in prompt
         # 末尾の END は切り詰められて含まれない
         assert "END" not in prompt
+
+
+class TestSaveAttachmentsToDisk:
+    """save_dir が指定されたとき、全添付ファイルがディスクに保存される。"""
+
+    @pytest.mark.asyncio
+    async def test_text_attachment_saved_to_disk(self) -> None:
+        """テキスト添付はディスクに保存され、パスがプロンプトヘッダーに含まれる。"""
+        att = _make_attachment(filename="notes.txt", content=b"file content here")
+        msg = _make_message(content="check this", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            # ファイルがディスクに保存されている
+            saved_path = os.path.join(save_dir, "notes.txt")
+            assert os.path.exists(saved_path)
+            with open(saved_path, "rb") as f:
+                assert f.read() == b"file content here"
+
+            # プロンプトにヘッダーが含まれる
+            assert "notes.txt" in prompt
+            assert saved_path in prompt
+
+    @pytest.mark.asyncio
+    async def test_image_saved_to_disk(self) -> None:
+        """画像添付もディスクに保存される。"""
+        image_bytes = b"\x89PNG\r\n\x1a\nfake-png-data"
+        att = _make_attachment(
+            filename="screenshot.png",
+            content_type="image/png",
+            size=len(image_bytes),
+            content=image_bytes,
+        )
+        msg = _make_message(content="see image", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, images = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            # ディスクに保存されている
+            saved_path = os.path.join(save_dir, "screenshot.png")
+            assert os.path.exists(saved_path)
+
+            # base64エンコードも返される（既存動作を維持）
+            assert len(images) == 1
+
+            # ヘッダーにパスが含まれる
+            assert saved_path in prompt
+
+    @pytest.mark.asyncio
+    async def test_pdf_saved_to_disk(self) -> None:
+        """PDFなど非テキスト・非画像ファイルもディスクに保存される。"""
+        pdf_content = b"%PDF-1.4 fake pdf content"
+        att = _make_attachment(
+            filename="report.pdf",
+            content_type="application/pdf",
+            size=len(pdf_content),
+            content=pdf_content,
+        )
+        msg = _make_message(content="see report", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            # ディスクに保存されている
+            saved_path = os.path.join(save_dir, "report.pdf")
+            assert os.path.exists(saved_path)
+            with open(saved_path, "rb") as f:
+                assert f.read() == pdf_content
+
+            # ヘッダーにパスが含まれる
+            assert saved_path in prompt
+            assert "report.pdf" in prompt
+
+    @pytest.mark.asyncio
+    async def test_excel_saved_to_disk(self) -> None:
+        """Excelファイルもディスクに保存される。"""
+        xlsx_content = b"PK\x03\x04fake xlsx"
+        att = _make_attachment(
+            filename="data.xlsx",
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            size=len(xlsx_content),
+            content=xlsx_content,
+        )
+        msg = _make_message(content="see data", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            saved_path = os.path.join(save_dir, "data.xlsx")
+            assert os.path.exists(saved_path)
+            assert saved_path in prompt
+
+    @pytest.mark.asyncio
+    async def test_zip_saved_to_disk(self) -> None:
+        """ZIPファイルもディスクに保存される（以前はサイレントスキップだった）。"""
+        zip_content = b"PK\x03\x04fake zip"
+        att = _make_attachment(
+            filename="archive.zip",
+            content_type="application/zip",
+            size=len(zip_content),
+            content=zip_content,
+        )
+        msg = _make_message(content="see zip", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            saved_path = os.path.join(save_dir, "archive.zip")
+            assert os.path.exists(saved_path)
+            assert saved_path in prompt
+
+    @pytest.mark.asyncio
+    async def test_header_lists_all_files(self) -> None:
+        """複数の添付ファイルのヘッダーがまとめて表示される。"""
+        attachments = [
+            _make_attachment(filename="a.txt", content=b"alpha"),
+            _make_attachment(
+                filename="b.pdf",
+                content_type="application/pdf",
+                content=b"%PDF",
+            ),
+        ]
+        msg = _make_message(content="two files", attachments=attachments)
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            assert "a.txt" in prompt
+            assert "b.pdf" in prompt
+            # ヘッダーセクションが存在する
+            assert "Attached" in prompt or "添付" in prompt
+
+    @pytest.mark.asyncio
+    async def test_no_save_dir_keeps_old_behavior(self) -> None:
+        """save_dir=None（デフォルト）のとき、既存の動作が維持される。"""
+        att = _make_attachment(
+            filename="archive.zip",
+            content_type="application/zip",
+            content=b"PK...",
+        )
+        msg = _make_message(content="see zip", attachments=[att])
+
+        # save_dir なし → 従来通りzipはスキップ
+        prompt, _ = await build_prompt_and_images(msg)
+        assert prompt == "see zip"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_filenames_handled(self) -> None:
+        """同名ファイルが複数あっても衝突しない。"""
+        attachments = [
+            _make_attachment(filename="file.txt", content=b"first"),
+            _make_attachment(filename="file.txt", content=b"second"),
+        ]
+        msg = _make_message(content="dupes", attachments=attachments)
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            # 両方のファイルが存在する（リネームされている）
+            files = os.listdir(save_dir)
+            assert len(files) == 2
+
+    @pytest.mark.asyncio
+    async def test_header_appears_before_user_message(self) -> None:
+        """ヘッダーはユーザーメッセージの前に表示される。"""
+        att = _make_attachment(filename="data.csv", content=b"a,b,c")
+        msg = _make_message(content="analyze this", attachments=[att])
+
+        with tempfile.TemporaryDirectory() as save_dir:
+            prompt, _ = await build_prompt_and_images(msg, save_dir=save_dir)
+
+            header_pos = prompt.find("data.csv")
+            message_pos = prompt.find("analyze this")
+            # ヘッダーがユーザーメッセージより先に出現する
+            assert header_pos < message_pos

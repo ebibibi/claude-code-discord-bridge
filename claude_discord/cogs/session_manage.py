@@ -20,7 +20,7 @@ from discord.ext import commands
 from ..database.repository import SessionRepository, UsageStatsRepository
 from ..database.settings_repo import SettingsRepository
 from ..discord_ui.embeds import COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
-from ..discord_ui.views import ToolSelectView
+from ..discord_ui.views import ResumeSelectView, ToolSelectView
 from ..worktree import WorktreeManager
 from .session_sync import sync_cli_sessions
 
@@ -414,6 +414,27 @@ class SessionManageCog(commands.Cog):
             embed.set_footer(text="Setting updated! New syncs will use this style.")
 
         await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="resume",
+        description="Resume a previous session in a new thread",
+    )
+    async def resume_session(self, interaction: discord.Interaction) -> None:
+        """Show a select menu of recent sessions to resume."""
+        records = await self.repo.list_all(limit=25)
+        if not records:
+            await interaction.response.send_message(
+                "No sessions found. Start a conversation first!",
+                ephemeral=True,
+            )
+            return
+
+        view = ResumeSelectView(records=records, bot=self.bot)
+        await interaction.response.send_message(
+            "\U0001f504 **Resume** — select a session to continue:",
+            view=view,
+            ephemeral=True,
+        )
 
     @app_commands.command(
         name="resume-info",

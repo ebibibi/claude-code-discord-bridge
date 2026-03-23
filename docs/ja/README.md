@@ -129,6 +129,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 ### インタラクティブチャット
 
 #### 🔗 セッションの基本
+- **チャットのみモード** — `CHAT_ONLY_CHANNEL_IDS` にチャンネルを設定すると、Claude のテキスト応答のみを表示。ツール embed、思考ブロック、セッション開始/完了 embed、Todo リストはすべて非表示。許可リクエストと `AskUserQuestion` は常に表示。技術的な詳細を見せたくないパブリックチャンネルに最適。
 - **Thread = Session** — Discord スレッドと Claude Code セッションの 1:1 マッピング
 - **セッション永続化** — `--resume` で複数メッセージをまたいだ会話を継続
 - **並行セッション** — 設定可能な上限での複数並行セッション
@@ -156,12 +157,13 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **コンパクト検出** — コンテキスト圧縮が発生した際にスレッド内で通知（トリガー種別 + 圧縮前のトークン数）
 - **長時間停止通知** — アクティビティが途絶えた際にスレッドメッセージを送信（長考やコンテキスト圧縮中の可能性を通知）。Claude が再開すると自動リセット。閾値はモデルに応じて自動調整：標準モデルは 30 秒、Opus は 120 秒（長考時間が長いため）
 - **タイムアウト通知** — 経過時間とリジューム手順付きの embed 表示
+- **StatusLine 表示** — Claude が `statusLine` を設定している場合（`/statusline-setup` で設定）、各セッション完了後に現在のステータスを Discord に表示
 - **スレッドインボックス** — `THREAD_INBOX_ENABLED=true` を設定すると、ダッシュボードに永続的な 📬 インボックスセクションが表示されます。セッション終了後、軽量な `claude -p` 呼び出しで最終メッセージを `waiting`（返信待ち）/ `done`（完了）/ `ambiguous`（不明）に分類。返信が必要なスレッドは Bot 再起動後も保持され、あなたが返信するまでサーフェスされます
 
 #### 🔌 入力とスキル
 - **添付ファイル対応** — テキストファイルをプロンプトに自動追加（最大 5 ファイル、1 ファイルあたり 200 KB / 合計 500 KB まで；上限を超えたファイルはスキップせずに先頭部分を切り取って通知付きで追加）；画像は Discord CDN URL として `--input-format stream-json` 経由で送信（最大 4 枚 × 5 MB）；Discord が長文貼り付けを自動的にファイル添付（`content_type` なし）に変換した場合も、拡張子ベースの検出で正しく処理
 - **オンデマンドファイル配信** — 「送って」「添付して」などと指示すると Claude が `.ccdb-attachments` にパスを書き込み、セッション完了時に Bot がファイルを Discord に添付して送信
-- **スキル実行** — `/skill` コマンド（オートコンプリート付き）、オプション引数、スレッド内リジューム
+- **スキル実行** — `/skill` コマンド（オートコンプリート付き）、オプション引数、スレッド内リジューム。インストール済みプラグインのスキルも自動検出
 - **ホットリロード** — `~/.claude/skills/` に追加した新スキルを自動検出（60 秒更新、再起動不要）
 
 ### 並行処理と協調
@@ -187,9 +189,11 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 
 ### セッション管理
 - **組み込みヘルプ** — `/help` で利用可能な全スラッシュコマンドと基本的な使い方を表示（エフェメラル表示、呼び出し者のみ表示）
-- **セッション同期** — CLI セッションを Discord スレッドにインポート（`/sync-sessions`）
+- **セッション同期** — CLI セッションを Discord スレッドにインポート（`/sync-sessions`）。`/sync-settings` で同期設定（スレッドスタイル、時間範囲、最小件数）の表示・変更が可能
 - **セッション一覧** — 起動元（Discord / CLI / 全て）と時間範囲でフィルタリング（`/sessions`）
-- **リジューム情報** — 現在のセッションをターミナルで継続する CLI コマンドを表示（`/resume-info`）
+- **セッションリジューム** — `/resume` で直近のセッション一覧（最大 25 件）をセレクトメニューで表示し、選択したセッションを新スレッドで再開。任意のチャンネルやスレッドから実行可能 — 常に設定されたメインチャンネルに新スレッドを作成
+- **リジューム情報** — 現在のセッションをターミナルで継続する CLI コマンドを表示（`/resume-info`、スレッド内限定）
+- **セッションクリア** — `/clear` で現在のスレッドの Claude Code セッションをリセットし、新スレッドを作成せずにゼロから再開
 - **スタートアップリジューム** — 任意のBot 再起動後に中断セッションを自動再開。`AutoUpgradeCog`（アップグレード再起動）および `ClaudeChatCog.cog_unload()`（その他すべてのシャットダウン）が自動登録、または `POST /api/mark-resume` で手動登録
 - **プログラム的スポーン** — `POST /api/spawn` でスクリプトや Claude サブプロセスから新しい Discord スレッド + Claude セッションを作成。スレッド作成後すぐに非ブロッキング 201 を返す
 - **スレッド ID 注入** — すべての Claude サブプロセスに `DISCORD_THREAD_ID` 環境変数を渡し、セッションから `$CCDB_API_URL/api/spawn` で子セッションを起動可能
@@ -347,6 +351,16 @@ async def setup(bot, runner, components):
 
 リマインダー、Todoist ウォッチドッグ、自動アップグレード、ドキュメント同期を含む実例は [`examples/ebibot/`](../../examples/ebibot/) を参照してください。
 
+**`examples/ebibot/cogs/` に含まれる組み込みサンプル:**
+
+| Cog | 用途 |
+|-----|------|
+| `ReminderCog` | Discord ベースのリマインダースケジューリング |
+| `WatchdogCog` | Todoist / 外部サービスウォッチドッグ |
+| `AutoUpgradeCog` | Webhook トリガーによるパッケージ自動アップグレード |
+| `DocsSyncCog` | プッシュ時の自動ドキュメント同期 |
+| `AlertResponderCog` | 汎用アラート監視 — 監視システムからのアラートを Discord に転送し、Claude Code による調査セッションをトリガー |
+
 ---
 
 ### ミニマル Bot（パッケージとしてインストール）
@@ -480,6 +494,7 @@ INLINE_REPLY_CHANNEL_IDS=333,444
 | `COORDINATION_CHANNEL_ID` | AI Lounge チャンネルのデフォルトフォールバック用チャンネル ID | （オプション） |
 | `MENTION_ONLY_CHANNEL_IDS` | @メンション時のみ応答するチャンネル ID（カンマ区切り） | （オプション） |
 | `INLINE_REPLY_CHANNEL_IDS` | インライン返信チャンネル ID（カンマ区切り、スレッドを作成しない） | （オプション） |
+| `CHAT_ONLY_CHANNEL_IDS` | チャットのみモードのチャンネル ID（カンマ区切り）— Claude のテキスト応答のみ表示。ツール embed・思考・セッション情報・Todo はすべて非表示 | （オプション） |
 | `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
 | `CLI_SESSIONS_PATH` | CLI セッション検出用のパス（`~/.claude/projects`）。`/sync-sessions` の有効化に必要 | （オプション） |
 | `CUSTOM_COGS_DIR` | 起動時に読み込むカスタム Cog ファイルを含むディレクトリ（[カスタム Cog](#カスタム-cogフォーク不要で機能拡張) 参照） | （オプション） |
@@ -767,7 +782,7 @@ claude_discord/
   cogs/
     claude_chat.py         # インタラクティブチャット（スレッド作成、メッセージ処理）
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
-    session_manage.py      # /sessions, /sync-sessions, /resume-info
+    session_manage.py      # /sessions, /sync-sessions, /resume, /resume-info, /sync-settings
     session_sync.py        # sync-sessions のスレッド作成・メッセージ投稿ロジック
     prompt_builder.py      # build_prompt_and_images() — 純粋関数、Cog/Bot 状態に非依存
     scheduler.py           # 定期 Claude Code タスク実行エンジン

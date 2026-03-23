@@ -141,7 +141,7 @@ class ApiServer:
         """Start the API server."""
         self._runner = web.AppRunner(self.app)
         await self._runner.setup()
-        site = web.TCPSite(self._runner, self.host, self.port)
+        site = web.TCPSite(self._runner, self.host, self.port, reuse_address=True)
         await site.start()
         logger.info("REST API started: http://%s:%d", self.host, self.port)
 
@@ -188,22 +188,40 @@ class ApiServer:
         poll_data = data.get("poll")
         poll_obj = None
         if poll_data:
-            result = self._build_poll(poll_data)
-            if isinstance(result, web.Response):
-                return result
-            poll_obj = result
+            poll_result = self._build_poll(poll_data)
+            if isinstance(poll_result, web.Response):
+                return poll_result
+            poll_obj = poll_result
 
-        fmt = data.get("format", "embed")
+        thread_name = data.get("thread_name")
+        fmt = data.get("format", "text" if thread_name else "embed")
+
+        # Determine target: create a new thread or send directly to channel
+        if thread_name:
+            if not hasattr(raw_channel, "create_thread"):
+                return web.json_response({"error": "Channel does not support threads"}, status=400)
+            thread_result = await raw_channel.create_thread(name=thread_name)  # type: ignore[union-attr]
+            # create_thread may return Thread or ThreadWithMessage depending on discord.py version
+            thread = thread_result.thread if hasattr(thread_result, "thread") else thread_result  # type: ignore[union-attr]
+            target = thread
+        else:
+            target = raw_channel
+            thread = None
+
         if poll_obj:
-            await raw_channel.send(content=message, poll=poll_obj)  # type: ignore[union-attr]
+            await target.send(content=message, poll=poll_obj)  # type: ignore[union-attr]
         elif fmt == "text":
-            await raw_channel.send(message)  # type: ignore[union-attr]
+            await target.send(message)  # type: ignore[union-attr]
         else:
             title = data.get("title")
             embed = self._build_embed(message=message, title=title, color=data.get("color"))
-            await raw_channel.send(embed=embed)  # type: ignore[union-attr]
+            await target.send(embed=embed)  # type: ignore[union-attr]
 
-        return web.json_response({"status": "sent"})
+        result: dict[str, str] = {"status": "sent"}
+        if thread is not None:
+            result["thread_id"] = str(thread.id)  # type: ignore[union-attr]
+            result["thread_name"] = thread.name  # type: ignore[union-attr]
+        return web.json_response(result)
 
     async def schedule(self, request: web.Request) -> web.Response:
         """POST /api/schedule — schedule a notification for later."""
@@ -273,6 +291,16 @@ class ApiServer:
             )
         return None
 
+    @staticmethod
+    def _parse_anchor_time(raw: str | None) -> tuple[int | None, int | None]:
+        """Parse ``"HH:MM"`` into (hour, minute).  Returns (None, None) if absent."""
+        if not raw:
+            return None, None
+        parts = raw.split(":")
+        if len(parts) != 2:  # noqa: PLR2004
+            raise ValueError(f"anchor_time must be HH:MM, got {raw!r}")
+        return int(parts[0]), int(parts[1])
+
     async def create_task(self, request: web.Request) -> web.Response:
         """POST /api/tasks — register a scheduled Claude Code task.
 
@@ -283,6 +311,9 @@ class ApiServer:
             channel_id: Discord channel ID for thread creation.
             working_dir: (optional) Working directory for Claude.
             run_immediately: (optional, default true) Fire on next loop tick.
+            anchor_time: (optional) Wall-clock time ``"HH:MM"`` to snap to,
+                preventing time drift. When set, next_run_at is calculated as
+                the next future occurrence of that time.
         """
         if err := self._require_task_repo():
             return err
@@ -296,6 +327,11 @@ class ApiServer:
                 return web.json_response({"error": f"{field} is required"}, status=400)
 
         try:
+            anchor_hour, anchor_minute = self._parse_anchor_time(data.get("anchor_time"))
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+        try:
             task_id = await self.task_repo.create(  # type: ignore[union-attr]
                 name=str(data["name"]),
                 prompt=str(data["prompt"]),
@@ -303,6 +339,8 @@ class ApiServer:
                 channel_id=int(data["channel_id"]),
                 working_dir=data.get("working_dir"),
                 run_immediately=bool(data.get("run_immediately", True)),
+                anchor_hour=anchor_hour,
+                anchor_minute=anchor_minute,
             )
         except Exception as exc:
             # Most likely a UNIQUE constraint violation on name
@@ -334,7 +372,16 @@ class ApiServer:
         return web.json_response({"error": "Task not found"}, status=404)
 
     async def patch_task(self, request: web.Request) -> web.Response:
-        """PATCH /api/tasks/{id} — update a task (enable/disable, prompt, interval)."""
+        """PATCH /api/tasks/{id} — update a task.
+
+        Body (JSON, all optional):
+            enabled: bool
+            prompt: str
+            interval_seconds: int
+            working_dir: str
+            anchor_time: ``"HH:MM"`` to set, or ``null`` to clear
+            next_run_at: float (epoch) — manual schedule reset
+        """
         if err := self._require_task_repo():
             return err
         try:
@@ -360,9 +407,30 @@ class ApiServer:
         if "working_dir" in data:
             patch_kwargs["working_dir"] = str(data["working_dir"])
 
+        # anchor_time: "HH:MM" to set, null to clear
+        if "anchor_time" in data:
+            raw_anchor = data["anchor_time"]
+            if raw_anchor is None:
+                patch_kwargs["anchor_hour"] = -1  # sentinel: clear
+            else:
+                try:
+                    h, m = self._parse_anchor_time(raw_anchor)
+                except ValueError as exc:
+                    return web.json_response({"error": str(exc)}, status=400)
+                patch_kwargs["anchor_hour"] = h
+                patch_kwargs["anchor_minute"] = m
+
         if patch_kwargs:
             result = await self.task_repo.update(task_id, **patch_kwargs)  # type: ignore[union-attr]
             updated = updated or result
+
+        # Manual next_run_at override
+        if "next_run_at" in data:
+            await self.task_repo._db_execute(  # type: ignore[union-attr]
+                "UPDATE scheduled_tasks SET next_run_at = ? WHERE id = ?",
+                (float(data["next_run_at"]), task_id),
+            )
+            updated = True
 
         if updated:
             return web.json_response({"status": "updated"})
@@ -478,9 +546,10 @@ class ApiServer:
                 ``default_channel_id`` configured at startup).
             thread_name: Custom thread title (optional; defaults to the
                 first 100 characters of *prompt*).
-            auto_start: Whether to start Claude Code immediately (default: true).
-                When false, only the thread and seed message are created —
-                Claude will start when a user replies in the thread.
+            auto_start: Whether to immediately start a Claude Code session
+                (optional; defaults to ``true``).  When ``false``, only the
+                thread and seed message are created — a Claude session will
+                start when a user replies in the thread.
 
         Returns (201):
             ``{"status": "spawned", "thread_id": "...", "thread_name": "..."}``
@@ -533,7 +602,10 @@ class ApiServer:
 
         try:
             thread = await cog.spawn_session(
-                raw, prompt, thread_name=thread_name, auto_start=auto_start
+                raw,
+                prompt,
+                thread_name=thread_name,
+                auto_start=auto_start,
             )
         except Exception as exc:
             logger.error("spawn_session failed: %s", exc, exc_info=True)

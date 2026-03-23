@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from ..claude.runner import ClaudeRunner
+from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
@@ -65,9 +66,8 @@ class RunConfig:
     lounge_repo: LoungeRepository | None = None
     stop_view: StopView | None = None
     worktree_manager: WorktreeManager | None = None
-    # HTTPS URLs of image attachments to pass as stream-json url-type image blocks.
-    # Claude Code CLI silently drops base64 image blocks; URL type is required.
-    image_urls: list[str] | None = None
+    # Base64-encoded image data for stream-json base64-type image blocks.
+    images: list[ImageData] | None = None
     # When True, inject a system-prompt instruction telling Claude to write
     # requested file paths to .ccdb-attachments so the bot can send them.
     attach_on_request: bool = False
@@ -89,7 +89,7 @@ class RunConfig:
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.
     def __post_init__(self) -> None:
-        if not self.prompt and not self.image_urls:
+        if not self.prompt and not self.images:
             raise ValueError("RunConfig.prompt must not be empty")
 
     def with_prompt(self, prompt: str) -> RunConfig:

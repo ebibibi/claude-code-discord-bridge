@@ -21,7 +21,10 @@ from collections.abc import AsyncGenerator
 from pathlib import Path
 
 from .parser import parse_line
-from .types import MessageType, StreamEvent
+from .types import ImageData, MessageType, StreamEvent
+
+# Re-export for backward compatibility
+__all__ = ["ClaudeRunner", "ImageData"]
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +91,7 @@ class ClaudeRunner:
         api_secret: str | None = None,
         thread_id: int | None = None,
         append_system_prompt: str | None = None,
-        image_urls: list[str] | None = None,
+        images: list[ImageData] | None = None,
         fork_session: bool = False,
     ) -> None:
         self.command = command
@@ -103,7 +106,7 @@ class ClaudeRunner:
         self.api_secret = api_secret
         self.thread_id = thread_id
         self.append_system_prompt = append_system_prompt
-        self.image_urls = image_urls
+        self.images = images
         self.fork_session = fork_session
         self._process: asyncio.subprocess.Process | None = None
 
@@ -133,13 +136,13 @@ class ClaudeRunner:
         )
 
         # When image attachments are present we use --input-format stream-json and
-        # write the user message (with image URLs) to stdin immediately after
-        # process start.  This requires stdin=PIPE.
+        # write the user message (with base64 image data) to stdin immediately
+        # after process start.  This requires stdin=PIPE.
         #
         # For text-only sessions we keep stdin=DEVNULL: Claude CLI blocks on startup
         # when stdin is an open pipe in default text-input mode, and we have no data
         # to send.
-        stdin_mode = asyncio.subprocess.PIPE if self.image_urls else asyncio.subprocess.DEVNULL
+        stdin_mode = asyncio.subprocess.PIPE if self.images else asyncio.subprocess.DEVNULL
 
         self._process = await asyncio.create_subprocess_exec(
             *args,
@@ -154,8 +157,8 @@ class ClaudeRunner:
         logger.info("Claude CLI started: pid=%s", self._process.pid)
 
         # For stream-json input sessions, send the initial user message (including
-        # image URLs) to stdin now that the process is up.
-        if self.image_urls and self._process.stdin is not None:
+        # base64 image data) to stdin now that the process is up.
+        if self.images and self._process.stdin is not None:
             await self._send_stream_json_message(prompt)
 
         try:
@@ -223,7 +226,7 @@ class ClaudeRunner:
                 if append_system_prompt is not None
                 else self.append_system_prompt
             ),
-            # image_urls are NOT inherited — they are per-invocation.
+            # images are NOT inherited — they are per-invocation.
             # The caller (run_claude_with_config) passes them via RunConfig.
             # fork_session is NOT inherited — it's a per-invocation flag.
             fork_session=fork_session,
@@ -257,14 +260,13 @@ class ClaudeRunner:
     async def _send_stream_json_message(self, prompt: str) -> None:
         """Write the initial user message to stdin in stream-json format.
 
-        Called immediately after process start when ``image_urls`` is set.
-        Builds a user message with URL-type image content blocks followed
+        Called immediately after process start when ``images`` is set.
+        Builds a user message with base64-type image content blocks followed
         by the text prompt, then writes it as a single JSON line to stdin.
 
-        Claude Code CLI silently drops base64 image blocks in stream-json input
-        mode (confirmed with CLI 2.1.59).  Using ``{"type": "url"}`` image
-        sources is the only format that reaches the Anthropic API through the
-        CLI's stream-json input pipeline.
+        Images are pre-downloaded and base64-encoded by the caller (prompt_builder)
+        to avoid issues where the CLI's internal URL-fetch rejects certain formats
+        (e.g. PNG).
 
         The CLI reads this message and begins processing; stdin is left open so
         that ``inject_tool_result`` can send subsequent responses if needed.
@@ -272,17 +274,18 @@ class ClaudeRunner:
         assert self._process is not None and self._process.stdin is not None
 
         content: list[dict] = []
-        for url in self.image_urls or []:
+        for img in self.images or []:
             content.append(
                 {
                     "type": "image",
                     "source": {
-                        "type": "url",
-                        "url": url,
+                        "type": "base64",
+                        "media_type": img.media_type,
+                        "data": img.data,
                     },
                 }
             )
-            logger.debug("Added image URL for stream-json input: %.80s", url)
+            logger.debug("Added base64 image (%s, %d chars)", img.media_type, len(img.data))
 
         # Only add the text block if the prompt is non-empty.
         # An empty text block causes a 400 error from the Anthropic API when
@@ -311,7 +314,10 @@ class ClaudeRunner:
         within 10 seconds.
         """
         if self._process and self._process.returncode is None:
-            self._process.send_signal(signal.SIGINT)
+            if os.name == "nt":
+                self._process.terminate()
+            else:
+                self._process.send_signal(signal.SIGINT)
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=10)
             except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
@@ -364,8 +370,8 @@ class ClaudeRunner:
         if self.append_system_prompt:
             args.extend(["--append-system-prompt", self.append_system_prompt])
 
-        if self.image_urls:
-            # Images are passed via stdin as URL content blocks in the
+        if self.images:
+            # Images are passed via stdin as base64 content blocks in the
             # stream-json input protocol.  The --input-format flag tells the
             # CLI to read the user message from stdin instead of the positional
             # argument, so we do NOT append "-- <prompt>" in this branch.

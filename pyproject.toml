@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-code-discord-bridge"
-version = "2.1.0"
+version = "2.1.15"
 description = "Connect Claude Code to Discord and GitHub — interactive chat, CI/CD automation, and workflow integration"
 readme = "README.md"
 license = {text = "MIT"}
@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 api = ["aiohttp>=3.9"]
+images = ["pillow>=10.0"]
 
 [project.scripts]
 ccdb = "claude_discord.cli:main"
@@ -32,6 +33,7 @@ dev = [
     "ruff>=0.4",
     "aiohttp>=3.9",
     "pyright>=1.1.408",
+    "pillow>=12.1.1",
 ]
 
 [tool.pytest.ini_options]

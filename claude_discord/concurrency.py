@@ -28,7 +28,11 @@ class ActiveSession:
 
 _BASE_CONCURRENCY_NOTICE = """\
 [CONCURRENCY NOTICE — MANDATORY] You are one of MULTIPLE Claude Code sessions \
-running simultaneously via Discord. Other sessions ARE active right now. \
+running simultaneously via Discord. Your thread ID is {thread_id}. \
+Messages marked [this thread] in the AI Lounge are YOUR earlier posts from \
+this same thread — not from other sessions. After context compaction you may \
+see your own lounge messages; do NOT treat them as another session's work. \
+Other sessions ARE active right now. \
 You MUST follow these rules to avoid destroying each other's work:
 
 1. **Git — USE A WORKTREE (REQUIRED)**: Run \

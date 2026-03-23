@@ -200,7 +200,7 @@ claude_discord/          # Installable Python package
   cogs/
     claude_chat.py       # Main chat Cog (thread creation, message handling)
     skill_command.py     # /skill slash command with autocomplete
-    session_manage.py    # /sessions, /sync-sessions, /resume-info
+    session_manage.py    # /sessions, /sync-sessions, /resume, /resume-info, /sync-settings
     session_sync.py      # Thread-creation and message-posting for sync-sessions
     prompt_builder.py    # build_prompt_and_images() — pure function
     webhook_trigger.py   # Webhook → Claude Code task execution (CI/CD)

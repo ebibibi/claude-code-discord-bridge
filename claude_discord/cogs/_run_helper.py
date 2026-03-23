@@ -182,9 +182,9 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
         if system_context
         else config.runner
     )
-    # Inject per-invocation image URLs (not inherited by runner.clone()).
-    if config.image_urls:
-        runner.image_urls = config.image_urls
+    # Inject per-invocation images (not inherited by runner.clone()).
+    if config.images:
+        runner.images = config.images
 
     # Keep stop_view in sync with the runner that will own the live subprocess.
     # When system_context is present a fresh clone is created above, making the

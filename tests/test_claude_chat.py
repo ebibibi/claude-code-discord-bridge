@@ -488,6 +488,28 @@ class TestFetchSeedContext:
         result = await ClaudeChatCog._fetch_seed_context(thread)
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_spawn_auto_start_true_calls_run_claude(self) -> None:
+        """When auto_start=True (default), _run_claude IS called."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        mock_run = AsyncMock()
+        with patch.object(cog, "_run_claude", new=mock_run):
+            await cog.spawn_session(channel, "Start session", auto_start=True)
+
+        mock_run.assert_called_once()
+
 
 class TestOnReady:
     """Tests for ClaudeChatCog.on_ready — startup session resume logic."""
@@ -858,6 +880,7 @@ class TestImageOnlyMessage:
         thread.parent_id = 999
         thread.send = AsyncMock()
         msg = MagicMock(spec=discord.Message)
+        msg.id = thread_id  # must be an int so str(msg.id) is a valid path on Windows
         msg.channel = thread
         msg.content = ""  # No text — image only
         msg.author = MagicMock()
@@ -873,15 +896,16 @@ class TestImageOnlyMessage:
 
     @pytest.mark.asyncio
     async def test_build_prompt_and_images_returns_empty_prompt(self) -> None:
-        """Image-only message should return empty prompt + image URL list."""
+        """Image-only message should return header + ImageData list."""
         cog = _make_cog()
         msg = self._make_image_message()
 
-        prompt, image_urls = await cog._build_prompt_and_images(msg)
+        prompt, images = await cog._build_prompt_and_images(msg)
 
-        assert prompt == ""
-        assert len(image_urls) == 1
-        assert "photo.png" in image_urls[0]
+        # With save_dir enabled, image-only messages get an attachment header.
+        assert "photo.png" in prompt
+        assert len(images) == 1
+        assert images[0].media_type == "image/png"
 
     @pytest.mark.asyncio
     async def test_handle_thread_reply_does_not_crash(self) -> None:
@@ -894,11 +918,10 @@ class TestImageOnlyMessage:
         await cog._handle_thread_reply(msg)
 
         cog._run_claude.assert_called_once()
-        # Verify image_urls were passed through
+        # Verify images were passed through
         call_kwargs = cog._run_claude.call_args
-        assert call_kwargs.kwargs.get("image_urls") == [
-            "https://cdn.discordapp.com/attachments/111/222/photo.png"
-        ]
+        images = call_kwargs.kwargs.get("images")
+        assert images is not None and len(images) == 1
 
     @pytest.mark.asyncio
     async def test_handle_thread_reply_skips_empty_message(self) -> None:

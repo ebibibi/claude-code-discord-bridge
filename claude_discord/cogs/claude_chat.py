@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
+import tempfile
 from typing import TYPE_CHECKING
 
 import discord
@@ -21,6 +23,7 @@ from discord.ext import commands
 
 from ..claude.rewind import find_session_jsonl, parse_user_turns
 from ..claude.runner import ClaudeRunner
+from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
@@ -58,6 +61,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "context": "📌 Session",
     "usage": "📌 Session",
     "sessions": "📌 Session",
+    "resume": "📌 Session",
     "resume-info": "📌 Session",
     "sync-sessions": "📌 Session",
     "sync-settings": "📌 Session",
@@ -97,12 +101,15 @@ class ClaudeChatCog(commands.Cog):
         inline_reply_channel_ids: set[int] | None = None,
         chat_only_channel_ids: set[int] | None = None,
         auto_rename_threads: bool = False,
+        monitor_all_channels: bool = False,
     ) -> None:
         self.bot = bot
         self.repo = repo
         self.runner = runner
         self._max_concurrent = max_concurrent
         self._allowed_user_ids = allowed_user_ids
+        # When True, skip channel-ID filtering and accept all guild channels.
+        self._monitor_all_channels = monitor_all_channels
         # Set of channel IDs to listen on.  When provided, overrides bot.channel_id.
         # Falls back to {bot.channel_id} for backward compatibility.
         if channel_ids is not None:
@@ -200,8 +207,28 @@ class ClaudeChatCog(commands.Cog):
         if self._allowed_user_ids is not None and message.author.id not in self._allowed_user_ids:
             return
 
+        # Determine whether this channel/thread is a valid target.
+        # When monitor_all_channels is True, accept any guild text/forum channel.
+        is_target_channel = message.channel.id in self._channel_ids
+        is_target_thread = (
+            isinstance(message.channel, discord.Thread)
+            and message.channel.parent_id in self._channel_ids
+        )
+
+        if (
+            self._monitor_all_channels
+            and not is_target_channel
+            and not is_target_thread
+            and hasattr(message.channel, "guild")
+            and message.channel.guild is not None
+        ):
+            if isinstance(message.channel, discord.Thread):
+                is_target_thread = True
+            else:
+                is_target_channel = True
+
         # Check if message is in one of the configured channels (new conversation)
-        if message.channel.id in self._channel_ids:
+        if is_target_channel:
             # In mention-only channels, only respond when the bot is @mentioned
             if (
                 message.channel.id in self._mention_only_channel_ids
@@ -212,10 +239,7 @@ class ClaudeChatCog(commands.Cog):
             return
 
         # Check if message is in a thread under one of the configured channels
-        if (
-            isinstance(message.channel, discord.Thread)
-            and message.channel.parent_id in self._channel_ids
-        ):
+        if is_target_thread:
             await self._handle_thread_reply(message)
 
     @app_commands.command(name="help", description="Show available commands and how to use the bot")
@@ -425,7 +449,7 @@ class ClaudeChatCog(commands.Cog):
 
     async def _handle_new_conversation(self, message: discord.Message) -> None:
         """Start a Claude Code session, creating a thread unless inline-reply mode is active."""
-        prompt, image_urls = await self._build_prompt_and_images(message)
+        prompt, images = await self._build_prompt_and_images(message)
         chat_only = message.channel.id in self._chat_only_channel_ids
         if (
             isinstance(message.channel, discord.TextChannel)
@@ -437,7 +461,7 @@ class ClaudeChatCog(commands.Cog):
                 message.channel,
                 prompt,
                 session_id=None,
-                image_urls=image_urls,
+                images=images,
                 chat_only=chat_only,
             )
         else:
@@ -450,7 +474,7 @@ class ClaudeChatCog(commands.Cog):
                 thread,
                 prompt,
                 session_id=None,
-                image_urls=image_urls,
+                images=images,
                 chat_only=chat_only,
             )
 
@@ -498,9 +522,10 @@ class ClaudeChatCog(commands.Cog):
             session_id: Optional Claude session ID to resume via ``--resume``.
                         When supplied the new Claude process continues the
                         previous conversation rather than starting fresh.
-            auto_start: When True (default), start Claude Code immediately.
-                        When False, only create the thread and post the seed
-                        message — Claude will start when a user replies.
+            auto_start: Whether to immediately start a Claude Code session.
+                        When ``False``, only the thread and seed message are
+                        created — a Claude session will start when a user
+                        replies in the thread.  Defaults to ``True``.
 
         Returns:
             The newly created :class:`discord.Thread`.
@@ -666,7 +691,7 @@ class ClaudeChatCog(commands.Cog):
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
-        prompt, image_urls = await self._build_prompt_and_images(message)
+        prompt, images = await self._build_prompt_and_images(message)
 
         # When there is no session record, this is the first human reply in a
         # thread created via /api/spawn with auto_start=false.  The seed
@@ -679,7 +704,7 @@ class ClaudeChatCog(commands.Cog):
                 prompt = f"{seed_context}\n\n---\n\n{prompt}"
 
         # Nothing to send — ignore silently (e.g. unsupported attachment only).
-        if not prompt and not image_urls:
+        if not prompt and not images:
             return
 
         # User replied — remove this thread from the inbox immediately so the
@@ -715,14 +740,25 @@ class ClaudeChatCog(commands.Cog):
             thread,
             prompt,
             session_id=session_id,
-            image_urls=image_urls,
+            images=images,
             working_dir_override=record.working_dir if record else None,
             chat_only=chat_only,
         )
 
-    async def _build_prompt_and_images(self, message: discord.Message) -> tuple[str, list[str]]:
-        """Delegate to the standalone prompt_builder module."""
-        return await build_prompt_and_images(message)
+    async def _build_prompt_and_images(
+        self, message: discord.Message
+    ) -> tuple[str, list[ImageData]]:
+        """Delegate to the standalone prompt_builder module.
+
+        When the message has attachments, creates a temporary directory so all
+        files (including PDF, Excel, etc.) are saved to disk and their paths
+        are listed in a header prepended to the prompt.
+        """
+        save_dir: str | None = None
+        if message.attachments:
+            save_dir = os.path.join(tempfile.gettempdir(), "ccdb-uploads", str(message.id))
+            os.makedirs(save_dir, exist_ok=True)
+        return await build_prompt_and_images(message, save_dir=save_dir)
 
     @staticmethod
     async def _fetch_seed_context(thread: discord.Thread) -> str | None:
@@ -753,7 +789,7 @@ class ClaudeChatCog(commands.Cog):
         thread: discord.Thread | discord.TextChannel,
         prompt: str,
         session_id: str | None,
-        image_urls: list[str] | None = None,
+        images: list[ImageData] | None = None,
         fork: bool = False,
         working_dir_override: str | None = None,
         chat_only: bool = False,
@@ -834,7 +870,7 @@ class ClaudeChatCog(commands.Cog):
                         lounge_repo=self._lounge_repo,
                         stop_view=stop_view,
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
-                        image_urls=image_urls,
+                        images=images,
                         attach_on_request=wants_file_attachment(prompt),
                         inbox_repo=getattr(self.bot, "inbox_repo", None),
                         inbox_dashboard=dashboard,

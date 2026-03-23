@@ -134,3 +134,23 @@ class TestConcurrencyNotice:
         notice = registry.build_concurrency_notice(1001)
         # Should mention files, ports, or processes
         assert any(word in notice.lower() for word in ["file", "port", "process", "resource"])
+
+    def test_notice_includes_own_thread_id(self) -> None:
+        """The notice should identify the current session's thread ID.
+
+        After context compaction the AI loses awareness of its own identity.
+        The concurrency notice must explicitly state the thread ID so the AI
+        can distinguish its own earlier lounge posts from other sessions'.
+        """
+        registry = SessionRegistry()
+        registry.register(1001, "my task")
+        notice = registry.build_concurrency_notice(1001)
+        assert "1001" in notice
+        assert "thread" in notice.lower()
+
+    def test_notice_includes_this_thread_guidance(self) -> None:
+        """The notice should explain that [this thread] markers are self-posts."""
+        registry = SessionRegistry()
+        registry.register(1001, "my task")
+        notice = registry.build_concurrency_notice(1001)
+        assert "[this thread]" in notice

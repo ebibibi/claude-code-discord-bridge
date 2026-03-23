@@ -27,7 +27,6 @@ def _make_channel() -> MagicMock:
     """Return a mocked discord.TextChannel."""
     channel = MagicMock(spec=discord.TextChannel)
     msg = MagicMock(spec=discord.Message)
-    msg.pin = AsyncMock()
     msg.edit = AsyncMock()
     channel.send = AsyncMock(return_value=msg)
     return channel
@@ -64,22 +63,6 @@ class TestInitialize:
         # Embed should be passed as keyword argument
         call_kwargs = channel.send.call_args.kwargs
         assert "embed" in call_kwargs
-
-    @pytest.mark.asyncio
-    async def test_initialize_attempts_pin(self) -> None:
-        dashboard, channel = _make_dashboard()
-        await dashboard.initialize()
-        msg = channel.send.return_value
-        msg.pin.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_initialize_survives_pin_failure(self) -> None:
-        """A failed pin (no permission) must not crash the dashboard."""
-        dashboard, channel = _make_dashboard()
-        msg = channel.send.return_value
-        msg.pin.side_effect = discord.HTTPException(MagicMock(), "Missing Permissions")
-        # Should not raise
-        await dashboard.initialize()
 
 
 # ---------------------------------------------------------------------------
