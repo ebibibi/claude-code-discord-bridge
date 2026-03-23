@@ -815,6 +815,7 @@ class TestImageOnlyMessage:
         thread.parent_id = 999
         thread.send = AsyncMock()
         msg = MagicMock(spec=discord.Message)
+        msg.id = thread_id  # must be an int so str(msg.id) is a valid path on Windows
         msg.channel = thread
         msg.content = ""  # No text — image only
         msg.author = MagicMock()
