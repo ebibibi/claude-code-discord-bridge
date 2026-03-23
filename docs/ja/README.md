@@ -197,6 +197,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **スタートアップリジューム** — 任意のBot 再起動後に中断セッションを自動再開。`AutoUpgradeCog`（アップグレード再起動）および `ClaudeChatCog.cog_unload()`（その他すべてのシャットダウン）が自動登録、または `POST /api/mark-resume` で手動登録
 - **プログラム的スポーン** — `POST /api/spawn` でスクリプトや Claude サブプロセスから新しい Discord スレッド + Claude セッションを作成。スレッド作成後すぐに非ブロッキング 201 を返す
 - **スレッド ID 注入** — すべての Claude サブプロセスに `DISCORD_THREAD_ID` 環境変数を渡し、セッションから `$CCDB_API_URL/api/spawn` で子セッションを起動可能
+- **StatusLine 表示** — Claude Code の `settings.json` に `statusLine` が設定されている場合、各セッション返信後に Discord に表示
 - **Worktree 管理** — `/worktree-list` でアクティブなセッション Worktree を clean/dirty ステータス付きで表示、`/worktree-cleanup` で孤立した clean な Worktree を削除（`dry_run` プレビューあり）
 - **実行時モデル切り替え** — `/model-show` で現在のグローバルモデルとスレッドごとのセッションモデルを表示、`/model-set` で再起動不要のまま全新規セッションのモデルを変更
 - **実行時ツールパーミッション** — `/tools-show` で現在の許可ツールを表示、`/tools-set` でトグルメニューからツールのオン/オフを切り替え、`/tools-reset` で `.env` デフォルト設定に戻す — すべて再起動不要
@@ -474,6 +475,28 @@ INLINE_REPLY_CHANNEL_IDS=333,444
 ```
 
 インライン返信モードでは、Claude の返信は新しいスレッドではなくチャンネル内のメッセージとして直接送信されます。セッションは内部で追跡されているため、その後のメッセージも同じ Claude セッションとして継続します。
+
+#### チャットのみチャンネル
+
+特定のチャンネルで技術的な UI（ツール埋め込み、thinking ブロック、セッション開始/完了通知、Todo リスト）を非表示にし、**Claude のテキスト返信のみ**を表示する — 非技術系ユーザーが見ている公開チャンネルに便利です:
+
+```python
+await setup_bridge(
+    bot,
+    runner,
+    claude_channel_ids={111, 444},
+    chat_only_channel_ids={444},  # #444 ではテキストのみ表示、ツール詳細は非表示
+    allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
+)
+```
+
+環境変数でも設定可能（カンマ区切りのチャンネル ID）:
+
+```
+CHAT_ONLY_CHANNEL_IDS=444,555
+```
+
+チャットのみモードでも、パーミッションリクエストと `AskUserQuestion` プロンプトは**常に表示**されます — 人間の入力が必要なため、必ず表示する必要があります。
 
 ---
 
@@ -879,6 +902,7 @@ uv run pytest tests/ -v --cov=claude_discord
 - **WatchdogCog** — Todoist 期限切れタスクモニター（30 分チェック、デイリー重複排除、重要度別アラート）
 - **AutoUpgradeCog** — GitHub webhook + systemctl restart による自己更新
 - **DocsSyncCog** — push 時の Webhook 経由でドキュメントを自動翻訳
+- **AlertResponderCog** — 汎用アラート監視 Cog。設定可能なソースを監視し、重要度付き通知を Discord に投稿
 
 実行方法: `ccdb start --cogs-dir examples/ebibot/cogs/`
 

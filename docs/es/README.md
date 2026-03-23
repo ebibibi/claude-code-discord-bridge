@@ -175,6 +175,7 @@ Si el bot se reinicia a mitad de sesión, las sesiones de Claude interrumpidas s
 - **Reanudación al inicio** — Las sesiones interrumpidas se reinician automáticamente tras cualquier reinicio del bot; `AutoUpgradeCog` (reinicios por actualización) y `ClaudeChatCog.cog_unload()` (todos los demás apagados) las marcan automáticamente, o usa `POST /api/mark-resume` manualmente
 - **Creación programática** — `POST /api/spawn` crea un nuevo hilo de Discord + sesión de Claude desde cualquier script o subproceso de Claude; devuelve un 201 no bloqueante inmediatamente tras la creación del hilo
 - **Inyección de ID de hilo** — La variable de entorno `DISCORD_THREAD_ID` se pasa a cada subproceso de Claude, permitiendo que las sesiones creen sesiones hijas via `$CCDB_API_URL/api/spawn`
+- **Visualización de StatusLine** — Si `settings.json` de Claude Code tiene `statusLine` configurado, su salida se muestra en Discord después de cada respuesta de sesión
 - **Gestión de worktrees** — `/worktree-list` muestra todos los worktrees de sesión activos con estado limpio/sucio; `/worktree-cleanup` elimina worktrees limpios huérfanos (admite vista previa con `dry_run`)
 - **Rebobinar conversación** — `/rewind` restablece el historial de conversación manteniendo los archivos de trabajo que Claude creó; el mensaje de confirmación muestra el % de uso del contexto en el momento del reinicio
 - **Bifurcar conversación** — `/fork` usa `--fork-session` para crear un nuevo hilo desde el mismo estado de sesión, permitiéndote explorar una dirección diferente sin afectar el hilo original
@@ -302,6 +303,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLI_SESSIONS_PATH` | Ruta a `~/.claude/projects` para descubrimiento de sesiones CLI (habilita `/sync-sessions`) | (opcional) |
 | `MENTION_ONLY_CHANNEL_IDS` | IDs de canal separadas por coma donde el bot solo responde cuando se le @menciona | (opcional) |
 | `INLINE_REPLY_CHANNEL_IDS` | IDs de canal separadas por coma donde el bot responde en línea (sin crear hilo) | (opcional) |
+| `CHAT_ONLY_CHANNEL_IDS` | IDs de canal separadas por coma donde solo se muestran las respuestas de texto de Claude (embeds de herramientas/thinking/Todo ocultos) | (opcional) |
 | `THREAD_INBOX_ENABLED` | Habilita la bandeja de entrada persistente de hilos (clasifica sesiones como `waiting`/`done`/`ambiguous` via `claude -p`; mostrado en el panel de hilos) | `false` |
 | `THREAD_AUTO_RENAME` | Renombra automáticamente los títulos de nuevos hilos con Claude AI — genera un título corto y descriptivo del primer mensaje del usuario mediante una llamada a `claude -p` en segundo plano (sin retrasar el inicio de la sesión) | `false` |
 

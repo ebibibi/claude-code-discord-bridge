@@ -175,6 +175,7 @@ Se o bot reiniciar no meio de uma sessão, as sessões do Claude interrompidas s
 - **Retomada ao iniciar** — Sessões interrompidas reiniciam automaticamente após qualquer reinício do bot; `AutoUpgradeCog` (reinícios por atualização) e `ClaudeChatCog.cog_unload()` (todos os outros encerramentos) as marcam automaticamente, ou use `POST /api/mark-resume` manualmente
 - **Criação programática** — `POST /api/spawn` cria uma nova thread do Discord + sessão do Claude de qualquer script ou subprocesso do Claude; retorna um 201 não bloqueante imediatamente após a criação da thread
 - **Injeção de ID da thread** — A variável de ambiente `DISCORD_THREAD_ID` é passada para cada subprocesso do Claude, permitindo que sessões criem sessões filhas via `$CCDB_API_URL/api/spawn`
+- **Exibição de StatusLine** — Se o `settings.json` do Claude Code tiver `statusLine` configurado, sua saída é exibida no Discord após cada resposta de sessão
 - **Gerenciamento de worktree** — `/worktree-list` mostra todos os worktrees de sessão ativos com status limpo/sujo; `/worktree-cleanup` remove worktrees limpos órfãos (suporta preview com `dry_run`)
 - **Rebobinar conversa** — `/rewind` redefine o histórico de conversa mantendo os arquivos de trabalho que o Claude criou; a mensagem de confirmação mostra o % de uso do contexto no momento do reset
 - **Bifurcar conversa** — `/fork` usa `--fork-session` para criar uma nova thread que continua do mesmo estado de sessão, permitindo explorar uma direção diferente sem afetar a thread original
@@ -302,6 +303,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLI_SESSIONS_PATH` | Caminho para `~/.claude/projects` para descoberta de sessões CLI (habilita `/sync-sessions`) | (opcional) |
 | `MENTION_ONLY_CHANNEL_IDS` | IDs de canal separados por vírgula onde o bot responde apenas quando @mencionado | (opcional) |
 | `INLINE_REPLY_CHANNEL_IDS` | IDs de canal separados por vírgula onde o bot responde inline (sem criar thread) | (opcional) |
+| `CHAT_ONLY_CHANNEL_IDS` | IDs de canal separados por vírgula onde apenas as respostas de texto do Claude são exibidas (embeds de ferramentas/thinking/Todo ocultos) | (opcional) |
 | `THREAD_INBOX_ENABLED` | Ativa a caixa de entrada persistente de threads (classifica sessões como `waiting`/`done`/`ambiguous` via `claude -p`; exibido no painel de threads) | `false` |
 | `THREAD_AUTO_RENAME` | Renomeia automaticamente títulos de novas threads com Claude AI — gera um título curto e descritivo da primeira mensagem do usuário via chamada `claude -p` em segundo plano (sem atrasar o início da sessão) | `false` |
 
