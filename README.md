@@ -536,9 +536,15 @@ Claude Code CLI runs in **`-p` (non-interactive) mode** when used through ccdb. 
 | `default` | ❌ **All tools rejected** — unusable | Do not use |
 | `acceptEdits` | ⚠️ Edit/Write auto-approved, Bash rejected (Claude falls back to Write for file ops) | Minimum viable option |
 | `bypassPermissions` | ✅ All tools approved | Works, but prefer the flag below |
-| **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`** | ✅ **All tools approved** | **Recommended** — ccdb already restricts access via `allowed_user_ids` |
+| **`auto`** | ✅ **AI-classified safety** — safe operations auto-approved, dangerous operations blocked | **Recommended** — best balance of safety and usability |
+| `plan` | ✅ AI-classified (read-only bias) — similar to auto but more conservative | For read-heavy workflows |
+| **`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`** | ✅ **All tools approved, no safety checks** | Legacy "yolo" mode — use when auto mode is too restrictive |
 
-**Our recommendation:** Set `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`. Since ccdb controls who can interact with Claude via `allowed_user_ids`, the CLI-level permission checks add friction without meaningful security benefit. The "dangerously" in the name reflects the CLI's general-purpose warning; in the ccdb context where access is already gated, it's the practical choice.
+**Our recommendation:** Set `CLAUDE_PERMISSION_MODE=auto`. Auto mode uses an AI classifier to automatically approve safe operations (file edits, local testing, git push to working branch) while blocking dangerous ones (force push, production deploys, credential leakage). This gives Claude full autonomy for normal development work without the "anything goes" risk of yolo mode.
+
+**Fallback to yolo mode:** If auto mode blocks operations you need, set `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true` instead. Since ccdb controls who can interact with Claude via `allowed_user_ids`, the CLI-level permission checks add friction without meaningful security benefit. The "dangerously" in the name reflects the CLI's general-purpose warning; in the ccdb context where access is already gated, it's a practical choice.
+
+> **Note:** When `CLAUDE_PERMISSION_MODE` is set to `auto` or `plan`, `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` is automatically ignored — these modes have their own safety classifiers that would be overridden by the yolo flag.
 
 **For fine-grained control**, use `CLAUDE_ALLOWED_TOOLS` to allow specific tools without fully bypassing permissions:
 

@@ -351,6 +351,11 @@ class TestWebhookTriggerDataclass:
         assert trigger.timeout == 300
         assert trigger.allowed_tools is None
         assert trigger.dangerously_skip_permissions is True
+        assert trigger.permission_mode is None
+
+    def test_permission_mode_override(self) -> None:
+        trigger = WebhookTrigger(prompt="test", permission_mode="auto")
+        assert trigger.permission_mode == "auto"
 
     def test_frozen(self) -> None:
         trigger = WebhookTrigger(prompt="test")

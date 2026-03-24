@@ -47,6 +47,7 @@ class WebhookTrigger:
     timeout: int = 300
     allowed_tools: list[str] | None = None
     dangerously_skip_permissions: bool = True
+    permission_mode: str | None = None
 
 
 class WebhookTriggerCog(commands.Cog):
@@ -141,6 +142,8 @@ class WebhookTriggerCog(commands.Cog):
 
         runner = self.runner.clone()
         runner.dangerously_skip_permissions = trigger.dangerously_skip_permissions
+        if trigger.permission_mode is not None:
+            runner.permission_mode = trigger.permission_mode
         runner.timeout_seconds = trigger.timeout
         if trigger.working_dir:
             runner.working_dir = trigger.working_dir

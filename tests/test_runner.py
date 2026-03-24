@@ -67,6 +67,34 @@ class TestBuildArgs:
         args = runner._build_args("hello", session_id=None)
         assert "--dangerously-skip-permissions" not in args
 
+    def test_auto_mode_suppresses_dangerously_skip(self) -> None:
+        """When permission_mode='auto', --dangerously-skip-permissions is NOT added."""
+        runner = ClaudeRunner(permission_mode="auto", dangerously_skip_permissions=True)
+        args = runner._build_args("hello", session_id=None)
+        assert "--dangerously-skip-permissions" not in args
+        idx = args.index("--permission-mode")
+        assert args[idx + 1] == "auto"
+
+    def test_auto_mode_without_yolo(self) -> None:
+        """auto mode works without dangerously_skip_permissions flag."""
+        runner = ClaudeRunner(permission_mode="auto")
+        args = runner._build_args("hello", session_id=None)
+        assert "--dangerously-skip-permissions" not in args
+        idx = args.index("--permission-mode")
+        assert args[idx + 1] == "auto"
+
+    def test_plan_mode_suppresses_dangerously_skip(self) -> None:
+        """When permission_mode='plan', --dangerously-skip-permissions is NOT added."""
+        runner = ClaudeRunner(permission_mode="plan", dangerously_skip_permissions=True)
+        args = runner._build_args("hello", session_id=None)
+        assert "--dangerously-skip-permissions" not in args
+
+    def test_yolo_still_works_with_other_modes(self) -> None:
+        """dangerously_skip_permissions works with non-auto/plan modes."""
+        runner = ClaudeRunner(permission_mode="acceptEdits", dangerously_skip_permissions=True)
+        args = runner._build_args("hello", session_id=None)
+        assert "--dangerously-skip-permissions" in args
+
     def test_include_partial_messages_default(self) -> None:
         runner = ClaudeRunner()
         args = runner._build_args("hello", session_id=None)

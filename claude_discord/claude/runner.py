@@ -354,7 +354,12 @@ class ClaudeRunner:
         if self.include_partial_messages:
             args.append("--include-partial-messages")
 
-        if self.dangerously_skip_permissions:
+        # auto/plan modes have their own safety classifiers — adding
+        # --dangerously-skip-permissions would override them silently.
+        if self.dangerously_skip_permissions and self.permission_mode not in (
+            "auto",
+            "plan",
+        ):
             args.append("--dangerously-skip-permissions")
 
         if self.allowed_tools:
