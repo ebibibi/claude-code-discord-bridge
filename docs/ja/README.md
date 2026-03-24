@@ -112,6 +112,21 @@ curl -X POST "$CCDB_API_URL/api/spawn" \
 # スレッド作成後すぐに返答し、Claude はバックグラウンドで実行
 ```
 
+**遅延起動 (`auto_start=false`)** — スレッドを作成してシードメッセージを投稿するが、Claude をすぐには起動しない。ユーザーが返信したときに初めて Claude が起動し、シードメッセージのコンテキストを自動的に受け取ります。
+
+```bash
+# 通知を投稿し、ユーザーが返信したときに Claude を起動
+curl -X POST "$CCDB_API_URL/api/spawn" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "おはようございます！本日のサマリーです: ...",
+    "thread_name": "モーニングブリーフィング",
+    "auto_start": false
+  }'
+```
+
+デイリーブリーフィングや CI アラートなど、情報を先に表示してユーザーが Claude に問いかけるかどうかを判断するワークフローに便利です。
+
 Claude のサブプロセスには `DISCORD_THREAD_ID` 環境変数が渡されるため、実行中のセッションから子セッションを起動して作業を並列化できます。
 
 ### スタートアップリジューム
@@ -747,7 +762,7 @@ uv add "claude-code-discord-bridge[api]"
 | GET | `/api/tasks` | 登録済みタスクの一覧 |
 | DELETE | `/api/tasks/{id}` | タスクの削除 |
 | PATCH | `/api/tasks/{id}` | タスクの更新（有効/無効、スケジュール変更） |
-| POST | `/api/spawn` | 新しい Discord スレッドを作成し Claude Code セッションを起動（非ブロッキング） |
+| POST | `/api/spawn` | 新しい Discord スレッドを作成し Claude Code セッションを起動（非ブロッキング）。`auto_start: false` を指定するとユーザーの最初の返信まで Claude の起動を延期できる |
 | POST | `/api/mark-resume` | 次回 Bot 起動時のスレッド自動リジュームを登録 |
 | GET | `/api/lounge` | AI Lounge の最近のメッセージを取得 |
 | POST | `/api/lounge` | AI Lounge にメッセージを投稿（`label` オプション） |

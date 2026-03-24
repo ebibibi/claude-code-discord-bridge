@@ -111,6 +111,21 @@ curl -X POST "$CCDB_API_URL/api/spawn" \
 # Returns immediately with the thread ID; Claude runs in the background
 ```
 
+**Deferred start (`auto_start=false`)** — Create a thread and post a seed message without starting Claude immediately. Claude starts only when a user replies, and receives the seed message as context automatically.
+
+```bash
+# Post a notification; Claude starts when the user replies
+curl -X POST "$CCDB_API_URL/api/spawn" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Good morning! Here is your daily summary: ...",
+    "thread_name": "Morning Briefing",
+    "auto_start": false
+  }'
+```
+
+This is useful for notification-style workflows (e.g. daily briefings, CI alerts) where you want to display information upfront and let the user decide whether to engage Claude.
+
 Claude subprocesses receive `DISCORD_THREAD_ID` as an environment variable, so a running session can spawn child sessions to parallelize work.
 
 ### Startup Resume
@@ -746,7 +761,7 @@ uv add "claude-code-discord-bridge[api]"
 | GET | `/api/tasks` | List registered tasks |
 | DELETE | `/api/tasks/{id}` | Remove a task |
 | PATCH | `/api/tasks/{id}` | Update a task (enable/disable, change schedule) |
-| POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking) |
+| POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply |
 | POST | `/api/mark-resume` | Mark a thread for automatic resume on next bot startup |
 | GET | `/api/lounge` | Read recent AI Lounge messages |
 | POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |
