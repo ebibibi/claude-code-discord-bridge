@@ -701,6 +701,119 @@ class TestImageStreamJson:
         assert image_blocks[1]["source"]["data"] == "anBn"
 
 
+class TestLargePromptStdin:
+    """Tests for large prompt stdin passthrough to avoid ARG_MAX / E2BIG errors.
+
+    When a text-only prompt exceeds the OS command-line argument size limit,
+    the runner must switch to --input-format stream-json and send the prompt
+    via stdin instead of as a positional CLI argument.
+    """
+
+    def test_large_prompt_uses_stream_json_in_args(self) -> None:
+        """_build_args() uses --input-format stream-json for large prompts."""
+        runner = ClaudeRunner()
+        large_prompt = "x" * 200_000  # 200KB — well above any reasonable ARG_MAX
+        args = runner._build_args(large_prompt, session_id=None)
+        assert "--input-format" in args
+        idx = args.index("--input-format")
+        assert args[idx + 1] == "stream-json"
+
+    def test_large_prompt_not_in_cli_args(self) -> None:
+        """Large prompt must NOT appear as a positional CLI argument."""
+        runner = ClaudeRunner()
+        large_prompt = "x" * 200_000
+        args = runner._build_args(large_prompt, session_id=None)
+        assert "--" not in args
+        assert large_prompt not in args
+
+    def test_small_prompt_still_uses_cli_args(self) -> None:
+        """Small prompts continue to use the traditional -- <prompt> approach."""
+        runner = ClaudeRunner()
+        args = runner._build_args("hello", session_id=None)
+        assert "--input-format" not in args
+        assert args[-1] == "hello"
+        assert args[-2] == "--"
+
+    @pytest.mark.asyncio
+    async def test_run_uses_pipe_stdin_for_large_prompt(self) -> None:
+        """run() uses stdin=PIPE and sends the prompt via stdin for large prompts."""
+        import asyncio as _asyncio
+        import json
+
+        runner = ClaudeRunner()
+        large_prompt = "x" * 200_000
+
+        written: list[bytes] = []
+
+        def capture_write(data: bytes) -> None:
+            written.append(data)
+
+        mock_stdin = MagicMock()
+        mock_stdin.write = capture_write
+        mock_stdin.drain = AsyncMock()
+
+        mock_process = AsyncMock()
+        mock_process.pid = 42
+        mock_process.returncode = None
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.read = AsyncMock(return_value=b"")
+        mock_process.stdin = mock_stdin
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with (
+            patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_process,
+            ) as mock_exec,
+            patch.object(runner, "_cleanup", new_callable=AsyncMock),
+        ):
+            _ = [event async for event in runner.run(large_prompt)]
+
+        # Must use stdin=PIPE
+        call_kwargs = mock_exec.call_args[1]
+        assert call_kwargs["stdin"] == _asyncio.subprocess.PIPE
+
+        # Must have sent the prompt via stdin as stream-json
+        assert len(written) == 1
+        payload = json.loads(written[0].decode())
+        assert payload["type"] == "user"
+        content = payload["message"]["content"]
+        text_blocks = [c for c in content if c.get("type") == "text"]
+        assert len(text_blocks) == 1
+        assert text_blocks[0]["text"] == large_prompt
+
+    @pytest.mark.asyncio
+    async def test_run_still_uses_devnull_for_small_prompt(self) -> None:
+        """run() uses stdin=DEVNULL for small text-only prompts (no regression)."""
+        import asyncio as _asyncio
+
+        runner = ClaudeRunner()
+
+        mock_process = AsyncMock()
+        mock_process.pid = 42
+        mock_process.returncode = None
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.read = AsyncMock(return_value=b"")
+        mock_process.stdin = None
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with (
+            patch(
+                "asyncio.create_subprocess_exec",
+                return_value=mock_process,
+            ) as mock_exec,
+            patch.object(runner, "_cleanup", new_callable=AsyncMock),
+        ):
+            _ = [event async for event in runner.run("hello")]
+
+        call_kwargs = mock_exec.call_args[1]
+        assert call_kwargs["stdin"] == _asyncio.subprocess.DEVNULL
+
+
 class TestResolveWindowsCmd:
     """Tests for _resolve_windows_cmd helper.
 
