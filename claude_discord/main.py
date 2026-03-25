@@ -59,6 +59,7 @@ def load_config() -> dict[str, str]:
         "cli_sessions_path": os.getenv("CLI_SESSIONS_PATH", ""),
         "thread_inbox_enabled": os.getenv("THREAD_INBOX_ENABLED", "false"),
         "monitor_all_channels": os.getenv("CLAUDE_MONITOR_ALL_CHANNELS", "false"),
+        "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
     }
 
 
@@ -91,6 +92,7 @@ async def main() -> None:
         dangerously_skip_permissions=config["dangerously_skip_permissions"].lower()
         in ("true", "1", "yes"),
         allowed_tools=allowed_tools,
+        append_system_prompt=config["append_system_prompt"] or None,
     )
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None
