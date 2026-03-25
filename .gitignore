@@ -31,3 +31,6 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Node.js (tools/web)
+node_modules/
