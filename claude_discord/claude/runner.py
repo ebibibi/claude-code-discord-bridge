@@ -31,12 +31,6 @@ logger = logging.getLogger(__name__)
 # Sentinel to distinguish "not provided" from None (which means "no tool restrictions").
 _UNSET = object()
 
-# Prompts larger than this (in bytes) are sent via stdin (stream-json) instead
-# of as a positional CLI argument, to avoid hitting the OS ARG_MAX limit
-# (typically 2MB on Linux).  128KB leaves ample headroom for other arguments
-# and environment variables that also count toward the limit.
-_STDIN_PROMPT_THRESHOLD = 128 * 1024
-
 
 def _resolve_windows_cmd(cmd_path: Path) -> list[str] | None:
     """Resolve a Windows npm .cmd/.bat wrapper to ``[node, cli_js]``.
@@ -141,15 +135,10 @@ class ClaudeRunner:
             "Starting Claude CLI: %s (cwd=%s, pid will follow)", " ".join(args[:6]) + " ...", cwd
         )
 
-        # We need stdin=PIPE when the initial user message is sent via
-        # stream-json input: either because images are attached, or because
-        # the prompt is too large for a CLI argument (ARG_MAX / E2BIG).
-        #
-        # For small text-only sessions we keep stdin=DEVNULL: Claude CLI
-        # blocks on startup when stdin is an open pipe in default text-input
-        # mode, and we have no data to send.
-        use_stdin = self.images or len(prompt.encode()) > _STDIN_PROMPT_THRESHOLD
-        stdin_mode = asyncio.subprocess.PIPE if use_stdin else asyncio.subprocess.DEVNULL
+        # Always use stdin=PIPE with --input-format stream-json so we can:
+        #  1. Send the initial user message (text + optional images) via stdin
+        #  2. Respond to permission_request / elicitation / plan_approval events
+        stdin_mode = asyncio.subprocess.PIPE
 
         self._process = await asyncio.create_subprocess_exec(
             *args,
@@ -163,9 +152,9 @@ class ClaudeRunner:
 
         logger.info("Claude CLI started: pid=%s", self._process.pid)
 
-        # For stream-json input sessions, send the initial user message (including
-        # base64 image data or large text) to stdin now that the process is up.
-        if use_stdin and self._process.stdin is not None:
+        # Send the initial user message (text + optional base64 images) via stdin.
+        # stdin is always PIPE now (stream-json input mode).
+        if self._process.stdin is not None:
             await self._send_stream_json_message(prompt)
 
         try:
@@ -382,19 +371,10 @@ class ClaudeRunner:
         if self.append_system_prompt:
             args.extend(["--append-system-prompt", self.append_system_prompt])
 
-        if self.images or len(prompt.encode()) > _STDIN_PROMPT_THRESHOLD:
-            # Images are passed via stdin as base64 content blocks in the
-            # stream-json input protocol.  Large text prompts (>128KB) are
-            # also sent via stdin to avoid the OS ARG_MAX / E2BIG limit.
-            # The --input-format flag tells the CLI to read the user message
-            # from stdin instead of the positional argument, so we do NOT
-            # append "-- <prompt>" in this branch.
-            args.extend(["--input-format", "stream-json"])
-        else:
-            # Use -- to separate flags from positional args (prevents prompt
-            # content starting with - from being interpreted as a flag)
-            args.append("--")
-            args.append(prompt)
+        # Always use stream-json input so stdin stays open for:
+        #  - sending the user prompt (with optional base64 images)
+        #  - responding to permission_request / elicitation / plan_approval
+        args.extend(["--input-format", "stream-json"])
 
         # On Windows, .cmd/.bat wrappers cannot be executed directly by
         # create_subprocess_exec.  Resolve to the underlying Node script.

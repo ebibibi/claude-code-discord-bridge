@@ -27,9 +27,10 @@ class TestBuildArgs:
         assert "stream-json" in args
         assert "--model" in args
         assert "sonnet" in args
-        # prompt should be after -- separator
-        assert args[-1] == "hello"
-        assert args[-2] == "--"
+        # Prompt is sent via stdin (stream-json input), NOT as a CLI argument
+        assert "--input-format" in args
+        assert "hello" not in args
+        assert "--" not in args
 
     def test_session_id_valid_uuid(self) -> None:
         sid = "241e0726-bbc3-40e7-9db0-086823acde26"
@@ -45,11 +46,11 @@ class TestBuildArgs:
         with pytest.raises(ValueError, match="Invalid session_id"):
             self.runner._build_args("hello", session_id="abc def")
 
-    def test_prompt_after_double_dash(self) -> None:
-        """Prompt starting with -- should not be interpreted as a flag."""
+    def test_prompt_not_in_args(self) -> None:
+        """Prompt is always sent via stdin, never as a CLI argument (prevents flag injection)."""
         args = self.runner._build_args("--help", session_id=None)
-        idx = args.index("--")
-        assert args[idx + 1] == "--help"
+        assert "--help" not in args  # dangerous prompt not in args
+        assert "--" not in args  # no -- separator needed
 
     def test_allowed_tools(self) -> None:
         runner = ClaudeRunner(allowed_tools=["Bash", "Read"])
@@ -113,13 +114,12 @@ class TestBuildArgs:
         idx = args.index("--append-system-prompt")
         assert args[idx + 1] == "You are in a concurrent env."
 
-    def test_append_system_prompt_before_double_dash(self) -> None:
-        """--append-system-prompt must appear before the -- separator."""
-        runner = ClaudeRunner(append_system_prompt="ctx")
+    def test_always_uses_stream_json_input(self) -> None:
+        """All sessions use stream-json input for permission responses."""
+        runner = ClaudeRunner()
         args = runner._build_args("hello", session_id=None)
-        sp_idx = args.index("--append-system-prompt")
-        dd_idx = args.index("--")
-        assert sp_idx < dd_idx
+        idx = args.index("--input-format")
+        assert args[idx + 1] == "stream-json"
 
     def test_no_append_system_prompt_by_default(self) -> None:
         runner = ClaudeRunner()
@@ -533,18 +533,20 @@ class TestImageStreamJson:
         assert "--" not in args
         assert "look at this" not in args
 
-    def test_no_stream_json_input_format_without_images(self) -> None:
-        """Without images, --input-format stream-json is NOT added."""
+    def test_stream_json_input_always_present(self) -> None:
+        """--input-format stream-json is always added (needed for permission responses)."""
         runner = ClaudeRunner()
         args = runner._build_args("hello", session_id=None)
-        assert "--input-format" not in args
+        assert "--input-format" in args
+        idx = args.index("--input-format")
+        assert args[idx + 1] == "stream-json"
 
-    def test_prompt_in_cli_args_without_images(self) -> None:
-        """Without images, prompt is still passed as a CLI arg (existing behaviour)."""
+    def test_prompt_never_in_cli_args(self) -> None:
+        """Prompt is always sent via stdin, not as a CLI argument."""
         runner = ClaudeRunner()
         args = runner._build_args("hello", session_id=None)
-        assert args[-1] == "hello"
-        assert args[-2] == "--"
+        assert "hello" not in args
+        assert "--" not in args
 
     @pytest.mark.asyncio
     async def test_send_stream_json_message_base64_format(self) -> None:
@@ -666,11 +668,21 @@ class TestImageStreamJson:
         assert image_blocks[0]["source"]["media_type"] == "image/png"
 
     @pytest.mark.asyncio
-    async def test_run_uses_devnull_stdin_without_images(self) -> None:
-        """run() uses stdin=DEVNULL for text-only sessions (no hang risk)."""
+    async def test_run_uses_pipe_stdin_for_text_only(self) -> None:
+        """run() uses stdin=PIPE even for text-only sessions (needed for permission responses)."""
         import asyncio as _asyncio
+        import json
 
         runner = ClaudeRunner()
+
+        written: list[bytes] = []
+
+        def capture_write(data: bytes) -> None:
+            written.append(data)
+
+        mock_stdin = MagicMock()
+        mock_stdin.write = capture_write
+        mock_stdin.drain = AsyncMock()
 
         mock_process = AsyncMock()
         mock_process.pid = 42
@@ -679,7 +691,7 @@ class TestImageStreamJson:
         mock_process.stdout.readline = AsyncMock(return_value=b"")
         mock_process.stderr = AsyncMock()
         mock_process.stderr.read = AsyncMock(return_value=b"")
-        mock_process.stdin = None
+        mock_process.stdin = mock_stdin
         mock_process.wait = AsyncMock(return_value=0)
 
         with (
@@ -692,7 +704,14 @@ class TestImageStreamJson:
             _ = [event async for event in runner.run("hello")]
 
         call_kwargs = mock_exec.call_args[1]
-        assert call_kwargs["stdin"] == _asyncio.subprocess.DEVNULL
+        assert call_kwargs["stdin"] == _asyncio.subprocess.PIPE
+
+        # Prompt sent as stream-json message via stdin
+        assert len(written) == 1
+        payload = json.loads(written[0].decode())
+        assert payload["type"] == "user"
+        text_blocks = [c for c in payload["message"]["content"] if c.get("type") == "text"]
+        assert any("hello" in b["text"] for b in text_blocks)
 
     @pytest.mark.asyncio
     async def test_multiple_images_all_sent(self) -> None:
@@ -754,13 +773,13 @@ class TestLargePromptStdin:
         assert "--" not in args
         assert large_prompt not in args
 
-    def test_small_prompt_still_uses_cli_args(self) -> None:
-        """Small prompts continue to use the traditional -- <prompt> approach."""
+    def test_small_prompt_also_uses_stream_json(self) -> None:
+        """Small prompts also use stream-json (all prompts go via stdin now)."""
         runner = ClaudeRunner()
         args = runner._build_args("hello", session_id=None)
-        assert "--input-format" not in args
-        assert args[-1] == "hello"
-        assert args[-2] == "--"
+        assert "--input-format" in args
+        assert "hello" not in args
+        assert "--" not in args
 
     @pytest.mark.asyncio
     async def test_run_uses_pipe_stdin_for_large_prompt(self) -> None:
@@ -813,11 +832,21 @@ class TestLargePromptStdin:
         assert text_blocks[0]["text"] == large_prompt
 
     @pytest.mark.asyncio
-    async def test_run_still_uses_devnull_for_small_prompt(self) -> None:
-        """run() uses stdin=DEVNULL for small text-only prompts (no regression)."""
+    async def test_run_uses_pipe_stdin_for_small_prompt(self) -> None:
+        """run() uses stdin=PIPE even for small prompts (permission responses need it)."""
         import asyncio as _asyncio
+        import json
 
         runner = ClaudeRunner()
+
+        written: list[bytes] = []
+
+        def capture_write(data: bytes) -> None:
+            written.append(data)
+
+        mock_stdin = MagicMock()
+        mock_stdin.write = capture_write
+        mock_stdin.drain = AsyncMock()
 
         mock_process = AsyncMock()
         mock_process.pid = 42
@@ -826,7 +855,7 @@ class TestLargePromptStdin:
         mock_process.stdout.readline = AsyncMock(return_value=b"")
         mock_process.stderr = AsyncMock()
         mock_process.stderr.read = AsyncMock(return_value=b"")
-        mock_process.stdin = None
+        mock_process.stdin = mock_stdin
         mock_process.wait = AsyncMock(return_value=0)
 
         with (
@@ -839,7 +868,12 @@ class TestLargePromptStdin:
             _ = [event async for event in runner.run("hello")]
 
         call_kwargs = mock_exec.call_args[1]
-        assert call_kwargs["stdin"] == _asyncio.subprocess.DEVNULL
+        assert call_kwargs["stdin"] == _asyncio.subprocess.PIPE
+
+        # Prompt sent via stdin
+        assert len(written) == 1
+        payload = json.loads(written[0].decode())
+        assert payload["type"] == "user"
 
 
 class TestResolveWindowsCmd:
