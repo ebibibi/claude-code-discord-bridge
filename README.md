@@ -537,6 +537,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CUSTOM_COGS_DIR` | Directory containing custom Cog files to load at startup (see [Custom Cogs](#custom-cogs-extend-without-forking)) | (optional) |
 | `CLAUDE_ALLOWED_TOOLS` | Comma-separated list of allowed tools for Claude CLI | (optional) |
 | `CLAUDE_CHANNEL_IDS` | Additional channel IDs (comma-separated) for multi-channel setup | (optional) |
+| `APPEND_SYSTEM_PROMPT` | Extra text appended to Claude's system prompt — useful for injecting workarounds or custom CLI-level instructions without code changes | (optional) |
 | `THREAD_INBOX_ENABLED` | Enable the persistent thread inbox (classifies sessions as `waiting`/`done`/`ambiguous` via `claude -p`; shown in thread dashboard) | `false` |
 | `THREAD_AUTO_RENAME` | Auto-rename new thread titles using Claude AI — generates a short, descriptive title from the first user message via a background `claude -p` call (never delays session start) | `false` |
 | `API_HOST` | REST API bind address | `127.0.0.1` |
@@ -876,6 +877,10 @@ examples/
       watchdog.py          # Todoist overdue task monitor
       auto_upgrade.py      # Self-update via GitHub webhook
       docs_sync.py         # Auto-translate docs on push
+tools/                     # JBS AI Tools platform (monorepo companion)
+  api/                     # Azure Functions API — task-based file processing
+  web/                     # React + TypeScript + Vite frontend
+  infra/                   # Bicep infrastructure definitions
 ```
 
 ### Design Philosophy
