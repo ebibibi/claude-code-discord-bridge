@@ -1,7 +1,0 @@
-azure-functions>=1.17.0
-azure-identity>=1.15.0
-azure-data-tables>=12.5.0
-azure-storage-blob>=12.19.0
-httpx>=0.27.0
-openpyxl>=3.1.0
-pyyaml>=6.0.0
