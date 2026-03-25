@@ -22,6 +22,7 @@ ALLOWED_MIME_PREFIXES = (
 IMAGE_MIME_PREFIXES = ("image/",)
 MAX_ATTACHMENT_BYTES = 50_000  # 50 KB per file
 MAX_IMAGE_BYTES = 5_000_000  # 5 MB per image
+MAX_IMAGE_DIMENSION = 7999  # Claude API rejects images >= 8000px on any side
 MAX_TOTAL_BYTES = 100_000  # 100 KB across all text attachments
 MAX_ATTACHMENTS = 5
 MAX_IMAGES = 4  # Claude supports up to 4 images per prompt
@@ -65,6 +66,17 @@ async def build_prompt_and_images(message: discord.Message) -> tuple[str, list[s
                     "Skipping image %s: too large (%d bytes)",
                     attachment.filename,
                     attachment.size,
+                )
+                continue
+            # Claude API rejects images with any dimension >= 8000px
+            if (attachment.width and attachment.width > MAX_IMAGE_DIMENSION) or (
+                attachment.height and attachment.height > MAX_IMAGE_DIMENSION
+            ):
+                logger.debug(
+                    "Skipping image %s: dimensions too large (%sx%s)",
+                    attachment.filename,
+                    attachment.width,
+                    attachment.height,
                 )
                 continue
             image_urls.append(attachment.url)

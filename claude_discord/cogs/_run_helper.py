@@ -183,11 +183,14 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
                 await config.status.set_error()
         return processor.session_id
     finally:
-        await processor.finalize()
+        with contextlib.suppress(Exception):
+            await processor.finalize()
         if config.registry is not None:
-            config.registry.unregister(config.thread.id)
+            with contextlib.suppress(Exception):
+                config.registry.unregister(config.thread.id)
         if config.worktree_manager is not None:
-            await _cleanup_session_worktree(config)
+            with contextlib.suppress(Exception):
+                await _cleanup_session_worktree(config)
 
     # After the stream ends, handle pending AskUserQuestion by showing Discord
     # UI and resuming the session with the user's answer.
