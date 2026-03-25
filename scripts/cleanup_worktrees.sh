@@ -65,6 +65,20 @@ while IFS= read -r line; do
             continue
         fi
 
+        # Protect active dev worktree — never remove the worktree registered
+        # in ~/.ccdb-dev-worktree (used by `make dev-on` for local testing).
+        DEV_WORKTREE_FILE="$HOME/.ccdb-dev-worktree"
+        if [[ -f "$DEV_WORKTREE_FILE" ]]; then
+            dev_worktree=$(cat "$DEV_WORKTREE_FILE" | tr -d '[:space:]')
+            if [[ "$current_path" == "$dev_worktree" ]]; then
+                echo "  [PROTECTED] Active dev worktree — skipping"
+                ((kept++))
+                current_path=""
+                current_branch=""
+                continue
+            fi
+        fi
+
         if [[ -z "$current_branch" ]]; then
             echo "[WARN] $current_path: detached HEAD, no branch. Skipping."
             ((warned++))
