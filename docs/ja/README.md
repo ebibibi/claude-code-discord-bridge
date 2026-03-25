@@ -538,7 +538,6 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CUSTOM_COGS_DIR` | 起動時に読み込むカスタム Cog ファイルを含むディレクトリ（[カスタム Cog](#カスタム-cogフォーク不要で機能拡張) 参照） | （オプション） |
 | `CLAUDE_ALLOWED_TOOLS` | Claude CLI に許可するツールのカンマ区切りリスト | （オプション） |
 | `CLAUDE_CHANNEL_IDS` | マルチチャンネル設定用の追加チャンネル ID（カンマ区切り） | （オプション） |
-| `APPEND_SYSTEM_PROMPT` | Claude のシステムプロンプトに追記するテキスト — コード変更なしに CLI レベルの回避策やカスタム指示を注入するのに便利 | （オプション） |
 | `THREAD_INBOX_ENABLED` | 永続スレッドインボックスを有効化（`claude -p` でセッションを `waiting`/`done`/`ambiguous` に分類し、スレッドダッシュボードに表示） | `false` |
 | `THREAD_AUTO_RENAME` | 新しいスレッドのタイトルを Claude AI で自動リネーム — 最初のユーザーメッセージをもとにバックグラウンドの `claude -p` 呼び出しで短く分かりやすいタイトルを生成（セッション開始を遅延させない） | `false` |
 | `API_HOST` | REST API バインドアドレス | `127.0.0.1` |
@@ -878,10 +877,6 @@ examples/
       watchdog.py          # Todoist 期限切れタスクモニター
       auto_upgrade.py      # GitHub webhook 経由の自己更新
       docs_sync.py         # push 時のドキュメント自動翻訳
-tools/                     # JBS AI Tools プラットフォーム（モノレポ同梱）
-  api/                     # Azure Functions API — タスク定義ベースのファイル処理
-  web/                     # React + TypeScript + Vite フロントエンド
-  infra/                   # Bicep インフラ定義
 ```
 
 ### 設計思想
