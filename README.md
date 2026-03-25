@@ -575,7 +575,7 @@ Common tool names: `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, 
 
 **Runtime changes via Discord:** Use `/tools-set` to change allowed tools at runtime without restarting the bot. The setting is persisted and takes effect for all new sessions immediately. Use `/tools-show` to see the current configuration, or `/tools-reset` to revert to the `.env` default.
 
-> **Why don't permission buttons appear in Discord?** The CLI's `-p` mode never emits `permission_request` events, so there's nothing for ccdb to display. The `AskUserQuestion` buttons you see (choice prompts from Claude) are a different mechanism that works correctly. See [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) for the full investigation.
+> **Permission buttons in Discord:** When `CLAUDE_PERMISSION_MODE=default`, Claude emits `permission_request` events and ccdb displays Allow/Deny buttons in the thread. stdin is always kept open (stream-json input mode) so the bot can send responses back to Claude. If you are using `auto` or `plan` mode, Claude handles permissions automatically without requiring user interaction.
 
 ---
 

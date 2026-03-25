@@ -576,7 +576,7 @@ CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep
 
 **Discord からの実行時変更：** `/tools-set` を使用すると、Bot を再起動せずに実行時に許可ツールを変更できます。設定は永続化され、以降のすべての新規セッションに即座に反映されます。現在の設定を確認するには `/tools-show`、`.env` デフォルトに戻すには `/tools-reset` を使用してください。
 
-> **Discord にパーミッションボタンが表示されないのはなぜ？** CLI の `-p` モードは `permission_request` イベントを発行しないため、ccdb に表示するものがありません。表示される `AskUserQuestion` ボタン（Claude からの選択プロンプト）は別のメカニズムであり、正常に動作します。詳細な調査は [#210](https://github.com/ebibibi/claude-code-discord-bridge/issues/210) を参照してください。
+> **Discord のパーミッションボタン：** `CLAUDE_PERMISSION_MODE=default` の場合、Claude は `permission_request` イベントを発行し、ccdb はスレッドに許可／拒否ボタンを表示します。stdin は常時開放（stream-json 入力モード）されているため、Bot が Claude へ応答を返すことができます。`auto` または `plan` モードを使用している場合、Claude はユーザーの操作なしに自動でパーミッションを処理します。
 
 ---
 
