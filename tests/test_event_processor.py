@@ -1231,3 +1231,63 @@ class TestChatOnlyMode:
             c for c in thread.send.call_args_list if c.args and isinstance(c.args[0], str)
         ]
         assert not any("compact" in str(c).lower() for c in text_sends)
+
+
+class TestPermissionAutoApprove:
+    """Permission requests are auto-approved when dangerously_skip_permissions is True.
+
+    Workaround for CLI v2.1.78+ regression (upstream #35895) where
+    --dangerously-skip-permissions fails to bypass file-level sensitive-path
+    checks on Edit/Write tools.
+    """
+
+    @pytest.mark.asyncio
+    async def test_auto_approve_when_yolo_enabled(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """permission_request is auto-approved without Discord UI when yolo mode is on."""
+        from claude_discord.claude.types import PermissionRequest
+
+        runner.dangerously_skip_permissions = True
+        runner.inject_tool_result = AsyncMock()
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        event = StreamEvent(
+            message_type=MessageType.SYSTEM,
+            permission_request=PermissionRequest(
+                request_id="req-yolo-1",
+                tool_name="Edit",
+                tool_input={"file_path": "/home/user/.bashrc"},
+            ),
+        )
+        await p.process(event)
+
+        runner.inject_tool_result.assert_called_once_with("req-yolo-1", {"approved": True})
+        # No embed/view posted to Discord
+        thread.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_shows_ui_when_yolo_disabled(self, thread: MagicMock, runner: MagicMock) -> None:
+        """permission_request shows Allow/Deny buttons when yolo mode is off."""
+        from claude_discord.claude.types import PermissionRequest
+
+        runner.dangerously_skip_permissions = False
+        runner.inject_tool_result = AsyncMock()
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        event = StreamEvent(
+            message_type=MessageType.SYSTEM,
+            permission_request=PermissionRequest(
+                request_id="req-normal-1",
+                tool_name="Edit",
+                tool_input={"file_path": "/home/user/.bashrc"},
+            ),
+        )
+        await p.process(event)
+
+        # inject_tool_result NOT called — user must click Allow/Deny
+        runner.inject_tool_result.assert_not_called()
+        # Discord embed + view posted
+        thread.send.assert_called_once()
