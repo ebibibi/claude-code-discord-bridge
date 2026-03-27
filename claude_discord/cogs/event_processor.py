@@ -548,8 +548,30 @@ class EventProcessor:
         logger.info("Plan approval prompt posted (session=%s)", request_id)
 
     async def _handle_permission_request(self, event: StreamEvent) -> None:
-        """Post permission embed with Allow/Deny buttons."""
+        """Post permission embed with Allow/Deny buttons.
+
+        When dangerously_skip_permissions is enabled on the runner, auto-approve
+        the request immediately instead of showing the UI.  This works around a
+        CLI regression (v2.1.78+, upstream #35895) where --dangerously-skip-permissions
+        fails to bypass the file-level sensitive-path check on Edit/Write tools,
+        causing permission_request events to be emitted even in yolo mode.
+        """
         assert event.permission_request is not None
+
+        # Workaround for CLI v2.1.78+ regression (#35895):
+        # Auto-approve when yolo mode is active — the user already opted into
+        # unrestricted execution by setting dangerously_skip_permissions=true.
+        if self._config.runner.dangerously_skip_permissions:
+            await self._config.runner.inject_tool_result(
+                event.permission_request.request_id, {"approved": True}
+            )
+            logger.info(
+                "Permission auto-approved (yolo mode): %s (request_id=%s)",
+                event.permission_request.tool_name,
+                event.permission_request.request_id,
+            )
+            return
+
         embed = permission_embed(event.permission_request)
         view = PermissionView(self._config.runner, event.permission_request)
         await self._config.thread.send(embed=embed, view=view)
