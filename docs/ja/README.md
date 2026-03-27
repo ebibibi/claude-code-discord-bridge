@@ -521,7 +521,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 |--------|------|-----------|
 | `DISCORD_BOT_TOKEN` | Discord Bot トークン | （必須） |
 | `DISCORD_CHANNEL_ID` | Claude チャット用チャンネル ID | （必須） |
-| `CLAUDE_COMMAND` | Claude Code CLI へのパス | `claude` |
+| `CLAUDE_COMMAND` | Claude CLI バイナリのパスまたは名前。特定バージョンを固定する場合に使用（例: `CLAUDE_COMMAND=/usr/local/lib/node_modules/@anthropic-ai/claude-code@2.1.77/cli.js`）— 新バージョンのリグレッション回避に便利。 | `claude` |
 | `CLAUDE_MODEL` | 使用するモデル | `sonnet` |
 | `CLAUDE_PERMISSION_MODE` | CLI のパーミッションモード | `auto` |
 | `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | 全パーミッションチェックをスキップ（注意して使用） | `false` |
@@ -576,7 +576,7 @@ CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep
 
 **Discord からの実行時変更：** `/tools-set` を使用すると、Bot を再起動せずに実行時に許可ツールを変更できます。設定は永続化され、以降のすべての新規セッションに即座に反映されます。現在の設定を確認するには `/tools-show`、`.env` デフォルトに戻すには `/tools-reset` を使用してください。
 
-> **Discord のパーミッションボタン：** `CLAUDE_PERMISSION_MODE=default` の場合、Claude は `permission_request` イベントを発行し、ccdb はスレッドに許可／拒否ボタンを表示します。stdin は常時開放（stream-json 入力モード）されているため、Bot が Claude へ応答を返すことができます。`auto` または `plan` モードを使用している場合、Claude はユーザーの操作なしに自動でパーミッションを処理します。
+> **Discord のパーミッションボタン：** `CLAUDE_PERMISSION_MODE=default` の場合、Claude は `permission_request` イベントを発行し、ccdb はスレッドに許可／拒否ボタンを表示します。stdin は常時開放（stream-json 入力モード）されているため、Bot が Claude へ応答を返すことができます。`auto` または `plan` モードを使用している場合、Claude はユーザーの操作なしに自動でパーミッションを処理します。`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true`（yolo モード）の場合、ccdb は `permission_request` イベントを**即座に自動承認**します — 許可／拒否ボタンは表示されません。これは CLI のリグレッション（v2.1.78+、upstream [#35895](https://github.com/anthropics/claude-code/issues/35895)）の回避策で、`--dangerously-skip-permissions` がファイルレベルの機密パスチェックをバイパスできない問題に対処しています。
 
 ---
 

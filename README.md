@@ -520,7 +520,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 |----------|-------------|---------|
 | `DISCORD_BOT_TOKEN` | Your Discord bot token | (required) |
 | `DISCORD_CHANNEL_ID` | Channel ID for Claude chat | (required) |
-| `CLAUDE_COMMAND` | Path to Claude Code CLI | `claude` |
+| `CLAUDE_COMMAND` | Path or name of the Claude CLI binary. Use to pin a specific version (e.g. `CLAUDE_COMMAND=/usr/local/lib/node_modules/@anthropic-ai/claude-code@2.1.77/cli.js`) — useful to avoid regressions in newer CLI releases. | `claude` |
 | `CLAUDE_MODEL` | Model to use | `sonnet` |
 | `CLAUDE_PERMISSION_MODE` | Permission mode for CLI | `acceptEdits` |
 | `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | Skip all permission checks (use with caution) | `false` |
@@ -575,7 +575,7 @@ Common tool names: `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, 
 
 **Runtime changes via Discord:** Use `/tools-set` to change allowed tools at runtime without restarting the bot. The setting is persisted and takes effect for all new sessions immediately. Use `/tools-show` to see the current configuration, or `/tools-reset` to revert to the `.env` default.
 
-> **Permission buttons in Discord:** When `CLAUDE_PERMISSION_MODE=default`, Claude emits `permission_request` events and ccdb displays Allow/Deny buttons in the thread. stdin is always kept open (stream-json input mode) so the bot can send responses back to Claude. If you are using `auto` or `plan` mode, Claude handles permissions automatically without requiring user interaction.
+> **Permission buttons in Discord:** When `CLAUDE_PERMISSION_MODE=default`, Claude emits `permission_request` events and ccdb displays Allow/Deny buttons in the thread. stdin is always kept open (stream-json input mode) so the bot can send responses back to Claude. If you are using `auto` or `plan` mode, Claude handles permissions automatically without requiring user interaction. When `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true` (yolo mode), ccdb **auto-approves** any `permission_request` events immediately — no Allow/Deny buttons are shown. This is a workaround for a CLI regression (v2.1.78+, upstream [#35895](https://github.com/anthropics/claude-code/issues/35895)) where `--dangerously-skip-permissions` fails to bypass the file-level sensitive-path check.
 
 ---
 
