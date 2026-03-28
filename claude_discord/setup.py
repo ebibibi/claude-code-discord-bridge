@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from discord.ext.commands import Bot
 
     from .claude.runner import ClaudeRunner
+    from .database.board_repo import BoardRepository
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
     from .database.resume_repo import PendingResumeRepository
@@ -43,6 +44,7 @@ class BridgeComponents:
     task_repo: TaskRepository | None = None
     lounge_repo: LoungeRepository | None = None
     resume_repo: PendingResumeRepository | None = None
+    board_repo: BoardRepository | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -59,6 +61,8 @@ class BridgeComponents:
             api_server.lounge_repo = self.lounge_repo
         if self.resume_repo is not None:
             api_server.resume_repo = self.resume_repo
+        if self.board_repo is not None:
+            api_server.board_repo = self.board_repo
         api_server.session_repo = self.session_repo
 
 
@@ -116,6 +120,7 @@ async def setup_bridge(
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
     from .database.ask_repo import PendingAskRepository
+    from .database.board_repo import BoardRepository
     from .database.lounge_repo import LoungeRepository
     from .database.models import init_db
     from .database.repository import SessionRepository
@@ -145,6 +150,8 @@ async def setup_bridge(
     ask_repo = PendingAskRepository(session_db_path)
     lounge_repo = LoungeRepository(session_db_path)
     resume_repo = PendingResumeRepository(session_db_path)
+    board_repo = BoardRepository(session_db_path)
+    await board_repo.ensure_schema()
     logger.info("Session DB initialized: %s", session_db_path)
 
     # Attach repos to bot so generic cogs (e.g. AutoUpgradeCog) can discover them
@@ -202,6 +209,13 @@ async def setup_bridge(
     await bot.add_cog(channel_manage_cog)
     logger.info("Registered ChannelManageCog")
 
+    # --- ShohinSearchCog（商品マスター検索） ---
+    from .cogs.shohin_search import ShohinSearchCog
+
+    shohin_cog = ShohinSearchCog(bot)
+    await bot.add_cog(shohin_cog)
+    logger.info("Registered ShohinSearchCog")
+
     # --- SchedulerCog (optional) ---
     task_repo: TaskRepository | None = None
     if enable_scheduler:
@@ -217,6 +231,7 @@ async def setup_bridge(
         task_repo=task_repo,
         lounge_repo=lounge_repo,
         resume_repo=resume_repo,
+        board_repo=board_repo,
     )
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided
