@@ -38,6 +38,12 @@ ALTER TABLE scheduled_tasks ADD COLUMN anchor_hour INTEGER;
 ALTER TABLE scheduled_tasks ADD COLUMN anchor_minute INTEGER DEFAULT 0;
 """
 
+# Migration: add follow-up columns (thread_id for existing thread, one_shot for auto-disable)
+_MIGRATION_FOLLOWUP = """
+ALTER TABLE scheduled_tasks ADD COLUMN thread_id INTEGER;
+ALTER TABLE scheduled_tasks ADD COLUMN one_shot INTEGER DEFAULT 0;
+"""
+
 
 class TaskRepository:
     """Async CRUD for scheduled_tasks table."""
@@ -58,6 +64,12 @@ class TaskRepository:
                     if stmt:
                         await db.execute(stmt)
                 logger.info("Migrated scheduled_tasks: added anchor_hour, anchor_minute")
+            if "thread_id" not in columns:
+                for stmt in _MIGRATION_FOLLOWUP.strip().split(";"):
+                    stmt = stmt.strip()
+                    if stmt:
+                        await db.execute(stmt)
+                logger.info("Migrated scheduled_tasks: added thread_id, one_shot")
             await db.commit()
         logger.info("Task DB initialized at %s", self.db_path)
 
@@ -101,6 +113,7 @@ class TaskRepository:
             return None
         d = dict(row)
         d["enabled"] = bool(d["enabled"])
+        d["one_shot"] = bool(d.get("one_shot", 0))
         return d
 
     async def get_all(self) -> list[dict]:
@@ -113,6 +126,7 @@ class TaskRepository:
         for row in rows:
             d = dict(row)
             d["enabled"] = bool(d["enabled"])
+            d["one_shot"] = bool(d.get("one_shot", 0))
             result.append(d)
         return result
 
@@ -132,6 +146,7 @@ class TaskRepository:
         for row in rows:
             d = dict(row)
             d["enabled"] = bool(d["enabled"])
+            d["one_shot"] = bool(d.get("one_shot", 0))
             result.append(d)
         return result
 
@@ -150,6 +165,8 @@ class TaskRepository:
         run_immediately: bool = True,
         anchor_hour: int | None = None,
         anchor_minute: int | None = None,
+        thread_id: int | None = None,
+        one_shot: bool = False,
     ) -> int:
         """Create a new scheduled task. Returns the created ID.
 
@@ -162,6 +179,10 @@ class TaskRepository:
             anchor_minute: Optional wall-clock minute (0-59) to snap to.
                 When anchor_hour is set, next_run_at is calculated as the
                 next future occurrence of that time, preventing drift.
+            thread_id: Optional Discord thread ID to post into. When set,
+                the scheduler posts to this existing thread instead of
+                creating a new one (follow-up mode).
+            one_shot: If True, the task auto-disables after a single execution.
         """
         now = time.time()
         if anchor_hour is not None and not run_immediately:
@@ -174,8 +195,9 @@ class TaskRepository:
             cursor = await db.execute(
                 """INSERT INTO scheduled_tasks
                    (name, prompt, interval_seconds, channel_id, working_dir,
-                    enabled, next_run_at, created_at, anchor_hour, anchor_minute)
-                   VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)""",
+                    enabled, next_run_at, created_at, anchor_hour, anchor_minute,
+                    thread_id, one_shot)
+                   VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
                 (
                     name,
                     prompt,
@@ -186,6 +208,8 @@ class TaskRepository:
                     now,
                     anchor_hour,
                     anchor_minute,
+                    thread_id,
+                    1 if one_shot else 0,
                 ),
             )
             await db.commit()
@@ -251,10 +275,12 @@ class TaskRepository:
         working_dir: str | None = None,
         anchor_hour: int | None = None,
         anchor_minute: int | None = None,
+        thread_id: int | None = None,
     ) -> bool:
         """Partially update a task. Returns True if updated.
 
         Set ``anchor_hour=-1`` to clear the anchor (reset to relative mode).
+        Set ``thread_id=-1`` to clear the thread (reset to new-thread mode).
         """
         fields: list[str] = []
         values: list[object] = []
@@ -279,6 +305,13 @@ class TaskRepository:
                 values.append(anchor_hour)
                 fields.append("anchor_minute = ?")
                 values.append(anchor_minute if anchor_minute is not None else 0)
+        if thread_id is not None:
+            if thread_id < 0:
+                fields.append("thread_id = ?")
+                values.append(None)
+            else:
+                fields.append("thread_id = ?")
+                values.append(thread_id)
         if not fields:
             return False
         values.append(task_id)

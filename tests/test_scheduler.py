@@ -227,3 +227,161 @@ class TestSchedulerCogMasterLoop:
         ) as mock_run:
             await cog._master_loop()
         mock_run.assert_not_called()
+
+
+class TestSchedulerCogFollowUp:
+    """Tests for follow-up in existing threads (thread_id) and one-shot tasks."""
+
+    async def test_run_task_with_thread_id_posts_to_existing_thread(
+        self, repo: TaskRepository
+    ) -> None:
+        """When thread_id is set, _run_task should fetch the existing thread
+        and post there instead of creating a new one."""
+        import discord
+
+        task_id = await repo.create(
+            name="followup",
+            prompt="Check pipeline",
+            interval_seconds=86400,
+            channel_id=99,
+            thread_id=555555,
+        )
+        task = await repo.get(task_id)
+
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_thread.send = AsyncMock()
+
+        bot = _make_bot()
+        bot.get_channel = MagicMock(
+            side_effect=lambda cid: {
+                99: MagicMock(spec=discord.TextChannel),
+                555555: mock_thread,
+            }.get(cid)
+        )
+
+        cog = SchedulerCog(bot, _make_runner(), repo=repo)
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
+        ) as mock_run:
+            await cog._run_task(task)
+
+        # Should use the existing thread, not create a new one
+        mock_run.assert_called_once()
+        run_config = mock_run.call_args[0][0]
+        assert run_config.thread is mock_thread
+
+        # Should have sent a starter message in the thread
+        mock_thread.send.assert_called_once()
+
+    async def test_one_shot_task_disabled_after_run(self, repo: TaskRepository) -> None:
+        """Tasks with one_shot=True should be disabled after execution."""
+        import discord
+
+        task_id = await repo.create(
+            name="one-time",
+            prompt="Check once",
+            interval_seconds=86400,
+            channel_id=99,
+            one_shot=True,
+        )
+        task = await repo.get(task_id)
+
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_starter = AsyncMock()
+        mock_starter.create_thread = AsyncMock(return_value=mock_thread)
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock(return_value=mock_starter)
+
+        bot = _make_bot()
+        bot.get_channel = MagicMock(return_value=mock_channel)
+
+        cog = SchedulerCog(bot, _make_runner(), repo=repo)
+
+        with patch("claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock):
+            await cog._run_task(task)
+
+        # Task should be disabled after execution
+        updated = await repo.get(task_id)
+        assert updated is not None
+        assert updated["enabled"] is False
+
+    async def test_recurring_task_not_disabled_after_run(self, repo: TaskRepository) -> None:
+        """Regular tasks (one_shot=False) should remain enabled after execution."""
+        import discord
+
+        task_id = await repo.create(
+            name="recurring",
+            prompt="Regular check",
+            interval_seconds=3600,
+            channel_id=99,
+        )
+        task = await repo.get(task_id)
+
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_starter = AsyncMock()
+        mock_starter.create_thread = AsyncMock(return_value=mock_thread)
+        mock_channel = AsyncMock(spec=discord.TextChannel)
+        mock_channel.send = AsyncMock(return_value=mock_starter)
+
+        bot = _make_bot()
+        bot.get_channel = MagicMock(return_value=mock_channel)
+
+        cog = SchedulerCog(bot, _make_runner(), repo=repo)
+
+        with patch("claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock):
+            await cog._run_task(task)
+
+        updated = await repo.get(task_id)
+        assert updated is not None
+        assert updated["enabled"] is True
+
+    async def test_followup_with_thread_id_resumes_session(self, repo: TaskRepository) -> None:
+        """When thread_id is set and session_repo has a record, session_id should be passed."""
+        # Set up session DB with an existing session for thread 555555
+        import tempfile
+
+        import discord
+
+        from claude_discord.database.models import init_db
+        from claude_discord.database.repository import SessionRepository
+
+        fd, session_db_path = tempfile.mkstemp(suffix=".db")
+        import os
+
+        os.close(fd)
+        await init_db(session_db_path)
+        session_repo = SessionRepository(session_db_path)
+        await session_repo.save(555555, "existing-session-id-abc", "/home/ebi")
+
+        task_id = await repo.create(
+            name="resume-followup",
+            prompt="Continue analysis",
+            interval_seconds=86400,
+            channel_id=99,
+            thread_id=555555,
+        )
+        task = await repo.get(task_id)
+
+        mock_thread = AsyncMock(spec=discord.Thread)
+        mock_thread.send = AsyncMock()
+
+        bot = _make_bot()
+        bot.get_channel = MagicMock(
+            side_effect=lambda cid: {
+                99: MagicMock(spec=discord.TextChannel),
+                555555: mock_thread,
+            }.get(cid)
+        )
+
+        cog = SchedulerCog(bot, _make_runner(), repo=repo, session_repo=session_repo)
+
+        with patch(
+            "claude_discord.cogs.scheduler.run_claude_with_config", new_callable=AsyncMock
+        ) as mock_run:
+            await cog._run_task(task)
+
+        run_config = mock_run.call_args[0][0]
+        assert run_config.session_id == "existing-session-id-abc"
+
+        os.unlink(session_db_path)

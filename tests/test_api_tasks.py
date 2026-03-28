@@ -201,3 +201,87 @@ class TestTasksPatch:
     async def test_patch_nonexistent_returns_404(self, client: TestClient) -> None:
         resp = await client.patch("/api/tasks/99999", json={"enabled": False})
         assert resp.status == 404
+
+
+class TestTasksFollowUp:
+    """Tests for thread_id and one_shot parameters in /api/tasks."""
+
+    async def test_create_task_with_thread_id(self, client: TestClient) -> None:
+        resp = await client.post(
+            "/api/tasks",
+            json={
+                "name": "followup-task",
+                "prompt": "Check pipeline results",
+                "interval_seconds": 86400,
+                "channel_id": 12345,
+                "thread_id": 1234567890,
+            },
+        )
+        assert resp.status == 201
+
+    async def test_create_task_with_one_shot(self, client: TestClient) -> None:
+        resp = await client.post(
+            "/api/tasks",
+            json={
+                "name": "one-shot-task",
+                "prompt": "Check once",
+                "interval_seconds": 86400,
+                "channel_id": 12345,
+                "one_shot": True,
+            },
+        )
+        assert resp.status == 201
+
+    async def test_created_task_has_thread_id(
+        self, client: TestClient, task_repo: TaskRepository
+    ) -> None:
+        resp = await client.post(
+            "/api/tasks",
+            json={
+                "name": "with-thread",
+                "prompt": "p",
+                "interval_seconds": 86400,
+                "channel_id": 1,
+                "thread_id": 9999,
+            },
+        )
+        task_id = (await resp.json())["id"]
+        task = await task_repo.get(task_id)
+        assert task is not None
+        assert task["thread_id"] == 9999
+
+    async def test_created_task_has_one_shot(
+        self, client: TestClient, task_repo: TaskRepository
+    ) -> None:
+        resp = await client.post(
+            "/api/tasks",
+            json={
+                "name": "with-oneshot",
+                "prompt": "p",
+                "interval_seconds": 86400,
+                "channel_id": 1,
+                "one_shot": True,
+            },
+        )
+        task_id = (await resp.json())["id"]
+        task = await task_repo.get(task_id)
+        assert task is not None
+        assert task["one_shot"] is True
+
+    async def test_list_shows_thread_id_and_one_shot(self, client: TestClient) -> None:
+        await client.post(
+            "/api/tasks",
+            json={
+                "name": "full-followup",
+                "prompt": "p",
+                "interval_seconds": 86400,
+                "channel_id": 1,
+                "thread_id": 7777,
+                "one_shot": True,
+            },
+        )
+        resp = await client.get("/api/tasks")
+        data = await resp.json()
+        task = data["tasks"][0]
+        assert task["thread_id"] == 7777
+        assert task["one_shot"] is True

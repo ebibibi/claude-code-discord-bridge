@@ -306,3 +306,65 @@ class TestTaskRepoUpdate:
     async def test_update_nonexistent_returns_false(self, repo: TaskRepository) -> None:
         result = await repo.update(99999, prompt="x")
         assert result is False
+
+
+class TestTaskRepoThreadId:
+    """Tests for thread_id column — follow-up in existing threads."""
+
+    async def test_create_without_thread_id_defaults_to_none(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(name="no-thread", prompt="p", interval_seconds=60, channel_id=1)
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["thread_id"] is None
+
+    async def test_create_with_thread_id(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(
+            name="follow-up",
+            prompt="Check results",
+            interval_seconds=86400,
+            channel_id=1,
+            thread_id=1234567890,
+        )
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["thread_id"] == 1234567890
+
+    async def test_update_thread_id(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(name="t", prompt="p", interval_seconds=60, channel_id=1)
+        result = await repo.update(task_id, thread_id=9876543210)
+        assert result is True
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["thread_id"] == 9876543210
+
+    async def test_clear_thread_id(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(
+            name="t", prompt="p", interval_seconds=60, channel_id=1, thread_id=111
+        )
+        result = await repo.update(task_id, thread_id=-1)
+        assert result is True
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["thread_id"] is None
+
+
+class TestTaskRepoOneShot:
+    """Tests for one_shot column — auto-disable after execution."""
+
+    async def test_create_without_one_shot_defaults_to_false(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(name="recurring", prompt="p", interval_seconds=60, channel_id=1)
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["one_shot"] is False
+
+    async def test_create_with_one_shot(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(
+            name="once",
+            prompt="Check once",
+            interval_seconds=86400,
+            channel_id=1,
+            one_shot=True,
+        )
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["one_shot"] is True

@@ -314,6 +314,11 @@ class ApiServer:
             anchor_time: (optional) Wall-clock time ``"HH:MM"`` to snap to,
                 preventing time drift. When set, next_run_at is calculated as
                 the next future occurrence of that time.
+            thread_id: (optional) Discord thread ID for follow-up mode.
+                When set, the scheduler posts into this existing thread
+                instead of creating a new one.
+            one_shot: (optional, default false) If true, auto-disable after
+                a single execution.
         """
         if err := self._require_task_repo():
             return err
@@ -331,6 +336,15 @@ class ApiServer:
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
+        # Parse optional follow-up parameters
+        raw_thread_id = data.get("thread_id")
+        thread_id: int | None = None
+        if raw_thread_id is not None:
+            with contextlib.suppress(ValueError, TypeError):
+                thread_id = int(raw_thread_id)
+
+        one_shot = bool(data.get("one_shot", False))
+
         try:
             task_id = await self.task_repo.create(  # type: ignore[union-attr]
                 name=str(data["name"]),
@@ -341,6 +355,8 @@ class ApiServer:
                 run_immediately=bool(data.get("run_immediately", True)),
                 anchor_hour=anchor_hour,
                 anchor_minute=anchor_minute,
+                thread_id=thread_id,
+                one_shot=one_shot,
             )
         except Exception as exc:
             # Most likely a UNIQUE constraint violation on name

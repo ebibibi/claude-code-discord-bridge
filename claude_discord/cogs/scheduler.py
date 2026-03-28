@@ -97,31 +97,50 @@ class SchedulerCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _run_task(self, task: dict) -> None:
-        """Execute a single scheduled task in a Discord thread."""
+        """Execute a single scheduled task in a Discord thread.
+
+        When ``thread_id`` is set, posts into that existing thread (follow-up
+        mode) and optionally resumes the previous session.  Otherwise, creates
+        a new thread in the parent channel (original behavior).
+
+        When ``one_shot`` is True, the task is disabled after execution.
+        """
         task_id: int = task["id"]
         self._running.add(task_id)
         try:
-            channel = self.bot.get_channel(task["channel_id"])
-            if channel is None:
-                logger.warning(
-                    "SchedulerCog: channel %d not found for task %d (%s)",
-                    task["channel_id"],
-                    task_id,
-                    task["name"],
-                )
-                return
-            if not isinstance(channel, discord.TextChannel):
-                logger.warning("SchedulerCog: channel %d is not a TextChannel", task["channel_id"])
-                return
+            thread_id = task.get("thread_id")
+            session_id: str | None = None
 
-            # Post a starter message first so the thread appears in the channel
-            # timeline and shows up in the left sidebar under the parent channel.
-            # channel.create_thread() without a message only appears in the
-            # Threads panel (🧵), not in the channel list.
-            starter = await channel.send(f"🔄 **[Scheduled]** `{task['name']}`")
-            thread = await starter.create_thread(
-                name=f"[Scheduled] {task['name']}",
-            )
+            if thread_id:
+                # Follow-up mode: post into an existing thread
+                thread = self.bot.get_channel(thread_id)
+                if thread is None or not isinstance(thread, discord.Thread):
+                    logger.warning(
+                        "SchedulerCog: thread %d not found for task %d (%s) — falling back",
+                        thread_id,
+                        task_id,
+                        task["name"],
+                    )
+                    thread = await self._create_new_thread(task)
+                    if thread is None:
+                        return
+                else:
+                    await thread.send(f"🔄 **[Follow-up]** `{task['name']}`")
+                    # Try to resume the previous session in this thread
+                    if self.session_repo is not None:
+                        record = await self.session_repo.get(thread_id)
+                        if record is not None:
+                            session_id = record.session_id
+                            logger.info(
+                                "SchedulerCog: resuming session %s in thread %d",
+                                session_id,
+                                thread_id,
+                            )
+            else:
+                # Original behavior: create a new thread
+                thread = await self._create_new_thread(task)
+                if thread is None:
+                    return
 
             cloned = self.runner.clone()
             if task.get("working_dir"):
@@ -134,12 +153,35 @@ class SchedulerCog(commands.Cog):
                     runner=cloned,
                     repo=self.session_repo,
                     prompt=task["prompt"],
-                    session_id=None,
+                    session_id=session_id,
                     registry=registry,
                 )
             )
+
+            # One-shot tasks auto-disable after execution
+            if task.get("one_shot"):
+                await self.repo.set_enabled(task_id, enabled=False)
+                logger.info("SchedulerCog: one-shot task %d (%s) disabled", task_id, task["name"])
 
         except Exception:
             logger.exception("SchedulerCog: task %d (%s) failed", task_id, task["name"])
         finally:
             self._running.discard(task_id)
+
+    async def _create_new_thread(self, task: dict) -> discord.Thread | None:
+        """Create a new thread in the parent channel for a scheduled task."""
+        channel = self.bot.get_channel(task["channel_id"])
+        if channel is None:
+            logger.warning(
+                "SchedulerCog: channel %d not found for task %d (%s)",
+                task["channel_id"],
+                task["id"],
+                task["name"],
+            )
+            return None
+        if not isinstance(channel, discord.TextChannel):
+            logger.warning("SchedulerCog: channel %d is not a TextChannel", task["channel_id"])
+            return None
+
+        starter = await channel.send(f"🔄 **[Scheduled]** `{task['name']}`")
+        return await starter.create_thread(name=f"[Scheduled] {task['name']}")
