@@ -50,6 +50,7 @@ class TestTaskRepoCreate:
         assert task is not None
         assert task["enabled"] is True
         assert task["working_dir"] is None
+        assert task["pre_check_command"] is None
         assert task["last_run_at"] is None
 
     async def test_create_with_working_dir(self, repo: TaskRepository) -> None:
@@ -111,6 +112,18 @@ class TestTaskRepoCreate:
         next_dt = datetime.fromtimestamp(task["next_run_at"])
         assert next_dt.hour == 18
         assert next_dt.minute == 0
+
+    async def test_create_with_pre_check_command(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(
+            name="with-check",
+            prompt="prompt",
+            interval_seconds=60,
+            channel_id=1,
+            pre_check_command="python check.py --test",
+        )
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["pre_check_command"] == "python check.py --test"
 
     async def test_duplicate_name_raises(self, repo: TaskRepository) -> None:
         import aiosqlite
@@ -302,6 +315,14 @@ class TestTaskRepoUpdate:
         assert task is not None
         assert task["anchor_hour"] is None
         assert task["anchor_minute"] is None
+
+    async def test_update_pre_check_command(self, repo: TaskRepository) -> None:
+        task_id = await repo.create(name="u3", prompt="p", interval_seconds=60, channel_id=1)
+        result = await repo.update(task_id, pre_check_command="python check.py")
+        assert result is True
+        task = await repo.get(task_id)
+        assert task is not None
+        assert task["pre_check_command"] == "python check.py"
 
     async def test_update_nonexistent_returns_false(self, repo: TaskRepository) -> None:
         result = await repo.update(99999, prompt="x")

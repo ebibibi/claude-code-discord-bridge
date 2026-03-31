@@ -55,7 +55,7 @@ class TaskRepository:
         """Initialize the task schema and run migrations."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(TASK_SCHEMA)
-            # Migration: add anchor columns if they don't exist yet
+            # Migration: add columns if they don't exist yet
             cursor = await db.execute("PRAGMA table_info(scheduled_tasks)")
             columns = {row[1] for row in await cursor.fetchall()}
             if "anchor_hour" not in columns:
@@ -70,6 +70,11 @@ class TaskRepository:
                     if stmt:
                         await db.execute(stmt)
                 logger.info("Migrated scheduled_tasks: added thread_id, one_shot")
+            if "pre_check_command" not in columns:
+                await db.execute(
+                    "ALTER TABLE scheduled_tasks ADD COLUMN pre_check_command TEXT"
+                )
+                logger.info("Migrated scheduled_tasks: added pre_check_command")
             await db.commit()
         logger.info("Task DB initialized at %s", self.db_path)
 
@@ -162,6 +167,7 @@ class TaskRepository:
         channel_id: int,
         *,
         working_dir: str | None = None,
+        pre_check_command: str | None = None,
         run_immediately: bool = True,
         anchor_hour: int | None = None,
         anchor_minute: int | None = None,
@@ -183,6 +189,8 @@ class TaskRepository:
                 the scheduler posts to this existing thread instead of
                 creating a new one (follow-up mode).
             one_shot: If True, the task auto-disables after a single execution.
+            pre_check_command: Optional shell command to run before spawning
+                Claude. If it exits non-zero, the task is skipped.
         """
         now = time.time()
         if anchor_hour is not None and not run_immediately:
@@ -195,15 +203,17 @@ class TaskRepository:
             cursor = await db.execute(
                 """INSERT INTO scheduled_tasks
                    (name, prompt, interval_seconds, channel_id, working_dir,
+                    pre_check_command,
                     enabled, next_run_at, created_at, anchor_hour, anchor_minute,
                     thread_id, one_shot)
-                   VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
                 (
                     name,
                     prompt,
                     interval_seconds,
                     channel_id,
                     working_dir,
+                    pre_check_command,
                     next_run,
                     now,
                     anchor_hour,
@@ -273,6 +283,7 @@ class TaskRepository:
         prompt: str | None = None,
         interval_seconds: int | None = None,
         working_dir: str | None = None,
+        pre_check_command: str | None = None,
         anchor_hour: int | None = None,
         anchor_minute: int | None = None,
         thread_id: int | None = None,
@@ -293,6 +304,9 @@ class TaskRepository:
         if working_dir is not None:
             fields.append("working_dir = ?")
             values.append(working_dir)
+        if pre_check_command is not None:
+            fields.append("pre_check_command = ?")
+            values.append(pre_check_command)
         if anchor_hour is not None:
             if anchor_hour < 0:
                 # Sentinel: clear anchor

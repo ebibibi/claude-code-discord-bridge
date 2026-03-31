@@ -98,6 +98,19 @@ class TestTasksCreate:
         )
         assert resp.status == 201
 
+    async def test_create_task_with_pre_check_command(self, client: TestClient) -> None:
+        resp = await client.post(
+            "/api/tasks",
+            json={
+                "name": "with-check",
+                "prompt": "p",
+                "interval_seconds": 60,
+                "channel_id": 1,
+                "pre_check_command": "python check.py --test",
+            },
+        )
+        assert resp.status == 201
+
     async def test_create_duplicate_name_returns_409(self, client: TestClient) -> None:
         payload = {"name": "dup", "prompt": "p", "interval_seconds": 60, "channel_id": 1}
         await client.post("/api/tasks", json=payload)
