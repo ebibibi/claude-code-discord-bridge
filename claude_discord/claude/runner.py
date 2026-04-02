@@ -403,8 +403,23 @@ class ClaudeRunner:
 
         Injects CCDB_API_URL (and optionally CCDB_API_SECRET) so Claude Code
         can register scheduled tasks via ``curl $CCDB_API_URL/api/tasks``.
+
+        If ``CCDB_CLI_ENV_FILE`` is set, reads KEY=VALUE pairs from that file
+        and merges them into the env (overriding process env). This allows
+        injecting env vars into the CLI subprocess without restarting ccdb
+        (e.g., temporary Azure Foundry configuration).
         """
         env = {k: v for k, v in os.environ.items() if k not in self._STRIPPED_ENV_KEYS}
+        overlay_path = os.environ.get("CCDB_CLI_ENV_FILE")
+        if overlay_path:
+            try:
+                for line in Path(overlay_path).read_text().splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
+                        env[key] = value
+            except OSError:
+                logger.debug("CLI env overlay file not found: %s", overlay_path)
         if self.api_port is not None:
             env["CCDB_API_URL"] = f"http://127.0.0.1:{self.api_port}"
         if self.api_secret is not None:

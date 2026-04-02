@@ -258,6 +258,60 @@ class TestBuildEnv:
         env = runner._build_env()
         assert "CCDB_API_SECRET" not in env
 
+    def test_reads_cli_env_overlay_file(self, tmp_path: Path) -> None:
+        overlay = tmp_path / "overlay.env"
+        overlay.write_text("MY_CUSTOM_VAR=hello\nANOTHER_VAR=world\n")
+        os.environ["CCDB_CLI_ENV_FILE"] = str(overlay)
+        try:
+            runner = ClaudeRunner()
+            env = runner._build_env()
+            assert env["MY_CUSTOM_VAR"] == "hello"
+            assert env["ANOTHER_VAR"] == "world"
+        finally:
+            del os.environ["CCDB_CLI_ENV_FILE"]
+
+    def test_cli_env_overlay_skips_comments_and_blanks(self, tmp_path: Path) -> None:
+        overlay = tmp_path / "overlay.env"
+        overlay.write_text("# comment\n\nVALID_KEY=value\n")
+        os.environ["CCDB_CLI_ENV_FILE"] = str(overlay)
+        try:
+            runner = ClaudeRunner()
+            env = runner._build_env()
+            assert env["VALID_KEY"] == "value"
+            assert "#" not in {k[0] for k in env if k.startswith("#")}
+        finally:
+            del os.environ["CCDB_CLI_ENV_FILE"]
+
+    def test_cli_env_overlay_missing_file_is_ignored(self) -> None:
+        os.environ["CCDB_CLI_ENV_FILE"] = "/nonexistent/overlay.env"
+        try:
+            runner = ClaudeRunner()
+            env = runner._build_env()
+            assert "PATH" in env  # still works
+        finally:
+            del os.environ["CCDB_CLI_ENV_FILE"]
+
+    def test_cli_env_overlay_not_set_no_effect(self) -> None:
+        original = os.environ.pop("CCDB_CLI_ENV_FILE", None)
+        try:
+            runner = ClaudeRunner()
+            env = runner._build_env()
+            assert "PATH" in env
+        finally:
+            if original is not None:
+                os.environ["CCDB_CLI_ENV_FILE"] = original
+
+    def test_cli_env_overlay_overrides_process_env(self, tmp_path: Path) -> None:
+        overlay = tmp_path / "overlay.env"
+        overlay.write_text("PATH=/custom/path\n")
+        os.environ["CCDB_CLI_ENV_FILE"] = str(overlay)
+        try:
+            runner = ClaudeRunner()
+            env = runner._build_env()
+            assert env["PATH"] == "/custom/path"
+        finally:
+            del os.environ["CCDB_CLI_ENV_FILE"]
+
 
 class TestClone:
     """Tests for clone method."""

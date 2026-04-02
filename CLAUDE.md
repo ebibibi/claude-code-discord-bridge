@@ -37,6 +37,7 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 7. **REST API as the control plane**: Claude Code subprocesses communicate back to ccdb via REST API (`CCDB_API_URL` env var), not via stdout markers or special output formats. This makes the interface explicit, testable, and usable by external systems (GitHub Actions, etc.). See `ext/api_server.py`.
 8. **SQLite-backed dynamic scheduler**: Scheduled tasks are stored in `scheduled_tasks` DB table and executed by a single `discord.ext.tasks` master loop (every 30s). Tasks are registered at runtime via REST API — no code changes needed to add new tasks. `discord.ext.tasks` decorators are only used for the master loop, not per-task (they're static/compile-time constructs).
 9. **Claude handles "what", ccdb handles "when"**: For scheduled tasks, ccdb only manages the schedule. All domain logic (what to check, how to deduplicate, what to post) lives in the Claude prompt. No GitHub/AzureDevOps-specific code in ccdb itself.
+10. **CLI env overlay** (`CCDB_CLI_ENV_FILE`): Optional `KEY=VALUE` file read on every CLI spawn to inject env vars into the subprocess. Enables live configuration changes (e.g., switching to Azure Foundry) without restarting the bot. The file is read by `_build_env()` in `runner.py`.
 
 ### Why REST API over stdout markers for Claude→ccdb communication
 
