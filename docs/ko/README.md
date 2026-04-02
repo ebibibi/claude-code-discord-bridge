@@ -306,6 +306,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CHAT_ONLY_CHANNEL_IDS` | Claude의 텍스트 응답만 표시하는 채널 ID (쉼표로 구분, 도구 임베드/thinking/Todo 숨김) | (선택) |
 | `THREAD_INBOX_ENABLED` | 지속적인 스레드 수신함 활성화 (`claude -p`로 세션을 `waiting`/`done`/`ambiguous`로 분류; 스레드 대시보드에 표시) | `false` |
 | `THREAD_AUTO_RENAME` | Claude AI를 사용하여 새 스레드 제목 자동 이름 변경 — 백그라운드 `claude -p` 호출로 첫 번째 사용자 메시지에서 짧고 설명적인 제목 생성 (세션 시작 지연 없음) | `false` |
+| `CCDB_CLI_ENV_FILE` | 매 호출 시 CLI 서브프로세스 환경에 병합할 `KEY=VALUE` 파일 경로. 변경 사항은 봇을 재시작하지 않고 즉시 적용됨. 임시 API 라우팅(예: Azure Foundry 전환)에 유용 | (선택) |
 
 ### 권한 모드 — `-p` 모드에서 작동하는 기능
 

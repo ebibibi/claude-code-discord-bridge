@@ -323,6 +323,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CHAT_ONLY_CHANNEL_IDS` | 仅显示 Claude 文本回复的频道 ID（逗号分隔，工具嵌入/thinking/Todo 隐藏） | （可选） |
 | `THREAD_INBOX_ENABLED` | 启用持久线程收件箱（通过 `claude -p` 将会话分类为 `waiting`/`done`/`ambiguous`；显示在线程面板中） | `false` |
 | `THREAD_AUTO_RENAME` | 使用 Claude AI 自动重命名新线程标题 — 通过后台 `claude -p` 调用从首条用户消息生成简短描述性标题（不影响会话启动速度） | `false` |
+| `CCDB_CLI_ENV_FILE` | 每次调用时合并到 CLI 子进程环境的 `KEY=VALUE` 文件路径。更改无需重启机器人即可立即生效。适用于临时 API 路由（如切换到 Azure Foundry） | （可选） |
 
 ### 权限模式 — `-p` 模式下的功能说明
 
