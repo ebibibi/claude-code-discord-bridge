@@ -306,6 +306,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CHAT_ONLY_CHANNEL_IDS` | IDs de canal separados por vírgula onde apenas as respostas de texto do Claude são exibidas (embeds de ferramentas/thinking/Todo ocultos) | (opcional) |
 | `THREAD_INBOX_ENABLED` | Ativa a caixa de entrada persistente de threads (classifica sessões como `waiting`/`done`/`ambiguous` via `claude -p`; exibido no painel de threads) | `false` |
 | `THREAD_AUTO_RENAME` | Renomeia automaticamente títulos de novas threads com Claude AI — gera um título curto e descritivo da primeira mensagem do usuário via chamada `claude -p` em segundo plano (sem atrasar o início da sessão) | `false` |
+| `CCDB_CLI_ENV_FILE` | Caminho para um arquivo `KEY=VALUE` cujas variáveis são mescladas no ambiente do subprocesso CLI a cada invocação. As alterações entram em vigor imediatamente sem reiniciar o bot. Útil para roteamento de API temporário (ex.: Azure Foundry) | (opcional) |
 
 ### Modos de Permissão — O Que Funciona no Modo `-p`
 
