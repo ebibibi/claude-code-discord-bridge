@@ -1,6 +1,6 @@
 # Changelog
 
-Last updated: 2026-03-15
+Last updated: 2026-04-02
 
 All notable changes to this project will be documented in this file.
 
@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [2.1.24] - 2026-04-02
+
+### Added
+- **CLI env overlay** (`CCDB_CLI_ENV_FILE`) — inject environment variables into CLI subprocesses via an external `KEY=VALUE` file, read on every CLI invocation without bot restart. Useful for temporary API routing (e.g., Azure Foundry switching) (#359)
+- **Job failure triage** (`JobFailureTriageCog`) — auto-investigates scheduler job failures (#357)
 
 ## [2.1.0] - 2026-03-15
 
