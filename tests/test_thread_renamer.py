@@ -242,6 +242,25 @@ class TestSuggestTitleErrors:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_passes_env_to_subprocess(self):
+        """When env dict is provided, it is forwarded to create_subprocess_exec."""
+        proc = _make_proc(b"Title from custom env\n")
+        custom_env = {"CLAUDE_CODE_USE_FOUNDRY": "1", "PATH": "/usr/bin"}
+        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+            result = await suggest_title("some request", env=custom_env)
+        assert result == "Title from custom env"
+        assert mock_exec.call_args[1].get("env") is custom_env
+
+    @pytest.mark.asyncio
+    async def test_no_env_passes_none_to_subprocess(self):
+        """When env is not provided, subprocess inherits parent environment (env=None)."""
+        proc = _make_proc(b"Default env title\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+            await suggest_title("some request")
+        # env keyword should not be set, or should be None
+        assert mock_exec.call_args[1].get("env") is None
+
+    @pytest.mark.asyncio
     async def test_kills_process_on_timeout(self):
         """After asyncio.TimeoutError, proc.kill() and cleanup communicate() are called.
 

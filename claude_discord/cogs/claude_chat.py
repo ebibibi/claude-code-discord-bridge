@@ -488,7 +488,11 @@ class ClaudeChatCog(commands.Cog):
         Runs as a background asyncio task so it does not block the main session.
         Silently no-ops on any error so the thread name is never left in a bad state.
         """
-        title = await suggest_title(user_message, claude_command=self.runner.command)
+        title = await suggest_title(
+            user_message,
+            claude_command=self.runner.command,
+            env=self.runner._build_env(),
+        )
         if title:
             try:
                 await thread.edit(name=title)

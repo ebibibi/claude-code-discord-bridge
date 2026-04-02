@@ -78,12 +78,19 @@ def _clean_title(raw: str) -> str:
 async def suggest_title(
     user_message: str,
     claude_command: str = "claude",
+    env: dict[str, str] | None = None,
 ) -> str | None:
     """Call `claude -p` and return a short thread title.
 
     Returns None on empty input, timeout, or any error, so the caller can
     keep the original thread name without any visible failure.
     Prompt is passed as a direct argument to the binary (no shell, no injection risk).
+
+    Args:
+        env: Optional environment dict for the subprocess. When provided
+             (e.g. from ``ClaudeRunner._build_env()``), ensures the CLI
+             picks up the same API keys and overlay config as main sessions.
+             When ``None``, the subprocess inherits the parent environment.
     """
     if not user_message.strip():
         return None
@@ -97,6 +104,7 @@ async def suggest_title(
             prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_SECONDS)
@@ -107,6 +115,10 @@ async def suggest_title(
             return None
 
         raw = stdout.decode(errors="replace")
+        stderr_text = _stderr.decode(errors="replace").strip()
+        if stderr_text:
+            logger.warning("thread title renamer stderr: %s", stderr_text[:500])
+
         title = _clean_title(raw)
 
         if not title:
