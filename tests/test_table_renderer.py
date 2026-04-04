@@ -332,10 +332,10 @@ class TestWrapCjk:
 
 
 class TestCjkTableRendering:
-    """Box-drawing tables with CJK content must respect display width."""
+    """CJK tables use vertical layout due to Discord font limitations."""
 
-    def test_japanese_table_columns_aligned(self):
-        """All lines must have the same display width (= borders align)."""
+    def test_cjk_table_always_uses_vertical(self):
+        """CJK-containing tables always render in vertical layout."""
         lines = [
             "| 言語 | 用途 |",
             "|------|------|",
@@ -343,23 +343,24 @@ class TestCjkTableRendering:
             "| Rust | システム |",
         ]
         table = parse_gfm_table(lines)
-        result = render_box_table(table, max_width=40)
-        widths = [display_width(line) for line in result.splitlines()]
-        # All border/data lines should have the same display width
-        assert len(set(widths)) == 1, f"Misaligned widths: {widths}"
+        result = render_table(table, max_width=40)
+        # Should use vertical layout (no box borders)
+        assert "+" not in result
+        assert ":" in result
+        assert "言語:" in result
+        assert "Python" in result
 
-    def test_japanese_table_respects_max_width(self):
+    def test_cjk_box_still_works_directly(self):
+        """render_box_table still works with CJK (for non-Discord use)."""
         lines = [
-            "| 名前 | 年齢 | 都市 |",
-            "|------|------|------|",
-            "| アリス | 30 | 東京 |",
-            "| ボブ | 25 | 大阪 |",
+            "| 名前 | 年齢 |",
+            "|------|------|",
+            "| アリス | 30 |",
         ]
         table = parse_gfm_table(lines)
         result = render_box_table(table, max_width=40)
-        for line in result.splitlines():
-            w = display_width(line)
-            assert w <= 40, f"Line too wide ({w}): {line!r}"
+        widths = [display_width(line) for line in result.splitlines()]
+        assert len(set(widths)) == 1, f"Misaligned widths: {widths}"
 
     def test_japanese_vertical_respects_max_width(self):
         lines = [
@@ -373,16 +374,14 @@ class TestCjkTableRendering:
             w = display_width(line)
             assert w <= 30, f"Line too wide ({w}): {line!r}"
 
-    def test_wide_japanese_table_falls_back_to_vertical(self):
-        """Many CJK columns → vertical fallback."""
+    def test_ascii_only_table_uses_box(self):
+        """Tables without CJK should still use box layout."""
         lines = [
-            "| 名前 | 年齢 | 都市 | 職業 | 趣味 |",
-            "|------|------|------|------|------|",
-            "| アリス | 30 | 東京 | エンジニア | プログラミング |",
+            "| Name | Age |",
+            "|------|-----|",
+            "| Alice | 30 |",
         ]
         table = parse_gfm_table(lines)
-        # max_width=30 is very narrow for 5 CJK columns
-        result = render_table(table, max_width=30)
-        # Should fall back to vertical — no border characters in vertical mode
-        assert "+" not in result or result.count("+") == 0
-        assert ":" in result
+        result = render_table(table, max_width=40)
+        assert "+" in result  # box layout
+        assert ":" not in result  # not vertical

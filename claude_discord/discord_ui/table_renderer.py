@@ -170,9 +170,18 @@ def render_table(
     table: GfmTable | None,
     max_width: int = DEFAULT_MAX_WIDTH,
 ) -> str | None:
-    """Render a parsed GFM table, auto-selecting box or vertical layout."""
+    """Render a parsed GFM table, auto-selecting box or vertical layout.
+
+    CJK-containing tables always use vertical layout because Discord's
+    monospace code block font does not render CJK characters at exactly
+    2x the width of ASCII characters, making column alignment impossible.
+    """
     if table is None:
         return None
+
+    # CJK content → always vertical (Discord font alignment issue)
+    if _table_has_cjk(table):
+        return render_vertical_table(table, max_width)
 
     num_cols = len(table.headers)
     border_overhead = 1 + num_cols * 3
@@ -296,6 +305,21 @@ def _compute_col_widths(table: GfmTable, available: int) -> list[int]:
 
     ratio = available / total_min if total_min > 0 else 1
     return [max(int(min_widths[i] * ratio), MIN_COL_WIDTH) for i in range(num_cols)]
+
+
+def _table_has_cjk(table: GfmTable) -> bool:
+    """Return True if any cell contains CJK (wide) characters.
+
+    Discord's monospace font doesn't render CJK at exactly 2x ASCII width,
+    so column-aligned box tables won't display correctly with CJK content.
+    """
+    all_cells = [table.headers, *table.rows]
+    for row in all_cells:
+        for cell in row:
+            for ch in cell:
+                if unicodedata.east_asian_width(ch) in ("W", "F"):
+                    return True
+    return False
 
 
 def _max_wrap_lines(table: GfmTable, col_widths: list[int]) -> int:
