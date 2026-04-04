@@ -145,6 +145,15 @@ class EventProcessor:
         # Triggers interrupt → rerun-with-guardrail in _run_helper.
         self._compact_occurred: bool = False
 
+        # Per-turn usage from the last assistant message. The RESULT message
+        # reports cumulative token counts across all API calls, which inflates
+        # context utilization (each turn re-sends the full conversation).
+        # We track the last turn's values and prefer them over RESULT's.
+        self._last_turn_input_tokens: int | None = None
+        self._last_turn_output_tokens: int | None = None
+        self._last_turn_cache_read_tokens: int | None = None
+        self._last_turn_cache_creation_tokens: int | None = None
+
     # ------------------------------------------------------------------
     # Public properties
     # ------------------------------------------------------------------
@@ -299,6 +308,13 @@ class EventProcessor:
         if event.is_plan_approval and not event.is_partial and not self._chat_only:
             await self._handle_plan_approval(event)
 
+        # Track per-turn usage from assistant messages for accurate context stats.
+        if event.input_tokens is not None:
+            self._last_turn_input_tokens = event.input_tokens
+            self._last_turn_output_tokens = event.output_tokens
+            self._last_turn_cache_read_tokens = event.cache_read_tokens
+            self._last_turn_cache_creation_tokens = event.cache_creation_tokens
+
         # AskUserQuestion — set pending and signal caller to interrupt runner.
         # Always handled — interactive flow is needed regardless of mode.
         if event.ask_questions:
@@ -373,6 +389,14 @@ class EventProcessor:
         )
         from ..discord_ui.streaming_manager import StreamingMessageManager
         from ._run_helper import _make_error_embed
+
+        # Prefer per-turn usage (last assistant message) over cumulative RESULT usage.
+        # The RESULT sums tokens across ALL API calls, inflating context utilization.
+        if self._last_turn_input_tokens is not None:
+            event.input_tokens = self._last_turn_input_tokens
+            event.output_tokens = self._last_turn_output_tokens
+            event.cache_read_tokens = self._last_turn_cache_read_tokens
+            event.cache_creation_tokens = self._last_turn_cache_creation_tokens
 
         # Finalize any in-progress streaming message.
         # Capture the URL before sending session_complete_embed (which would

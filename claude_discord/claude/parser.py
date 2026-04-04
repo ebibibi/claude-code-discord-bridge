@@ -153,6 +153,16 @@ def _parse_assistant(data: dict[str, Any], event: StreamEvent) -> None:
     if thinking_parts:
         event.thinking = "\n".join(thinking_parts)
 
+    # Extract per-turn usage from the assistant message.
+    # Unlike the cumulative usage in RESULT, this reflects the actual token
+    # counts for this single API call — essential for accurate context tracking.
+    usage = message.get("usage", {})
+    if usage:
+        event.input_tokens = usage.get("input_tokens")
+        event.output_tokens = usage.get("output_tokens")
+        event.cache_read_tokens = usage.get("cache_read_input_tokens")
+        event.cache_creation_tokens = usage.get("cache_creation_input_tokens")
+
 
 def _parse_user(data: dict[str, Any], event: StreamEvent) -> None:
     """Parse user message (tool_result blocks with content)."""

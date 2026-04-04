@@ -1040,6 +1040,110 @@ class TestContextStatsPersistence:
         assert record is None or record.context_window is None
 
 
+class TestContextStatsUsesPerTurnUsage:
+    """Context stats must use per-turn (last assistant) usage, not cumulative RESULT usage.
+
+    The RESULT message's usage field sums token counts across ALL API calls in a session.
+    For multi-turn sessions (tool use loops), this cumulative sum can easily exceed the
+    context window size, producing wildly inaccurate context utilization percentages.
+
+    The fix: track per-turn usage from assistant messages and use the last turn's values.
+    """
+
+    @pytest.mark.asyncio
+    async def test_context_used_from_last_assistant_not_cumulative_result(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        """Multi-turn session: context_used should reflect last turn, not cumulative."""
+        from claude_discord.database.models import init_db
+        from claude_discord.database.repository import SessionRepository
+
+        db_path = str(tmp_path / "sessions.db")
+        await init_db(db_path)
+        repo = SessionRepository(db_path)
+        await repo.save(thread_id=thread.id, session_id="s-per-turn")
+
+        config = _make_config(thread, runner, repo=repo)
+        p = EventProcessor(config)
+
+        # Simulate turn 1: assistant with tool_use (35k context)
+        turn1 = StreamEvent(
+            message_type=MessageType.ASSISTANT,
+            is_partial=False,
+            input_tokens=3,
+            output_tokens=44,
+            cache_read_tokens=0,
+            cache_creation_tokens=35000,
+        )
+        turn1.tool_use = ToolUseEvent(
+            tool_id="t1",
+            tool_name="Read",
+            tool_input={},
+            category=ToolCategory.READ,
+        )
+        await p.process(turn1)
+
+        # Simulate turn 2: assistant final response (36k context, cache hit)
+        turn2 = StreamEvent(
+            message_type=MessageType.ASSISTANT,
+            text="done",
+            is_partial=False,
+            input_tokens=100,
+            output_tokens=20,
+            cache_read_tokens=35000,
+            cache_creation_tokens=1000,
+        )
+        await p.process(turn2)
+
+        # RESULT with cumulative usage (would be 71k+ if summed naively)
+        result = _make_result_event(
+            session_id="s-per-turn",
+            input_tokens=103,  # cumulative: 3 + 100
+            output_tokens=64,  # cumulative
+            cache_read_tokens=35000,  # cumulative
+            cache_creation_tokens=36000,  # cumulative: 35000 + 1000
+            context_window=200000,
+        )
+        await p.process(result)
+
+        record = await repo.get(thread.id)
+        assert record is not None
+        # Should use last turn's values: 100 + 35000 + 1000 = 36100
+        # NOT cumulative: 103 + 35000 + 36000 = 71103
+        assert record.context_used == 100 + 35000 + 1000
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_result_when_no_assistant_usage(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        """If no assistant usage was tracked, fall back to RESULT usage."""
+        from claude_discord.database.models import init_db
+        from claude_discord.database.repository import SessionRepository
+
+        db_path = str(tmp_path / "sessions.db")
+        await init_db(db_path)
+        repo = SessionRepository(db_path)
+        await repo.save(thread_id=thread.id, session_id="s-fallback")
+
+        config = _make_config(thread, runner, repo=repo)
+        p = EventProcessor(config)
+
+        # Only RESULT, no assistant messages with usage
+        result = _make_result_event(
+            session_id="s-fallback",
+            input_tokens=5000,
+            output_tokens=200,
+            cache_read_tokens=30000,
+            cache_creation_tokens=0,
+            context_window=200000,
+        )
+        await p.process(result)
+
+        record = await repo.get(thread.id)
+        assert record is not None
+        assert record.context_used == 5000 + 30000 + 0
+
+
 class TestRateLimitEventProcessing:
     """rate_limit_event is saved to usage_stats table."""
 

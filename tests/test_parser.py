@@ -266,6 +266,74 @@ class TestTokenUsage:
         assert event.input_tokens is None
 
 
+class TestAssistantUsage:
+    """Tests for per-turn usage extraction from assistant messages."""
+
+    def test_assistant_message_extracts_usage(self):
+        """Assistant messages contain per-turn usage that should be extracted."""
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "hello"}],
+                    "stop_reason": "end_turn",
+                    "usage": {
+                        "input_tokens": 1000,
+                        "cache_creation_input_tokens": 35000,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": 50,
+                    },
+                },
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.input_tokens == 1000
+        assert event.cache_creation_tokens == 35000
+        assert event.cache_read_tokens == 0
+        assert event.output_tokens == 50
+
+    def test_assistant_message_without_usage(self):
+        """Assistant messages without usage should leave token fields as None."""
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "hi"}],
+                    "stop_reason": "end_turn",
+                },
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.input_tokens is None
+        assert event.cache_read_tokens is None
+
+    def test_assistant_partial_message_extracts_usage(self):
+        """Partial assistant messages also carry per-turn usage."""
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "hel"}],
+                    "stop_reason": None,
+                    "usage": {
+                        "input_tokens": 500,
+                        "cache_creation_input_tokens": 30000,
+                        "cache_read_input_tokens": 10000,
+                        "output_tokens": 3,
+                    },
+                },
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.is_partial is True
+        assert event.input_tokens == 500
+        assert event.cache_creation_tokens == 30000
+        assert event.cache_read_tokens == 10000
+
+
 class TestRedactedThinking:
     def test_redacted_thinking_sets_flag(self):
         line = (
