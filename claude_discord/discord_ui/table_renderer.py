@@ -223,7 +223,7 @@ def render_vertical_table(
 ) -> str:
     """Render table in vertical key:value layout (one record per row)."""
     sep_width = min(max_width - 1, 40)
-    separator = "─" * sep_width
+    separator = "-" * sep_width
     blocks: list[str] = []
 
     for row in table.rows:
@@ -313,15 +313,14 @@ def _max_wrap_lines(table: GfmTable, col_widths: list[int]) -> int:
 
 
 def _border_line(position: str, col_widths: list[int]) -> str:
-    """Build a horizontal border line with box-drawing characters."""
-    chars = {
-        "top": ("┌", "┬", "┐"),
-        "middle": ("├", "┼", "┤"),
-        "bottom": ("└", "┴", "┘"),
-    }
-    left, cross, right = chars[position]
-    segments = ["─" * (w + 2) for w in col_widths]
-    return left + cross.join(segments) + right
+    """Build a horizontal border line.
+
+    Uses ASCII characters (+, -) instead of Unicode box-drawing to avoid
+    misalignment in Discord mobile code blocks where ─ and │ may render
+    at a different width than regular ASCII characters.
+    """
+    segments = ["-" * (w + 2) for w in col_widths]
+    return "+" + "+".join(segments) + "+"
 
 
 def _render_row(
@@ -353,7 +352,7 @@ def _render_row(
             align = alignments[col] if col < len(alignments) else "left"
             padded = _pad_cell(text, col_widths[col], align)
             parts.append(f" {padded} ")
-        output_lines.append("│" + "│".join(parts) + "│")
+        output_lines.append("|" + "|".join(parts) + "|")
 
     return output_lines
 

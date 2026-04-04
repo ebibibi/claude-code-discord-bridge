@@ -98,13 +98,10 @@ class TestRenderBoxTable:
         ]
         table = parse_gfm_table(lines)
         result = render_box_table(table, max_width=40)
-        assert "┌" in result
-        assert "┐" in result
-        assert "└" in result
-        assert "┘" in result
-        assert "│" in result
-        assert "├" in result
-        assert "┤" in result
+        # ASCII borders for Discord mobile compatibility
+        assert "+" in result
+        assert "-" in result
+        assert "|" in result
         assert " A " in result
         assert " 1 " in result
 
@@ -146,8 +143,8 @@ class TestRenderBoxTable:
         for line in result.splitlines():
             if "42" in line:
                 after_42 = line[line.index("42") + 2 :]
-                # Should have spaces then │
-                assert after_42.strip() == "│"
+                # Should have spaces then |
+                assert after_42.strip() == "|"
 
     def test_header_separator_between_header_and_body(self):
         lines = [
@@ -160,12 +157,10 @@ class TestRenderBoxTable:
         result = render_box_table(table, max_width=40)
         result_lines = result.splitlines()
         # Structure: top border, header, separator, row1, row2, bottom border
-        assert result_lines[0].startswith("┌")
-        assert "┬" in result_lines[0]
-        assert result_lines[2].startswith("├")
-        assert "┼" in result_lines[2]
-        assert result_lines[-1].startswith("└")
-        assert "┴" in result_lines[-1]
+        assert result_lines[0].startswith("+")
+        assert "+" in result_lines[0]
+        assert result_lines[2].startswith("+")
+        assert result_lines[-1].startswith("+")
 
     def test_wide_content_wraps(self):
         lines = [
@@ -187,9 +182,8 @@ class TestRenderBoxTable:
         ]
         table = parse_gfm_table(lines)
         result = render_box_table(table, max_width=40)
-        assert "┌" in result
+        assert "+" in result
         assert " A " in result
-        assert "└" in result
 
 
 class TestRenderVerticalTable:
@@ -206,8 +200,8 @@ class TestRenderVerticalTable:
         assert "Alice" in result
         assert "Age:" in result
         assert "30" in result
-        # Rows separated by ─
-        assert "─" in result
+        # Rows separated by -
+        assert "-" in result
 
     def test_separator_between_rows(self):
         lines = [
@@ -221,7 +215,7 @@ class TestRenderVerticalTable:
         # Should have a separator line between records
         found_sep = False
         for line in result.splitlines():
-            if line.strip() and all(c == "─" for c in line.strip()):
+            if line.strip() and all(c == "-" for c in line.strip()):
                 found_sep = True
         assert found_sep
 
@@ -249,7 +243,7 @@ class TestRenderTable:
         ]
         table = parse_gfm_table(lines)
         result = render_table(table, max_width=40)
-        assert "┌" in result  # box-drawing means box layout was chosen
+        assert "+" in result  # border characters mean box layout was chosen
 
     def test_very_wide_table_uses_vertical(self):
         """Table with many wide columns falls back to vertical."""
@@ -263,8 +257,8 @@ class TestRenderTable:
         ]
         table = parse_gfm_table(lines)
         result = render_table(table, max_width=55)
-        # Should fall back to vertical — no box-drawing top-left corner
-        assert "┌" not in result
+        # Should fall back to vertical — no border characters
+        assert result.count("+") == 0
         assert ":" in result  # vertical format uses "Header: value"
 
     def test_returns_none_for_invalid_table(self):
@@ -389,6 +383,6 @@ class TestCjkTableRendering:
         table = parse_gfm_table(lines)
         # max_width=30 is very narrow for 5 CJK columns
         result = render_table(table, max_width=30)
-        # Should fall back to vertical
-        assert "┌" not in result
+        # Should fall back to vertical — no border characters in vertical mode
+        assert "+" not in result or result.count("+") == 0
         assert ":" in result
