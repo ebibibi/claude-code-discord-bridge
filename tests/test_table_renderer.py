@@ -1,10 +1,12 @@
 """Tests for box-drawing table renderer (Claude Code style)."""
 
 from claude_discord.discord_ui.table_renderer import (
+    display_width,
     parse_gfm_table,
     render_box_table,
     render_table,
     render_vertical_table,
+    wrap_cjk,
 )
 
 
@@ -115,7 +117,8 @@ class TestRenderBoxTable:
         table = parse_gfm_table(lines)
         result = render_box_table(table, max_width=30)
         for line in result.splitlines():
-            assert len(line) <= 30, f"Line too wide: {line!r} ({len(line)} chars)"
+            w = display_width(line)
+            assert w <= 30, f"Line too wide: {line!r} ({w} cols)"
 
     def test_alignment_left(self):
         lines = [
@@ -173,7 +176,8 @@ class TestRenderBoxTable:
         table = parse_gfm_table(lines)
         result = render_box_table(table, max_width=25)
         for line in result.splitlines():
-            assert len(line) <= 25
+            w = display_width(line)
+            assert w <= 25, f"Line too wide ({w}): {line!r}"
 
     def test_no_rows(self):
         """Header-only table should still render."""
@@ -230,7 +234,8 @@ class TestRenderVerticalTable:
         table = parse_gfm_table(lines)
         result = render_vertical_table(table, max_width=40)
         for line in result.splitlines():
-            assert len(line) <= 40
+            w = display_width(line)
+            assert w <= 40, f"Line too wide ({w}): {line!r}"
 
 
 class TestRenderTable:
@@ -266,3 +271,124 @@ class TestRenderTable:
         """Non-table input returns None."""
         result = render_table(None, max_width=40)
         assert result is None
+
+
+class TestDisplayWidth:
+    """display_width() — East Asian Width aware string width."""
+
+    def test_ascii(self):
+        assert display_width("hello") == 5
+
+    def test_cjk_fullwidth(self):
+        # 日本語の全角文字は2カラム
+        assert display_width("東京") == 4
+
+    def test_mixed(self):
+        # "A東京B" = 1 + 2 + 2 + 1 = 6
+        assert display_width("A東京B") == 6
+
+    def test_empty(self):
+        assert display_width("") == 0
+
+    def test_emoji(self):
+        # Basic emoji should be at least 1 wide
+        w = display_width("🎉")
+        assert w >= 1
+
+    def test_halfwidth_katakana(self):
+        # 半角カタカナ (U+FF61-FF9F) should be 1 column
+        assert display_width("ｱｲｳ") == 3
+
+    def test_fullwidth_katakana(self):
+        # 全角カタカナ should be 2 columns each
+        assert display_width("アイウ") == 6
+
+
+class TestWrapCjk:
+    """wrap_cjk() — CJK-aware text wrapping."""
+
+    def test_ascii_no_wrap(self):
+        result = wrap_cjk("hello", 10)
+        assert result == ["hello"]
+
+    def test_ascii_wraps(self):
+        result = wrap_cjk("hello world", 6)
+        assert len(result) >= 2
+
+    def test_cjk_wraps_at_display_width(self):
+        # "東京大阪名古屋" = 14 display columns. width=8 → should wrap
+        result = wrap_cjk("東京大阪名古屋", 8)
+        assert len(result) >= 2
+        for line in result:
+            assert display_width(line) <= 8
+
+    def test_mixed_content(self):
+        text = "Hello東京World"
+        result = wrap_cjk(text, 8)
+        for line in result:
+            assert display_width(line) <= 8
+
+    def test_empty_string(self):
+        result = wrap_cjk("", 10)
+        assert result == [""]
+
+    def test_single_wide_char(self):
+        result = wrap_cjk("東", 4)
+        assert result == ["東"]
+
+
+class TestCjkTableRendering:
+    """Box-drawing tables with CJK content must respect display width."""
+
+    def test_japanese_table_columns_aligned(self):
+        """All lines must have the same display width (= borders align)."""
+        lines = [
+            "| 言語 | 用途 |",
+            "|------|------|",
+            "| Python | AI |",
+            "| Rust | システム |",
+        ]
+        table = parse_gfm_table(lines)
+        result = render_box_table(table, max_width=40)
+        widths = [display_width(line) for line in result.splitlines()]
+        # All border/data lines should have the same display width
+        assert len(set(widths)) == 1, f"Misaligned widths: {widths}"
+
+    def test_japanese_table_respects_max_width(self):
+        lines = [
+            "| 名前 | 年齢 | 都市 |",
+            "|------|------|------|",
+            "| アリス | 30 | 東京 |",
+            "| ボブ | 25 | 大阪 |",
+        ]
+        table = parse_gfm_table(lines)
+        result = render_box_table(table, max_width=40)
+        for line in result.splitlines():
+            w = display_width(line)
+            assert w <= 40, f"Line too wide ({w}): {line!r}"
+
+    def test_japanese_vertical_respects_max_width(self):
+        lines = [
+            "| 名前 | 年齢 |",
+            "|------|------|",
+            "| アリス | 30 |",
+        ]
+        table = parse_gfm_table(lines)
+        result = render_vertical_table(table, max_width=30)
+        for line in result.splitlines():
+            w = display_width(line)
+            assert w <= 30, f"Line too wide ({w}): {line!r}"
+
+    def test_wide_japanese_table_falls_back_to_vertical(self):
+        """Many CJK columns → vertical fallback."""
+        lines = [
+            "| 名前 | 年齢 | 都市 | 職業 | 趣味 |",
+            "|------|------|------|------|------|",
+            "| アリス | 30 | 東京 | エンジニア | プログラミング |",
+        ]
+        table = parse_gfm_table(lines)
+        # max_width=30 is very narrow for 5 CJK columns
+        result = render_table(table, max_width=30)
+        # Should fall back to vertical
+        assert "┌" not in result
+        assert ":" in result

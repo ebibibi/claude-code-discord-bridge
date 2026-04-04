@@ -8,20 +8,103 @@ key:value layout where each row becomes a labeled record.
 
 Algorithm (adapted from Claude Code's ou4 component):
 1. Parse GFM table lines → headers, alignments, rows
-2. Compute per-column min (word) and max (line) widths
+2. Compute per-column min (word) and max (line) widths using display_width
 3. Three-tier width fitting: natural → proportional → hard-wrap
 4. Render box-drawing table, or fall back to vertical layout
+
+Key difference from v1: all width calculations use ``display_width()``
+(East Asian Width aware) instead of ``len()``, and text wrapping uses
+``wrap_cjk()`` instead of ``textwrap.wrap()``. This ensures correct
+alignment for CJK (Japanese, Chinese, Korean) characters which occupy
+2 columns in monospace fonts.
 """
 
 from __future__ import annotations
 
-import textwrap
+import unicodedata
 from dataclasses import dataclass
 
 # --- Constants (mirroring Claude Code's ou4) ---
 MIN_COL_WIDTH = 3  # Gt6: minimum characters per column
 MAX_WRAP_LINES = 4  # HDz: max wrapped lines before switching to vertical
 DEFAULT_MAX_WIDTH = 55  # Reasonable default for Discord code blocks
+
+
+# --- East Asian Width support (mirrors Claude Code's J1/S25) ---
+
+
+def display_width(text: str) -> int:
+    """Return the display width of *text* in monospace terminal columns.
+
+    Full-width characters (CJK ideographs, fullwidth forms) count as 2,
+    everything else counts as 1. This mirrors Claude Code's ``J1()``
+    function which uses ``Bun.stringWidth`` / the hand-rolled ``S25``.
+    """
+    width = 0
+    for ch in text:
+        eaw = unicodedata.east_asian_width(ch)
+        width += 2 if eaw in ("W", "F") else 1
+    return width
+
+
+def wrap_cjk(text: str, width: int) -> list[str]:
+    """Word-wrap *text* respecting display width of CJK characters.
+
+    Unlike ``textwrap.wrap()``, this function:
+    - Uses ``display_width()`` instead of ``len()`` for line width
+    - Allows breaking between CJK characters (no space needed)
+    - Falls back to character-level breaking when words exceed width
+    """
+    if not text:
+        return [""]
+    if width <= 0:
+        return [text]
+
+    lines: list[str] = []
+    current = ""
+    current_width = 0
+
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        ch_width = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+        # Space-based word boundary for ASCII
+        if ch == " ":
+            # Try to keep the next word on the same line
+            next_space = text.find(" ", i + 1)
+            if next_space == -1:
+                next_space = len(text)
+            next_word = text[i + 1 : next_space]
+            next_word_width = display_width(next_word)
+
+            if current_width + 1 + next_word_width <= width:
+                current += ch
+                current_width += 1
+                i += 1
+                continue
+            # Word doesn't fit → break here
+            if current:
+                lines.append(current)
+                current = ""
+                current_width = 0
+            i += 1  # skip the space
+            continue
+
+        # Would this character overflow? Flush current line if non-empty.
+        if current_width + ch_width > width and current:
+            lines.append(current)
+            current = ""
+            current_width = 0
+
+        current += ch
+        current_width += ch_width
+        i += 1
+
+    if current:
+        lines.append(current)
+
+    return lines if lines else [""]
 
 
 @dataclass(frozen=True)
@@ -56,11 +139,9 @@ def parse_gfm_table(lines: list[str]) -> GfmTable | None:
         stripped = cell.strip()
         if not stripped:
             return None
-        # Remove colons and check for dashes
         inner = stripped.strip(":")
         if not inner or not all(c == "-" for c in inner):
             return None
-        # Detect alignment
         if stripped.startswith(":") and stripped.endswith(":"):
             alignments.append("center")
         elif stripped.endswith(":"):
@@ -70,7 +151,6 @@ def parse_gfm_table(lines: list[str]) -> GfmTable | None:
 
     num_cols = len(header_cells)
 
-    # Pad alignments if fewer than headers
     while len(alignments) < num_cols:
         alignments.append("left")
 
@@ -78,7 +158,6 @@ def parse_gfm_table(lines: list[str]) -> GfmTable | None:
     for line in lines[2:]:
         cells = _parse_row(line)
         if cells is not None:
-            # Pad or truncate to match header column count
             padded = cells[:num_cols]
             while len(padded) < num_cols:
                 padded.append("")
@@ -87,29 +166,27 @@ def parse_gfm_table(lines: list[str]) -> GfmTable | None:
     return GfmTable(headers=header_cells, alignments=alignments[:num_cols], rows=rows)
 
 
-def render_table(table: GfmTable | None, max_width: int = DEFAULT_MAX_WIDTH) -> str | None:
-    """Render a parsed GFM table, auto-selecting box or vertical layout.
-
-    Returns None if table is None (invalid input).
-    """
+def render_table(
+    table: GfmTable | None,
+    max_width: int = DEFAULT_MAX_WIDTH,
+) -> str | None:
+    """Render a parsed GFM table, auto-selecting box or vertical layout."""
     if table is None:
         return None
 
     num_cols = len(table.headers)
-    # Border overhead: │ + ( " content " + │) per column = 1 + 3*num_cols
     border_overhead = 1 + num_cols * 3
     available = max(max_width - border_overhead, num_cols * MIN_COL_WIDTH)
 
     col_widths = _compute_col_widths(table, available)
 
-    # Check if any cell wraps more than MAX_WRAP_LINES
     if _max_wrap_lines(table, col_widths) > MAX_WRAP_LINES:
         return render_vertical_table(table, max_width)
 
     result = render_box_table(table, max_width, col_widths)
 
-    # Safety check: if any line exceeds max_width, fall back
-    if any(len(line) > max_width for line in result.splitlines()):
+    # Safety check: if any line exceeds max_width in display width, fall back
+    if any(display_width(line) > max_width for line in result.splitlines()):
         return render_vertical_table(table, max_width)
 
     return result
@@ -140,7 +217,10 @@ def render_box_table(
     return "\n".join(lines)
 
 
-def render_vertical_table(table: GfmTable, max_width: int = DEFAULT_MAX_WIDTH) -> str:
+def render_vertical_table(
+    table: GfmTable,
+    max_width: int = DEFAULT_MAX_WIDTH,
+) -> str:
     """Render table in vertical key:value layout (one record per row)."""
     sep_width = min(max_width - 1, 40)
     separator = "─" * sep_width
@@ -151,9 +231,9 @@ def render_vertical_table(table: GfmTable, max_width: int = DEFAULT_MAX_WIDTH) -
         for col_idx, header in enumerate(table.headers):
             value = row[col_idx] if col_idx < len(row) else ""
             label = f"{header}:"
-            # Available width for value on the first line
-            first_line_avail = max(max_width - len(label) - 1, 10)
-            wrapped = textwrap.wrap(value, width=first_line_avail) if value else [""]
+            label_width = display_width(label)
+            first_line_avail = max(max_width - label_width - 1, 10)
+            wrapped = wrap_cjk(value, first_line_avail) if value else [""]
             record_lines.append(f"{label} {wrapped[0]}")
             for cont in wrapped[1:]:
                 record_lines.append(f"  {cont}")
@@ -170,9 +250,7 @@ def _parse_row(line: str) -> list[str] | None:
     stripped = line.strip()
     if not stripped.startswith("|") or not stripped.endswith("|"):
         return None
-    # Split by | and strip the empty first/last elements
     parts = stripped.split("|")
-    # parts[0] and parts[-1] are empty strings from leading/trailing |
     if len(parts) < 3:
         return None
     return [p.strip() for p in parts[1:-1]]
@@ -181,36 +259,30 @@ def _parse_row(line: str) -> list[str] | None:
 def _compute_col_widths(table: GfmTable, available: int) -> list[int]:
     """Compute optimal column widths using Claude Code's 3-tier algorithm.
 
-    Tier 1: All columns fit at natural max width
-    Tier 2: Proportional distribution between min and max
-    Tier 3: Scale everything down with hard-wrap
+    All width measurements use ``display_width()`` for CJK correctness.
     """
     num_cols = len(table.headers)
     all_cells = [table.headers, *table.rows]
 
-    # min width = max word length per column
     min_widths = [MIN_COL_WIDTH] * num_cols
-    # max width = max line length per column
     max_widths = [MIN_COL_WIDTH] * num_cols
 
     for row in all_cells:
         for col in range(min(len(row), num_cols)):
             cell = row[col]
-            # Min: longest single word
+            # Min: widest single word (display width)
             words = cell.split() if cell else [""]
-            word_max = max((len(w) for w in words), default=0)
+            word_max = max((display_width(w) for w in words), default=0)
             min_widths[col] = max(min_widths[col], word_max)
-            # Max: full cell length
-            max_widths[col] = max(max_widths[col], len(cell))
+            # Max: full cell display width
+            max_widths[col] = max(max_widths[col], display_width(cell))
 
     total_min = sum(min_widths)
     total_max = sum(max_widths)
 
-    # Tier 1: everything fits at max
     if total_max <= available:
         return max_widths
 
-    # Tier 2: proportional distribution
     if total_min <= available:
         extra = available - total_min
         stretches = [max_widths[i] - min_widths[i] for i in range(num_cols)]
@@ -222,7 +294,6 @@ def _compute_col_widths(table: GfmTable, available: int) -> list[int]:
             result[i] += int(stretches[i] / total_stretch * extra)
         return result
 
-    # Tier 3: scale down, hard-wrap
     ratio = available / total_min if total_min > 0 else 1
     return [max(int(min_widths[i] * ratio), MIN_COL_WIDTH) for i in range(num_cols)]
 
@@ -236,7 +307,7 @@ def _max_wrap_lines(table: GfmTable, col_widths: list[int]) -> int:
             cell = row[col]
             if not cell:
                 continue
-            wrapped = textwrap.wrap(cell, width=col_widths[col]) or [""]
+            wrapped = wrap_cjk(cell, col_widths[col])
             max_lines = max(max_lines, len(wrapped))
     return max_lines
 
@@ -253,21 +324,24 @@ def _border_line(position: str, col_widths: list[int]) -> str:
     return left + cross.join(segments) + right
 
 
-def _render_row(cells: list[str], col_widths: list[int], alignments: list[str]) -> list[str]:
+def _render_row(
+    cells: list[str],
+    col_widths: list[int],
+    alignments: list[str],
+) -> list[str]:
     """Render a single row, potentially spanning multiple output lines."""
     num_cols = len(col_widths)
     wrapped: list[list[str]] = []
 
     for col in range(num_cols):
         cell = cells[col] if col < len(cells) else ""
-        lines = textwrap.wrap(cell, width=col_widths[col]) if cell else [""]
+        lines = wrap_cjk(cell, col_widths[col]) if cell else [""]
         if not lines:
             lines = [""]
         wrapped.append(lines)
 
     max_lines = max(len(w) for w in wrapped)
 
-    # Vertically center shorter cells
     output_lines: list[str] = []
     for line_idx in range(max_lines):
         parts: list[str] = []
@@ -285,8 +359,9 @@ def _render_row(cells: list[str], col_widths: list[int], alignments: list[str]) 
 
 
 def _pad_cell(text: str, width: int, align: str) -> str:
-    """Pad cell content to the specified width with given alignment."""
-    padding = max(0, width - len(text))
+    """Pad cell content to the specified width respecting display width."""
+    text_width = display_width(text)
+    padding = max(0, width - text_width)
     if align == "center":
         left_pad = padding // 2
         return " " * left_pad + text + " " * (padding - left_pad)
