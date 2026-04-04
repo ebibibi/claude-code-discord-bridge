@@ -10,8 +10,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import TYPE_CHECKING
 
 import discord
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +67,42 @@ class StreamingMessageManager:
         elif not self._pending_edit or self._pending_edit.done():
             self._pending_edit = asyncio.create_task(self._delayed_flush())
 
-    async def finalize(self) -> str:
-        """Finalize the streaming message. Returns the full accumulated text."""
+    async def finalize(
+        self,
+        transform: Callable[[str], str] | None = None,
+    ) -> str:
+        """Finalize the streaming message. Returns the full accumulated text.
+
+        Args:
+            transform: Optional post-processor applied to the buffer before
+                the final flush.  Used by the table renderer to convert raw
+                GFM pipe-tables into box-drawing tables on completion.
+                If the transformed text exceeds STREAM_MAX_CHARS, overflow
+                is posted as a new follow-up message.
+        """
         self._finalized = True
         if self._pending_edit and not self._pending_edit.done():
             self._pending_edit.cancel()
+
+        if transform and self._buffer:
+            self._buffer = transform(self._buffer)
+
         if self._buffer:
-            await self._flush()
+            if len(self._buffer) <= STREAM_MAX_CHARS:
+                await self._flush()
+            else:
+                # Transformed text grew beyond limit — edit current message
+                # with the first chunk and post the rest as new messages.
+                first = self._buffer[:STREAM_MAX_CHARS]
+                overflow = self._buffer[STREAM_MAX_CHARS:]
+                self._buffer = first
+                await self._flush()
+                # Post overflow chunks
+                while overflow:
+                    chunk = overflow[:STREAM_MAX_CHARS]
+                    overflow = overflow[STREAM_MAX_CHARS:]
+                    await self._thread.send(chunk)
+
         return self._buffer
 
     async def _delayed_flush(self) -> None:

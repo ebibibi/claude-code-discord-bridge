@@ -17,7 +17,7 @@ from pathlib import Path
 import discord
 
 from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent
-from ..discord_ui.chunker import chunk_message
+from ..discord_ui.chunker import _wrap_tables_in_fences, chunk_message
 from ..discord_ui.elicitation_view import ElicitationFormView, ElicitationUrlView
 from ..discord_ui.embeds import (
     elicitation_embed,
@@ -381,7 +381,7 @@ class EventProcessor:
         last_assistant_text: str = self._state.accumulated_text
 
         if self._streamer.has_content:
-            await self._streamer.finalize()
+            await self._streamer.finalize(transform=_wrap_tables_in_fences)
             self._assistant_text_sent = True
             if self._streamer._current_message is not None:
                 last_assistant_url = self._streamer._current_message.jump_url
@@ -497,7 +497,7 @@ class EventProcessor:
             if self._streamer.has_content:
                 if delta:
                     await self._streamer.append(delta)
-                await self._streamer.finalize()
+                await self._streamer.finalize(transform=_wrap_tables_in_fences)
                 self._streamer = StreamingMessageManager(self._config.thread)
             else:
                 # No partial events arrived — post the full text directly.
@@ -514,7 +514,7 @@ class EventProcessor:
 
         # Finalize any in-progress streaming text before the tool embed.
         if self._streamer.has_content:
-            await self._streamer.finalize()
+            await self._streamer.finalize(transform=_wrap_tables_in_fences)
             self._streamer = StreamingMessageManager(self._config.thread)
         self._state.partial_text = ""
 
