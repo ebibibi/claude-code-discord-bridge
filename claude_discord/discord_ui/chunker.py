@@ -3,13 +3,16 @@
 Inspired by OpenClaw: never split inside a code block. If forced to split,
 properly close and reopen the fence markers.
 
-GFM pipe-tables are wrapped in triple-backtick fences before chunking.
-This gives consistent monospace rendering in Discord for any table size:
-small tables that fit in one message and large tables that must be split
-across messages both appear with correct column alignment.
+GFM pipe-tables are rendered with Unicode box-drawing characters (Claude Code
+style) and wrapped in triple-backtick fences before chunking.  This gives
+consistent monospace rendering in Discord for any table size: small tables
+that fit in one message and large tables that must be split across messages
+both appear with correct column alignment.
 """
 
 from __future__ import annotations
+
+from claude_discord.discord_ui.table_renderer import parse_gfm_table, render_table
 
 DISCORD_MAX_CHARS = 2000
 # Leave room for fence reopening overhead
@@ -59,31 +62,28 @@ def chunk_message(text: str, max_chars: int = EFFECTIVE_MAX) -> list[str]:
 
 
 def _wrap_tables_in_fences(text: str) -> str:
-    """Wrap every GFM pipe-table block in a triple-backtick code fence.
+    """Render GFM pipe-tables as box-drawing tables and wrap in code fences.
 
-    Discord renders GFM tables natively only when the complete table fits in
-    a single message.  When a large table must be split, continuation chunks
-    have no header and appear as raw pipe characters.  Wrapping tables in
-    code fences lets the existing fence-aware chunker handle splitting with
-    proper close/reopen semantics, giving monospace alignment in every chunk.
+    Collects consecutive pipe-table lines, renders them with Unicode
+    box-drawing characters via ``render_table``, and wraps the result in a
+    triple-backtick code fence.  If the renderer cannot parse the lines
+    (e.g. missing separator row), the raw pipe-table lines are fenced as-is.
 
     Tables already inside a code fence are left untouched.
     """
     lines = text.splitlines(keepends=True)
     result: list[str] = []
     in_fence = False
-    in_table = False
+    table_lines: list[str] = []
 
     for line in lines:
         stripped = line.rstrip("\n\r")
 
         # Track outer code fences — don't double-wrap already-fenced content
         if stripped.strip().startswith("```"):
-            if in_table:
-                # Close the table fence before the outer fence opens
-                _ensure_newline(result)
-                result.append("```\n")
-                in_table = False
+            if table_lines:
+                _flush_table(table_lines, result)
+                table_lines = []
             in_fence = not in_fence
             result.append(line)
             continue
@@ -94,21 +94,36 @@ def _wrap_tables_in_fences(text: str) -> str:
 
         is_table = _is_table_line(stripped)
 
-        if is_table and not in_table:
-            result.append("```\n")
-            in_table = True
-        elif not is_table and in_table:
-            _ensure_newline(result)
-            result.append("```\n")
-            in_table = False
+        if is_table:
+            table_lines.append(stripped)
+        else:
+            if table_lines:
+                _flush_table(table_lines, result)
+                table_lines = []
+            result.append(line)
 
-        result.append(line)
-
-    if in_table:
-        _ensure_newline(result)
-        result.append("```\n")
+    if table_lines:
+        _flush_table(table_lines, result)
 
     return "".join(result)
+
+
+def _flush_table(table_lines: list[str], result: list[str]) -> None:
+    """Render collected table lines and append fenced output to *result*."""
+    parsed = parse_gfm_table(table_lines)
+    rendered = render_table(parsed) if parsed else None
+
+    _ensure_newline(result)
+    result.append("```\n")
+    if rendered:
+        result.append(rendered)
+        result.append("\n")
+    else:
+        # Fallback: raw pipe-table lines
+        for tl in table_lines:
+            result.append(tl)
+            result.append("\n")
+    result.append("```\n")
 
 
 def _ensure_newline(parts: list[str]) -> None:

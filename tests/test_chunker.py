@@ -8,6 +8,7 @@ from claude_discord.discord_ui.chunker import (
 )
 
 TABLE_3ROW = "| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |"
+# After box-drawing rendering, the table is no longer raw pipes
 FENCED_TABLE_3ROW = f"```\n{TABLE_3ROW}\n```"
 
 
@@ -74,18 +75,23 @@ class TestIsTableLine:
 
 class TestWrapTablesInFences:
     def test_simple_table_wrapped(self):
-        """A bare table is wrapped in a code fence."""
+        """A bare table is rendered as box-drawing and wrapped in a code fence."""
         table = "| A | B |\n|---|---|\n| 1 | 2 |"
         result = _wrap_tables_in_fences(table)
-        assert result == f"```\n{table}\n```\n"
+        assert result.startswith("```\n")
+        assert result.rstrip().endswith("```")
+        # Box-drawing characters should be present
+        assert "┌" in result
+        assert "│" in result
+        assert "└" in result
 
     def test_table_with_surrounding_text(self):
-        """Table embedded in text gets fenced; surrounding text is untouched."""
+        """Table embedded in text gets box-rendered and fenced; text is untouched."""
         text = "Before.\n\n| A |\n|---|\n| 1 |\n\nAfter."
         result = _wrap_tables_in_fences(text)
         assert result.startswith("Before.")
-        assert "```\n| A |" in result
-        assert "| 1 |\n```" in result
+        assert "```\n┌" in result
+        assert "┘\n```" in result
         assert result.endswith("After.")
 
     def test_table_inside_fence_not_rewrapped(self):
@@ -118,11 +124,12 @@ class TestWrapTablesInFences:
 
 class TestTableChunking:
     def test_table_wrapped_in_fence(self):
-        """Tables should be wrapped in a code fence in the output."""
+        """Tables should be box-rendered and wrapped in a code fence."""
         text = "Intro paragraph.\n\n" + TABLE_3ROW
         chunks = chunk_message(text)
         full = "".join(chunks)
-        assert FENCED_TABLE_3ROW in full
+        assert "┌" in full
+        assert "```" in full
 
     def test_splits_before_table_fence(self):
         """Long preamble followed by a table: the fenced table stays in one chunk."""
@@ -130,15 +137,16 @@ class TestTableChunking:
         text = preamble + "\n\n" + TABLE_3ROW
         chunks = chunk_message(text, max_chars=900)
         assert len(chunks) >= 2
-        # The fenced table should appear intact in one of the chunks
-        assert any(FENCED_TABLE_3ROW in chunk for chunk in chunks)
+        # The box-drawing table should appear intact in one of the chunks
+        assert any("┌" in chunk and "└" in chunk for chunk in chunks)
 
     def test_table_at_message_start(self):
         """Table at the very start is returned intact (fenced) if it fits."""
         text = TABLE_3ROW + "\n\nTrailing text."
         chunks = chunk_message(text)
         full = "".join(chunks)
-        assert FENCED_TABLE_3ROW in full
+        assert "┌" in full
+        assert "└" in full
 
     def test_large_table_all_chunks_properly_fenced(self):
         """Large table split across chunks: every chunk with table content is fenced."""
