@@ -11,6 +11,7 @@ Handles the core message flow:
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import logging
 import os
@@ -72,6 +73,17 @@ class ClaudeChatCog(commands.Cog):
         # Used by _handle_thread_reply to wait for an interrupted session
         # to fully clean up before starting the replacement session.
         self._active_tasks: dict[int, asyncio.Task] = {}
+        # --- Dedup guards (prevent duplicate sessions from reconnect replays) ---
+        # Recently processed message IDs — prevents the same on_message from
+        # spawning multiple Claude sessions when Discord replays events after
+        # a WebSocket RESUME / reconnect.
+        self._processed_messages: collections.OrderedDict[int, None] = collections.OrderedDict()
+        self._processed_messages_limit = 200
+        # Per-thread lock — serialises _handle_new_conversation and
+        # _handle_thread_reply so that only one _run_claude call can be
+        # initiated per thread at a time (prevents TOCTOU race on
+        # _active_runners).
+        self._thread_locks: dict[int, asyncio.Lock] = {}
         # Dashboard may be None until bot is ready; resolved lazily in _get_dashboard()
         self._dashboard = dashboard
         # Coordination service resolved lazily from bot if not supplied directly
@@ -149,6 +161,17 @@ class ClaudeChatCog(commands.Cog):
         # are the only gate (suitable for private servers).
         if self._allowed_user_ids is not None and message.author.id not in self._allowed_user_ids:
             return
+
+        # --- Dedup: skip if this message was already processed ---
+        # Discord can replay the same message_id after a WebSocket reconnect,
+        # causing duplicate Claude sessions in the same thread.
+        if message.id in self._processed_messages:
+            logger.debug("Skipping already-processed message %d", message.id)
+            return
+        self._processed_messages[message.id] = None
+        # Evict oldest entries to cap memory usage
+        while len(self._processed_messages) > self._processed_messages_limit:
+            self._processed_messages.popitem(last=False)
 
         # Check if message is in the configured channel (new conversation)
         if message.channel.id == self.bot.channel_id:
@@ -386,6 +409,14 @@ class ClaudeChatCog(commands.Cog):
             except Exception:
                 logger.error("Failed to resume session in thread %d", thread_id, exc_info=True)
 
+    def _get_thread_lock(self, thread_id: int) -> asyncio.Lock:
+        """Return (or create) a per-thread asyncio.Lock to serialise session starts."""
+        lock = self._thread_locks.get(thread_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._thread_locks[thread_id] = lock
+        return lock
+
     async def _handle_thread_reply(self, message: discord.Message) -> None:
         """Continue a Claude Code session in an existing thread.
 
@@ -393,33 +424,39 @@ class ClaudeChatCog(commands.Cog):
         session (graceful interrupt, like pressing Escape) and waits for it to
         finish cleaning up before starting the new session.  This prevents two
         Claude processes from running in parallel in the same thread.
+
+        A per-thread lock ensures that even if on_message fires twice for the
+        same (or near-simultaneous) messages, only one _run_claude is initiated
+        at a time — the second caller waits until the first finishes starting.
         """
         thread = message.channel
         assert isinstance(thread, discord.Thread)
 
-        record = await self.repo.get(thread.id)
-        session_id = record.session_id if record else None
-        prompt, image_urls = await self._build_prompt_and_images(message)
+        lock = self._get_thread_lock(thread.id)
+        async with lock:
+            record = await self.repo.get(thread.id)
+            session_id = record.session_id if record else None
+            prompt, image_urls = await self._build_prompt_and_images(message)
 
-        # Nothing to send — ignore silently (e.g. unsupported attachment only).
-        if not prompt and not image_urls:
-            return
+            # Nothing to send — ignore silently (e.g. unsupported attachment only).
+            if not prompt and not image_urls:
+                return
 
-        # Interrupt any active session in this thread before starting a new one.
-        existing_runner = self._active_runners.get(thread.id)
-        existing_task = self._active_tasks.get(thread.id)
-        if existing_runner is not None:
-            await thread.send("-# ⚡ Interrupted. Starting with new instruction...")
-            await existing_runner.interrupt()
-            # Wait for the interrupted _run_claude to finish its finally block
-            # (which releases the semaphore and removes entries from dicts).
-            if existing_task is not None and not existing_task.done():
-                with contextlib.suppress(Exception):
-                    await existing_task
+            # Interrupt any active session in this thread before starting a new one.
+            existing_runner = self._active_runners.get(thread.id)
+            existing_task = self._active_tasks.get(thread.id)
+            if existing_runner is not None:
+                await thread.send("-# ⚡ Interrupted. Starting with new instruction...")
+                await existing_runner.interrupt()
+                # Wait for the interrupted _run_claude to finish its finally block
+                # (which releases the semaphore and removes entries from dicts).
+                if existing_task is not None and not existing_task.done():
+                    with contextlib.suppress(Exception):
+                        await existing_task
 
-        await self._run_claude(
-            message, thread, prompt, session_id=session_id, image_urls=image_urls
-        )
+            await self._run_claude(
+                message, thread, prompt, session_id=session_id, image_urls=image_urls
+            )
 
     async def _build_prompt_and_images(self, message: discord.Message) -> tuple[str, list[str]]:
         """Delegate to the standalone prompt_builder module."""
