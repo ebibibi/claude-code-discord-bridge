@@ -398,13 +398,20 @@ class ClaudeChatCog(commands.Cog):
                 seed_message = await thread.send(
                     f"🔄 **Bot が再起動から復帰しました。**\n{resume_prompt}"
                 )
+
+                async def _locked_resume(
+                    _thread: discord.Thread,
+                    _msg: discord.Message,
+                    _prompt: str,
+                    _sid: str | None,
+                ) -> None:
+                    """Resume under the per-thread lock to prevent races with on_message."""
+                    lock = self._get_thread_lock(_thread.id)
+                    async with lock:
+                        await self._run_claude(_msg, _thread, _prompt, session_id=_sid)
+
                 asyncio.create_task(
-                    self._run_claude(
-                        seed_message,
-                        thread,
-                        resume_prompt,
-                        session_id=entry.session_id,
-                    )
+                    _locked_resume(thread, seed_message, resume_prompt, entry.session_id)
                 )
             except Exception:
                 logger.error("Failed to resume session in thread %d", thread_id, exc_info=True)
