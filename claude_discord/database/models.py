@@ -13,6 +13,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     thread_id INTEGER PRIMARY KEY,
     session_id TEXT NOT NULL,
+    backend TEXT NOT NULL DEFAULT 'claude',
     working_dir TEXT,
     model TEXT,
     origin TEXT NOT NULL DEFAULT 'discord',
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS usage_stats (
 
 # Migrations for existing databases that lack new columns.
 _MIGRATIONS = [
+    "ALTER TABLE sessions ADD COLUMN backend TEXT NOT NULL DEFAULT 'claude'",
     "ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'discord'",
     "ALTER TABLE sessions ADD COLUMN summary TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)",
@@ -124,6 +126,8 @@ _MIGRATIONS = [
     # context stats columns added in v2.0
     "ALTER TABLE sessions ADD COLUMN context_window INTEGER",
     "ALTER TABLE sessions ADD COLUMN context_used INTEGER",
+    # Backfill backend after adding the column so legacy rows are explicit.
+    "UPDATE sessions SET backend = 'claude' WHERE backend IS NULL",
     # usage_stats table added in v2.0
     (
         "CREATE TABLE IF NOT EXISTS usage_stats ("

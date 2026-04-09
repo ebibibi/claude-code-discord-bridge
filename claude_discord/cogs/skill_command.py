@@ -25,9 +25,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..claude.runner import ClaudeRunner
 from ..concurrency import SessionRegistry
 from ..database.repository import SessionRepository
+from ..protocols import AgentRunner
 from ._run_helper import run_claude_with_config
 from .run_config import RunConfig
 
@@ -137,7 +137,7 @@ class SkillCommandCog(commands.Cog):
         self,
         bot: commands.Bot,
         repo: SessionRepository,
-        runner: ClaudeRunner,
+        runner: AgentRunner,
         claude_channel_id: int,
         skills_dir: Path | str | None = None,
         allowed_user_ids: set[int] | None = None,

@@ -12,6 +12,7 @@ from claude_discord.database.repository import SessionRecord
 def _make_record(
     thread_id: int = 100,
     session_id: str = "abc-123",
+    backend: str = "claude",
     origin: str = "discord",
     summary: str | None = "Fix login bug",
     working_dir: str | None = "/home/user/project",
@@ -26,6 +27,7 @@ def _make_record(
         summary=summary,
         created_at="2026-02-19 10:00:00",
         last_used_at="2026-02-19 11:00:00",
+        backend=backend,
     )
 
 
@@ -162,3 +164,24 @@ class TestResumeSelectView:
         view = ResumeSelectView(records=records, bot=MagicMock())
         selects = [c for c in view.children if isinstance(c, discord.ui.Select)]
         assert "myproject" in (selects[0].options[0].description or "")
+
+    async def test_select_passes_record_backend_to_spawn_session(self):
+        from claude_discord.discord_ui.views import ResumeSelectView
+
+        record = _make_record(session_id="rollout-123", summary="Resume me", backend="codex")
+        chat_cog = MagicMock()
+        chat_cog.spawn_session = AsyncMock()
+
+        bot = MagicMock()
+        bot.channel_id = 999
+        bot.get_cog.return_value = chat_cog
+        bot.get_channel.return_value = MagicMock(spec=discord.TextChannel)
+
+        interaction = _make_interaction()
+        interaction.data = {"values": ["0"]}
+        interaction.response.edit_message = AsyncMock()
+
+        view = ResumeSelectView(records=[record], bot=bot)
+        await view._on_select(interaction)
+
+        assert chat_cog.spawn_session.call_args.kwargs["backend"] == "codex"

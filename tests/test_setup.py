@@ -18,6 +18,13 @@ def _make_bot() -> MagicMock:
 
 def _make_runner() -> MagicMock:
     runner = MagicMock()
+    runner.command = "claude"
+    runner.model = "sonnet"
+    runner.working_dir = "/tmp/project"
+    runner.timeout_seconds = 300
+    runner.dangerously_skip_permissions = False
+    runner.api_port = None
+    runner.api_secret = None
     runner.clone.return_value = runner
     return runner
 
@@ -285,3 +292,33 @@ async def test_setup_bridge_preserves_existing_runner_api_port(tmp_path: object)
 
     # Should NOT overwrite the existing value
     assert runner.api_port == 9999
+
+
+@pytest.mark.asyncio
+async def test_setup_bridge_configures_default_backend_and_runner_registry(
+    tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ClaudeChatCog should receive the default backend and both builtin runners."""
+    from claude_discord.cogs.claude_chat import ClaudeChatCog
+
+    bot = _make_bot()
+    runner = _make_runner()
+    monkeypatch.setenv("CCDB_DEFAULT_BACKEND", "codex")
+
+    await setup_bridge(
+        bot,
+        runner,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        enable_scheduler=False,
+    )
+
+    chat_cog = next(
+        call.args[0]
+        for call in bot.add_cog.call_args_list
+        if isinstance(call.args[0], ClaudeChatCog)
+    )
+
+    assert chat_cog._default_backend == "codex"
+    assert chat_cog._runners["claude"] is runner
+    assert chat_cog._runners["codex"].command == "codex"

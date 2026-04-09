@@ -11,6 +11,7 @@ Handles the core message flow:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 import contextlib
 import logging
 import os
@@ -21,20 +22,21 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..backends import BackendKind, DEFAULT_BACKEND, normalize_backend
 from ..claude.rewind import find_session_jsonl, parse_user_turns
-from ..claude.runner import ClaudeRunner
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..database.resume_repo import PendingResumeRepository
-from ..database.settings_repo import SettingsRepository
+from ..database.settings_repo import SETTING_DEFAULT_BACKEND, SettingsRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.thread_renamer import suggest_title
 from ..discord_ui.views import RewindSelectView, StopView
+from ..protocols import AgentRunner
 from ._run_helper import run_claude_with_config
 from .prompt_builder import build_prompt_and_images, wants_file_attachment
 from .run_config import RunConfig
@@ -54,10 +56,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _HELP_CATEGORY: dict[str, str | None] = {
     "help": None,  # the help command doesn't list itself
+    "session": "📌 Session",
+    "claude": "📌 Session",
+    "codex": "📌 Session",
     "stop": "📌 Session",
     "clear": "📌 Session",
     "rewind": "📌 Session",
     "fork": "📌 Session",
+    "backend-show": "📌 Session",
+    "backend-set": "📌 Session",
     "context": "📌 Session",
     "usage": "📌 Session",
     "sessions": "📌 Session",
@@ -79,6 +86,11 @@ _HELP_CATEGORY: dict[str, str | None] = {
 # Section display order in the embed.
 _HELP_SECTION_ORDER: list[str] = ["📌 Session", "🤖 Model", "🔧 Advanced"]
 
+_BACKEND_CHOICES = [
+    app_commands.Choice(name="Claude", value="claude"),
+    app_commands.Choice(name="Codex", value="codex"),
+]
+
 
 class ClaudeChatCog(commands.Cog):
     """Cog that handles Claude Code conversations via Discord threads."""
@@ -87,7 +99,9 @@ class ClaudeChatCog(commands.Cog):
         self,
         bot: ClaudeDiscordBot,
         repo: SessionRepository,
-        runner: ClaudeRunner,
+        runner: AgentRunner,
+        runners: Mapping[BackendKind | str, AgentRunner] | None = None,
+        default_backend: BackendKind | str | None = None,
         max_concurrent: int = 3,
         allowed_user_ids: set[int] | None = None,
         registry: SessionRegistry | None = None,
@@ -106,6 +120,11 @@ class ClaudeChatCog(commands.Cog):
         self.bot = bot
         self.repo = repo
         self.runner = runner
+        self._runners: dict[BackendKind, AgentRunner] = {DEFAULT_BACKEND: runner}
+        if runners is not None:
+            for backend, configured_runner in runners.items():
+                self._runners[normalize_backend(backend)] = configured_runner
+        self._default_backend = normalize_backend(default_backend or os.getenv("CCDB_DEFAULT_BACKEND"))
         self._max_concurrent = max_concurrent
         self._allowed_user_ids = allowed_user_ids
         # When True, skip channel-ID filtering and accept all guild channels.
@@ -126,7 +145,7 @@ class ClaudeChatCog(commands.Cog):
         self._chat_only_channel_ids: set[int] = chat_only_channel_ids or set()
         self._registry = registry or getattr(bot, "session_registry", None)
         self._semaphore = asyncio.Semaphore(max_concurrent)
-        self._active_runners: dict[int, ClaudeRunner] = {}
+        self._active_runners: dict[int, AgentRunner] = {}
         # Tracks the asyncio.Task running _run_claude for each thread.
         # Used by _handle_thread_reply to wait for an interrupted session
         # to fully clean up before starting the replacement session.
@@ -160,26 +179,92 @@ class ClaudeChatCog(commands.Cog):
             self._dashboard = getattr(self.bot, "thread_dashboard", None)
         return self._dashboard
 
-    async def _get_current_model(self) -> str | None:
-        """Return the model override from settings_repo, or None to use runner default.
+    def _get_runner_for_backend(self, backend: BackendKind | str | None) -> AgentRunner:
+        """Return the configured base runner for a backend."""
+        normalized = normalize_backend(backend)
+        try:
+            return self._runners[normalized]
+        except KeyError as exc:
+            raise ValueError(f"No runner configured for backend: {normalized}") from exc
+
+    async def _get_default_backend(self) -> BackendKind:
+        """Return the current default backend, preferring the persisted setting."""
+        if self._settings_repo is None:
+            return self._default_backend
+
+        get_default_backend = getattr(self._settings_repo, "get_default_backend", None)
+        if get_default_backend is not None:
+            with contextlib.suppress(TypeError):
+                return await get_default_backend(fallback=self._default_backend)
+
+        stored = await self._settings_repo.get(SETTING_DEFAULT_BACKEND)
+        if stored is None:
+            return self._default_backend
+        try:
+            return normalize_backend(stored)
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid stored default backend %r; using fallback %s",
+                stored,
+                self._default_backend,
+            )
+            return self._default_backend
+
+    @staticmethod
+    def _get_record_backend(record: object | None) -> BackendKind:
+        """Return the persisted backend for a session record, defaulting legacy rows to Claude."""
+        if record is None:
+            return DEFAULT_BACKEND
+
+        raw_backend = getattr(record, "backend", None)
+        if raw_backend is None or isinstance(raw_backend, str):
+            return normalize_backend(raw_backend)
+        return DEFAULT_BACKEND
+
+    def _resolve_session_start_channel(
+        self,
+        channel: discord.abc.GuildChannel | discord.Thread | None,
+    ) -> discord.TextChannel | None:
+        """Return the text channel where a new session thread should be created."""
+        if isinstance(channel, discord.Thread):
+            parent = getattr(channel, "parent", None)
+            if isinstance(parent, discord.TextChannel) and (
+                self._monitor_all_channels or parent.id in self._channel_ids
+            ):
+                return parent
+            return None
+
+        if isinstance(channel, discord.TextChannel) and (
+            self._monitor_all_channels or channel.id in self._channel_ids
+        ):
+            return channel
+
+        return None
+
+    async def _get_current_model(self, backend: BackendKind = DEFAULT_BACKEND) -> str | None:
+        """Return the model override from settings_repo for Claude sessions only.
 
         When /model set has been used to change the global model, this returns
         the stored value. Returns None if no override is set or settings_repo
         is unavailable.
         """
+        if backend != "claude":
+            return None
         if self._settings_repo is None:
             return None
         from .session_manage import SETTING_CLAUDE_MODEL
 
         return await self._settings_repo.get(SETTING_CLAUDE_MODEL)
 
-    async def _get_allowed_tools(self) -> list[str] | None:
-        """Return the tool override from settings_repo, or None to use runner default.
+    async def _get_allowed_tools(self, backend: BackendKind = DEFAULT_BACKEND) -> list[str] | None:
+        """Return the tool override from settings_repo for Claude sessions only.
 
         When /tools-set has been used to change the allowed tools, this returns
         the parsed list.  Returns None if no override is set or settings_repo
         is unavailable (meaning: inherit from the base runner).
         """
+        if backend != "claude":
+            return None
         if self._settings_repo is None:
             return None
         from .session_manage import SETTING_ALLOWED_TOOLS
@@ -275,6 +360,93 @@ class ClaudeChatCog(commands.Cog):
                 embed.add_field(name=section_name, value="\n".join(lines), inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(
+        name="session",
+        description="Start a new session in a fresh thread with a chosen backend",
+    )
+    @app_commands.describe(
+        backend="Backend to use for the new session",
+        prompt="Initial instruction for the session",
+    )
+    @app_commands.choices(backend=_BACKEND_CHOICES)
+    async def start_session(
+        self,
+        interaction: discord.Interaction,
+        backend: str,
+        prompt: str,
+    ) -> None:
+        """Start a new session, overriding the configured default backend."""
+        await self._start_session_from_interaction(
+            interaction,
+            backend=backend,
+            prompt=prompt,
+        )
+
+    async def _start_session_from_interaction(
+        self,
+        interaction: discord.Interaction,
+        *,
+        backend: BackendKind | str,
+        prompt: str,
+    ) -> None:
+        """Start a new session thread from a slash command."""
+        target_channel = self._resolve_session_start_channel(interaction.channel)
+        if target_channel is None:
+            await interaction.response.send_message(
+                "This command can only be used in a configured chat channel or thread.",
+                ephemeral=True,
+            )
+            return
+
+        selected_backend = normalize_backend(backend)
+        await interaction.response.defer(ephemeral=True)
+
+        thread_name = prompt[:100] if prompt else f"{selected_backend.title()} Session"
+        thread = await self.spawn_session(
+            channel=target_channel,
+            prompt=prompt,
+            thread_name=thread_name,
+            backend=selected_backend,
+        )
+        await interaction.followup.send(
+            f"Started a `{selected_backend}` session in {thread.mention}.",
+            ephemeral=True,
+        )
+
+    @app_commands.command(
+        name="claude",
+        description="Start a new Claude session in a fresh thread",
+    )
+    @app_commands.describe(prompt="Initial instruction for the session")
+    async def start_claude_session(
+        self,
+        interaction: discord.Interaction,
+        prompt: str,
+    ) -> None:
+        """Start a new session pinned to the Claude backend."""
+        await self._start_session_from_interaction(
+            interaction,
+            backend="claude",
+            prompt=prompt,
+        )
+
+    @app_commands.command(
+        name="codex",
+        description="Start a new Codex session in a fresh thread",
+    )
+    @app_commands.describe(prompt="Initial instruction for the session")
+    async def start_codex_session(
+        self,
+        interaction: discord.Interaction,
+        prompt: str,
+    ) -> None:
+        """Start a new session pinned to the Codex backend."""
+        await self._start_session_from_interaction(
+            interaction,
+            backend="codex",
+            prompt=prompt,
+        )
 
     @app_commands.command(name="stop", description="Stop the active session (session is preserved)")
     async def stop_session(self, interaction: discord.Interaction) -> None:
@@ -440,6 +612,7 @@ class ClaudeChatCog(commands.Cog):
             ),
             thread_name=fork_name,
             session_id=record.session_id,
+            backend=self._get_record_backend(record),
             fork=True,
         )
 
@@ -451,6 +624,7 @@ class ClaudeChatCog(commands.Cog):
         """Start a Claude Code session, creating a thread unless inline-reply mode is active."""
         prompt, images = await self._build_prompt_and_images(message)
         chat_only = message.channel.id in self._chat_only_channel_ids
+        backend = await self._get_default_backend()
         if (
             isinstance(message.channel, discord.TextChannel)
             and message.channel.id in self._inline_reply_channel_ids
@@ -461,19 +635,21 @@ class ClaudeChatCog(commands.Cog):
                 message.channel,
                 prompt,
                 session_id=None,
+                backend=backend,
                 images=images,
                 chat_only=chat_only,
             )
         else:
-            thread_name = message.content[:100] if message.content else "Claude Chat"
+            thread_name = message.content[:100] if message.content else f"{backend.title()} Session"
             thread = await message.create_thread(name=thread_name)
-            if self._auto_rename_threads and message.content:
+            if self._auto_rename_threads and backend == "claude" and message.content:
                 asyncio.create_task(self._background_rename_thread(thread, message.content))
             await self._run_claude(
                 message,
                 thread,
                 prompt,
                 session_id=None,
+                backend=backend,
                 images=images,
                 chat_only=chat_only,
             )
@@ -488,10 +664,18 @@ class ClaudeChatCog(commands.Cog):
         Runs as a background asyncio task so it does not block the main session.
         Silently no-ops on any error so the thread name is never left in a bad state.
         """
+        build_env = getattr(self.runner, "_build_env", None)
+        if not callable(build_env):
+            logger.debug(
+                "Thread auto-rename skipped for thread %d: runner does not expose _build_env()",
+                thread.id,
+            )
+            return
+
         title = await suggest_title(
             user_message,
             claude_command=self.runner.command,
-            env=self.runner._build_env(),
+            env=build_env(),
         )
         if title:
             try:
@@ -506,6 +690,7 @@ class ClaudeChatCog(commands.Cog):
         prompt: str,
         thread_name: str | None = None,
         session_id: str | None = None,
+        backend: BackendKind | None = None,
         fork: bool = False,
         auto_start: bool = True,
     ) -> discord.Thread:
@@ -526,6 +711,8 @@ class ClaudeChatCog(commands.Cog):
             session_id: Optional Claude session ID to resume via ``--resume``.
                         When supplied the new Claude process continues the
                         previous conversation rather than starting fresh.
+            backend: Backend to use for the new session. When omitted, uses
+                     the configured default backend for this cog.
             auto_start: Whether to immediately start a Claude Code session.
                         When ``False``, only the thread and seed message are
                         created — a Claude session will start when a user
@@ -534,6 +721,9 @@ class ClaudeChatCog(commands.Cog):
         Returns:
             The newly created :class:`discord.Thread`.
         """
+        selected_backend = (
+            await self._get_default_backend() if backend is None else normalize_backend(backend)
+        )
         name = (thread_name or prompt)[:100]
         thread = await channel.create_thread(
             name=name,
@@ -546,7 +736,14 @@ class ClaudeChatCog(commands.Cog):
             # Run Claude in the background so /api/spawn returns immediately.
             # The caller gets the thread reference without waiting for Claude to finish.
             asyncio.create_task(
-                self._run_claude(seed_message, thread, prompt, session_id=session_id, fork=fork)
+                self._run_claude(
+                    seed_message,
+                    thread,
+                    prompt,
+                    session_id=session_id,
+                    backend=selected_backend,
+                    fork=fork,
+                )
             )
         return thread
 
@@ -631,6 +828,9 @@ class ClaudeChatCog(commands.Cog):
             await self._resume_repo.delete(entry.id)
 
             thread_id = entry.thread_id
+            record = await self.repo.get(thread_id)
+            backend = self._get_record_backend(record)
+            session_id = entry.session_id or (record.session_id if record is not None else None)
             try:
                 raw = self.bot.get_channel(thread_id)
                 if raw is None:
@@ -665,7 +865,7 @@ class ClaudeChatCog(commands.Cog):
             logger.info(
                 "Resuming session in thread %d (session_id=%s, reason=%s)",
                 thread_id,
-                entry.session_id,
+                session_id,
                 entry.reason,
             )
             try:
@@ -676,7 +876,9 @@ class ClaudeChatCog(commands.Cog):
                         seed_message,
                         thread,
                         resume_prompt,
-                        session_id=entry.session_id,
+                        session_id=session_id,
+                        backend=backend,
+                        working_dir_override=record.working_dir if record is not None else None,
                     )
                 )
             except Exception:
@@ -695,6 +897,7 @@ class ClaudeChatCog(commands.Cog):
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
+        backend = self._get_record_backend(record)
         prompt, images = await self._build_prompt_and_images(message)
 
         # When there is no session record, this is the first human reply in a
@@ -744,6 +947,7 @@ class ClaudeChatCog(commands.Cog):
             thread,
             prompt,
             session_id=session_id,
+            backend=backend,
             images=images,
             working_dir_override=record.working_dir if record else None,
             chat_only=chat_only,
@@ -793,12 +997,14 @@ class ClaudeChatCog(commands.Cog):
         thread: discord.Thread | discord.TextChannel,
         prompt: str,
         session_id: str | None,
+        backend: BackendKind = DEFAULT_BACKEND,
         images: list[ImageData] | None = None,
         fork: bool = False,
         working_dir_override: str | None = None,
         chat_only: bool = False,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
+        backend = normalize_backend(backend)
         if self._semaphore.locked():
             await thread.send(
                 f"\u23f3 Waiting for a free session slot... "
@@ -824,8 +1030,9 @@ class ClaudeChatCog(commands.Cog):
                     thread=thread,
                 )
 
-            model_override = await self._get_current_model()
-            effective_model = model_override or self.runner.model
+            base_runner = self._get_runner_for_backend(backend)
+            model_override = await self._get_current_model(backend)
+            effective_model = model_override or base_runner.model
 
             async def _notify_stall() -> None:
                 threshold = status._stall_hard
@@ -841,16 +1048,18 @@ class ClaudeChatCog(commands.Cog):
             )
             await status.set_thinking()
 
-            tools_override = await self._get_allowed_tools()
-            from ..claude.runner import _UNSET
+            tools_override = await self._get_allowed_tools(backend)
+            clone_kwargs: dict[str, object] = {
+                "thread_id": thread.id,
+                "model": model_override,
+                "fork_session": fork,
+            }
+            if tools_override is not None:
+                clone_kwargs["allowed_tools"] = tools_override
+            if working_dir_override is not None:
+                clone_kwargs["working_dir"] = working_dir_override
 
-            runner = self.runner.clone(
-                thread_id=thread.id,
-                model=model_override,
-                allowed_tools=tools_override if tools_override is not None else _UNSET,
-                fork_session=fork,
-                working_dir=working_dir_override if working_dir_override is not None else _UNSET,
-            )
+            runner = base_runner.clone(**clone_kwargs)
             self._active_runners[thread.id] = runner
 
             # In chat_only mode, skip the "Session running" message and stop button.
@@ -865,6 +1074,7 @@ class ClaudeChatCog(commands.Cog):
                     RunConfig(
                         thread=thread,
                         runner=runner,
+                        backend=backend,
                         repo=self.repo,
                         prompt=prompt,
                         session_id=session_id,

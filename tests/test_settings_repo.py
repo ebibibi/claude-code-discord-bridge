@@ -54,3 +54,16 @@ class TestSettingsRepository:
     async def test_get_all_empty(self, repo):
         all_settings = await repo.get_all()
         assert all_settings == {}
+
+    async def test_get_default_backend_uses_fallback_when_missing(self, repo):
+        result = await repo.get_default_backend(fallback="codex")
+        assert result == "codex"
+
+    async def test_set_default_backend_normalizes_and_persists(self, repo):
+        await repo.set_default_backend("Codex")
+        assert await repo.get("default_backend") == "codex"
+
+    async def test_get_default_backend_ignores_invalid_stored_value(self, repo):
+        await repo.set("default_backend", "wat")
+        result = await repo.get_default_backend(fallback="claude")
+        assert result == "claude"

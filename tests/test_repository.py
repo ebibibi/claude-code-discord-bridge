@@ -20,10 +20,12 @@ class TestSessionRepository:
         record = await repo.save(thread_id=12345, session_id="session-abc")
         assert record.thread_id == 12345
         assert record.session_id == "session-abc"
+        assert record.backend == "claude"
 
         fetched = await repo.get(12345)
         assert fetched is not None
         assert fetched.session_id == "session-abc"
+        assert fetched.backend == "claude"
 
     async def test_get_nonexistent(self, repo):
         result = await repo.get(99999)
@@ -46,6 +48,13 @@ class TestSessionRepository:
         record = await repo.get(200)
         assert record.working_dir == "/home/user/project"
         assert record.model == "opus"
+
+    async def test_save_with_backend(self, repo):
+        await repo.save(thread_id=250, session_id="sess-codex", backend="codex")
+
+        record = await repo.get(250)
+        assert record is not None
+        assert record.backend == "codex"
 
     async def test_delete(self, repo):
         await repo.save(thread_id=300, session_id="sess-to-delete")

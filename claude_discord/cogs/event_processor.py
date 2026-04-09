@@ -260,11 +260,18 @@ class EventProcessor:
             # For resumed sessions (config.session_id is set), pass no summary to keep
             # the existing one via COALESCE in the SQL query.
             if self._config.session_id:
-                await self._config.repo.save(self._config.thread.id, self._state.session_id)
+                await self._config.repo.save(
+                    self._config.thread.id,
+                    self._state.session_id,
+                    backend=self._config.backend,
+                )
             else:
                 summary = self._config.prompt[:100] if self._config.prompt else None
                 await self._config.repo.save(
-                    self._config.thread.id, self._state.session_id, summary=summary
+                    self._config.thread.id,
+                    self._state.session_id,
+                    backend=self._config.backend,
+                    summary=summary,
                 )
 
         # Guard: post session_start_embed only once (Claude can emit multiple SYSTEM events).
@@ -483,7 +490,11 @@ class EventProcessor:
 
         if event.session_id:
             if self._config.repo:
-                await self._config.repo.save(self._config.thread.id, event.session_id)
+                await self._config.repo.save(
+                    self._config.thread.id,
+                    event.session_id,
+                    backend=self._config.backend,
+                )
             self._state.session_id = event.session_id
 
         # Persist context window stats (requires repo + context_window in event).

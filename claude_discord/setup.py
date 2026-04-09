@@ -6,20 +6,23 @@ New Cogs added to ccdb are automatically included — no consumer code changes n
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .backends import BackendKind, DEFAULT_BACKEND, normalize_backend
+
 if TYPE_CHECKING:
     from discord.ext.commands import Bot
 
-    from .claude.runner import ClaudeRunner
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
     from .database.resume_repo import PendingResumeRepository
     from .database.task_repo import TaskRepository
     from .ext.api_server import ApiServer
+    from .protocols import AgentRunner
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +67,10 @@ class BridgeComponents:
 
 async def setup_bridge(
     bot: Bot,
-    runner: ClaudeRunner,
+    runner: AgentRunner,
     *,
+    runners: Mapping[BackendKind | str, AgentRunner] | None = None,
+    default_backend: BackendKind | str | None = None,
     api_server: ApiServer | None = None,
     session_db_path: str = "data/sessions.db",
     allowed_user_ids: set[int] | None = None,
@@ -96,7 +101,13 @@ async def setup_bridge(
 
     Args:
         bot: Discord bot instance.
-        runner: ClaudeRunner for Claude CLI invocation.
+        runner: Base Claude runner for CLI invocation and backward compatibility.
+        runners: Optional mapping of backend name to runner. When omitted,
+                 ccdb auto-registers the provided Claude runner plus a builtin
+                 Codex runner created from environment defaults.
+        default_backend: Backend used for new message-started sessions when no
+                         explicit backend is chosen. Defaults to
+                         ``CCDB_DEFAULT_BACKEND`` or ``claude``.
         api_server: Optional ApiServer to auto-wire repos into.  Also sets
                     runner.api_port so CCDB_API_URL is available to Claude.
         session_db_path: Path for session SQLite DB.
@@ -139,6 +150,7 @@ async def setup_bridge(
     from .cogs.scheduler import SchedulerCog
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
+    from .codex.runner import CodexRunner
     from .database.ask_repo import PendingAskRepository
     from .database.inbox_repo import ThreadInboxRepository
     from .database.lounge_repo import LoungeRepository
@@ -207,8 +219,37 @@ async def setup_bridge(
         worktree_base_dir = os.getenv("WORKTREE_BASE_DIR")
     if worktree_base_dir is not None:
         if not hasattr(bot, "worktree_manager"):
-            bot.worktree_manager = WorktreeManager(base_dir=worktree_base_dir)  # type: ignore[attr-defined]
+            bot.worktree_manager = WorktreeManager(  # type: ignore[attr-defined]
+                base_dir=worktree_base_dir
+            )
         logger.info("WorktreeManager enabled (base_dir=%s)", worktree_base_dir)
+
+    resolved_default_backend = normalize_backend(
+        default_backend or os.getenv("CCDB_DEFAULT_BACKEND")
+    )
+    runner_registry: dict[BackendKind, AgentRunner] = {DEFAULT_BACKEND: runner}
+    if runners is not None:
+        for backend, configured_runner in runners.items():
+            runner_registry[normalize_backend(backend)] = configured_runner
+    runner_registry.setdefault(
+        "codex",
+        CodexRunner(
+            command=os.getenv("CODEX_COMMAND", "codex"),
+            model=os.getenv("CODEX_MODEL", ""),
+            permission_mode=os.getenv("CODEX_PERMISSION_MODE", "full-auto"),
+            working_dir=os.getenv("CODEX_WORKING_DIR") or runner.working_dir,
+            timeout_seconds=runner.timeout_seconds,
+            dangerously_skip_permissions=os.getenv(
+                "CODEX_DANGEROUSLY_SKIP_PERMISSIONS", ""
+            ).lower()
+            in ("true", "1", "yes"),
+            api_port=runner.api_port,
+            api_secret=getattr(runner, "api_secret", None),
+            sandbox_mode=os.getenv("CODEX_SANDBOX_MODE", "workspace-write"),
+        ),
+    )
+    bot.runner_registry = runner_registry  # type: ignore[attr-defined]
+    bot.default_backend = resolved_default_backend  # type: ignore[attr-defined]
 
     # --- Session DB (also hosts lounge_messages and pending_resumes tables) ---
     os.makedirs(os.path.dirname(session_db_path) or ".", exist_ok=True)
@@ -237,6 +278,8 @@ async def setup_bridge(
         bot,  # type: ignore[arg-type]  # consumers pass their own Bot subclass
         repo=session_repo,
         runner=runner,
+        runners=runner_registry,
+        default_backend=resolved_default_backend,
         allowed_user_ids=allowed_user_ids,
         ask_repo=ask_repo,
         lounge_repo=lounge_repo,
@@ -298,8 +341,9 @@ async def setup_bridge(
     # Auto-wire repos to ApiServer and set runner.api_port if provided
     if api_server is not None:
         components.apply_to_api_server(api_server)
-        if runner.api_port is None:
-            runner.api_port = api_server.port
+        for configured_runner in runner_registry.values():
+            if configured_runner.api_port is None:
+                configured_runner.api_port = api_server.port
         logger.info("Auto-wired repos to ApiServer (port=%d)", api_server.port)
 
     return components

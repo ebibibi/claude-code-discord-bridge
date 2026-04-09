@@ -53,6 +53,14 @@ class TestRunConfigValidation:
         with pytest.raises(ValueError, match="must not be empty"):
             _make_config(prompt="", images=[])
 
+    def test_backend_defaults_to_claude(self):
+        config = _make_config()
+        assert config.backend == "claude"
+
+    def test_backend_can_be_overridden(self):
+        config = _make_config(backend="codex")
+        assert config.backend == "codex"
+
     def test_with_prompt_preserves_images(self):
         """with_prompt should carry over images."""
         original = _make_config(prompt="old", images=[_SAMPLE_IMAGE])

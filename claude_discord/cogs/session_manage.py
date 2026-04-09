@@ -1,6 +1,8 @@
 """Session management Cog.
 
 Provides slash commands for viewing and managing Claude Code sessions:
+- /backend-show: Show the default backend for new sessions
+- /backend-set: Change the default backend for new sessions
 - /resume-info: Show CLI resume command for the current thread's session
 - /sessions: List all known sessions (Discord and CLI originated)
 - /sync-sessions: Import CLI sessions as Discord threads
@@ -10,6 +12,7 @@ Provides slash commands for viewing and managing Claude Code sessions:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -17,8 +20,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..backends import BackendKind, build_resume_command, normalize_backend
 from ..database.repository import SessionRepository, UsageStatsRepository
-from ..database.settings_repo import SettingsRepository
+from ..database.settings_repo import SETTING_DEFAULT_BACKEND, SettingsRepository
 from ..discord_ui.embeds import COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
 from ..discord_ui.views import ResumeSelectView, ToolSelectView
 from ..worktree import WorktreeManager
@@ -62,6 +66,11 @@ _MODEL_CHOICES = [
     app_commands.Choice(name="Haiku 4.5 (fast, cost-effective)", value="haiku"),
     app_commands.Choice(name="Sonnet 4.6 (balanced, default)", value="sonnet"),
     app_commands.Choice(name="Opus 4.6 (powerful, deep reasoning)", value="opus"),
+]
+
+_BACKEND_CHOICES = [
+    app_commands.Choice(name="Claude", value="claude"),
+    app_commands.Choice(name="Codex", value="codex"),
 ]
 
 # Tool permission management
@@ -112,12 +121,18 @@ class SessionManageCog(commands.Cog):
         settings_repo: SettingsRepository | None = None,
         runner: object | None = None,
         usage_repo: UsageStatsRepository | None = None,
+        default_backend: BackendKind | str | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
         self.cli_sessions_path = cli_sessions_path
         self.settings_repo = settings_repo
         self.usage_repo = usage_repo
+        self._default_backend = normalize_backend(
+            default_backend
+            or getattr(bot, "default_backend", None)
+            or os.getenv("CCDB_DEFAULT_BACKEND")
+        )
         # Optional ClaudeRunner reference for reading the default model.
         # Resolved lazily from ClaudeChatCog if not provided directly.
         self._runner = runner
@@ -168,6 +183,65 @@ class SessionManageCog(commands.Cog):
         if runner is not None and hasattr(runner, "model"):
             return runner.model  # type: ignore[return-value]
         return "sonnet"
+
+    async def _get_effective_default_backend(self) -> tuple[BackendKind, str]:
+        """Return the current default backend and its source label."""
+        if self.settings_repo is not None:
+            stored = await self.settings_repo.get(SETTING_DEFAULT_BACKEND)
+            if stored is not None:
+                try:
+                    return normalize_backend(stored), "Source: /backend-set override"
+                except ValueError:
+                    logger.warning(
+                        "Ignoring invalid stored default backend %r; using fallback %s",
+                        stored,
+                        self._default_backend,
+                    )
+        return self._default_backend, "Source: env/config fallback"
+
+    # ── Backend commands ─────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="backend-show",
+        description="Show the default backend for new sessions",
+    )
+    async def backend_show(self, interaction: discord.Interaction) -> None:
+        """Display the current default backend for newly started sessions."""
+        backend, source = await self._get_effective_default_backend()
+        embed = discord.Embed(
+            title="🧭 Default Backend",
+            description=(
+                f"New sessions without an explicit backend will use **`{backend}`**."
+            ),
+            color=COLOR_INFO,
+        )
+        embed.set_footer(text=source)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="backend-set",
+        description="Change the default backend for new sessions",
+    )
+    @app_commands.describe(backend="Backend to use for new sessions by default")
+    @app_commands.choices(backend=_BACKEND_CHOICES)
+    async def backend_set(self, interaction: discord.Interaction, backend: str) -> None:
+        """Persist the default backend for future session starts."""
+        if self.settings_repo is None:
+            await interaction.response.send_message(
+                "❌ Settings repository is unavailable — backend cannot be persisted.",
+                ephemeral=True,
+            )
+            return
+
+        normalized = await self.settings_repo.set_default_backend(backend)
+        embed = discord.Embed(
+            title="✅ Default Backend Updated",
+            description=(
+                f"New sessions without an explicit backend will use **`{normalized}`**."
+            ),
+            color=COLOR_SUCCESS,
+        )
+        await interaction.response.send_message(embed=embed)
 
     # ── Model commands ────────────────────────────────────────────────────────
 
@@ -441,7 +515,7 @@ class SessionManageCog(commands.Cog):
         description="Show the CLI command to resume this thread's session",
     )
     async def resume_info(self, interaction: discord.Interaction) -> None:
-        """Show the claude --resume command for the current thread."""
+        """Show the provider-specific resume command for the current thread."""
         if not isinstance(interaction.channel, discord.Thread):
             await interaction.response.send_message(
                 "This command can only be used in a Claude chat thread.",
@@ -457,14 +531,16 @@ class SessionManageCog(commands.Cog):
             )
             return
 
+        resume_command = build_resume_command(record.backend, record.session_id)
         embed = discord.Embed(
             title="\U0001f517 Resume from CLI",
             description=(
-                f"```\nclaude --resume {record.session_id}\n```\n"
+                f"```\n{resume_command}\n```\n"
                 f"Run this command in your terminal to continue this session."
             ),
             color=COLOR_INFO,
         )
+        embed.add_field(name="Backend", value=record.backend, inline=True)
         if record.working_dir:
             embed.add_field(name="Working Directory", value=f"`{record.working_dir}`", inline=True)
         if record.model:
@@ -474,7 +550,7 @@ class SessionManageCog(commands.Cog):
 
     @app_commands.command(
         name="sessions",
-        description="List all known Claude Code sessions",
+        description="List all known sessions",
     )
     @app_commands.describe(origin="Filter by session origin")
     @app_commands.choices(origin=_ORIGIN_CHOICES)

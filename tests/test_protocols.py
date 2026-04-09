@@ -5,9 +5,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from claude_discord.claude.runner import ClaudeRunner
+from claude_discord.codex.runner import CodexRunner
 from claude_discord.cogs.claude_chat import ClaudeChatCog
 from claude_discord.cogs.webhook_trigger import WebhookTriggerCog
-from claude_discord.protocols import DrainAware
+from claude_discord.protocols import AgentRunner, DrainAware
 
 
 class TestDrainAwareProtocol:
@@ -48,3 +49,13 @@ class TestDrainAwareProtocol:
                 return 42
 
         assert isinstance(CustomCog(), DrainAware)
+
+
+class TestAgentRunnerProtocol:
+    """AgentRunner is the shared runner contract for backend-specific CLIs."""
+
+    def test_claude_runner_satisfies_protocol(self) -> None:
+        assert isinstance(ClaudeRunner(), AgentRunner)
+
+    def test_codex_runner_satisfies_protocol(self) -> None:
+        assert isinstance(CodexRunner(), AgentRunner)

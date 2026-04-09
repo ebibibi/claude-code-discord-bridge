@@ -319,6 +319,373 @@ class TestInterruptOnNewMessage:
         assert len(cog._active_tasks) == 0
 
 
+class TestBackendRouting:
+    """Backend selection for new sessions, replies, and startup resume."""
+
+    def _make_cog(
+        self,
+        *,
+        default_backend: str = "claude",
+        repo: MagicMock | None = None,
+        resume_repo: MagicMock | None = None,
+        settings_repo: MagicMock | None = None,
+    ) -> tuple[ClaudeChatCog, MagicMock, MagicMock]:
+        bot = MagicMock()
+        bot.channel_id = 111
+        bot.user = MagicMock()
+
+        if repo is None:
+            repo = MagicMock()
+            repo.get = AsyncMock(return_value=None)
+            repo.save = AsyncMock()
+
+        claude_runner = MagicMock()
+        claude_runner.command = "claude"
+        claude_runner.model = "sonnet"
+        claude_runner.allowed_tools = None
+        claude_runner.clone = MagicMock(return_value=MagicMock())
+
+        codex_runner = MagicMock()
+        codex_runner.command = "codex"
+        codex_runner.model = "gpt-5-codex"
+        codex_runner.allowed_tools = None
+        codex_runner.clone = MagicMock(return_value=MagicMock())
+
+        cog = ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=claude_runner,
+            runners={"claude": claude_runner, "codex": codex_runner},
+            default_backend=default_backend,
+            resume_repo=resume_repo,
+            settings_repo=settings_repo,
+            channel_ids={111},
+        )
+        return cog, claude_runner, codex_runner
+
+    def _make_channel_message(self) -> MagicMock:
+        message = MagicMock(spec=discord.Message)
+        message.author = MagicMock()
+        message.author.bot = False
+        message.author.id = 42
+        message.type = discord.MessageType.default
+        message.content = "Start a new task"
+        message.attachments = []
+        message.mentions = []
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = 111
+        message.channel = channel
+        return message
+
+    def _make_thread_message(self, thread_id: int = 222) -> MagicMock:
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = thread_id
+        thread.parent_id = 111
+        thread.send = AsyncMock()
+
+        message = MagicMock(spec=discord.Message)
+        message.author = MagicMock()
+        message.author.bot = False
+        message.author.id = 42
+        message.type = discord.MessageType.default
+        message.content = "Continue"
+        message.attachments = []
+        message.channel = thread
+        return message
+
+    @pytest.mark.asyncio
+    async def test_new_conversation_uses_configured_default_backend(self) -> None:
+        """Message-based new sessions should use the configured default backend."""
+        cog, _, _ = self._make_cog(default_backend="codex")
+        message = self._make_channel_message()
+        thread = MagicMock(spec=discord.Thread)
+        message.create_thread = AsyncMock(return_value=thread)
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_new_conversation(message)
+
+        assert cog._run_claude.call_args.kwargs["backend"] == "codex"
+
+    @pytest.mark.asyncio
+    async def test_new_conversation_prefers_settings_default_backend(self) -> None:
+        """A persisted default backend should override the boot-time fallback."""
+        settings_repo = MagicMock()
+        settings_repo.get_default_backend = AsyncMock(return_value="codex")
+
+        cog, _, _ = self._make_cog(default_backend="claude", settings_repo=settings_repo)
+        message = self._make_channel_message()
+        thread = MagicMock(spec=discord.Thread)
+        message.create_thread = AsyncMock(return_value=thread)
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_new_conversation(message)
+
+        assert cog._run_claude.call_args.kwargs["backend"] == "codex"
+
+    @pytest.mark.asyncio
+    async def test_thread_reply_uses_backend_from_session_record(self) -> None:
+        """Thread replies must route through the stored session backend."""
+        from claude_discord.database.repository import SessionRecord
+
+        repo = MagicMock()
+        repo.get = AsyncMock(
+            return_value=SessionRecord(
+                thread_id=222,
+                session_id="rollout-222",
+                working_dir="/tmp/project",
+                model="gpt-5-codex",
+                origin="discord",
+                summary="Investigate bug",
+                created_at="2026-04-09 10:00:00",
+                last_used_at="2026-04-09 10:05:00",
+                backend="codex",
+            )
+        )
+        cog, _, _ = self._make_cog(repo=repo)
+        message = self._make_thread_message()
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_thread_reply(message)
+
+        assert cog._run_claude.call_args.kwargs["backend"] == "codex"
+        assert cog._run_claude.call_args.kwargs["session_id"] == "rollout-222"
+
+    @pytest.mark.asyncio
+    async def test_on_ready_uses_backend_from_stored_session_record(self) -> None:
+        """Startup resume should pick the runner using the stored session backend."""
+        from claude_discord.database.repository import SessionRecord
+        from claude_discord.database.resume_repo import PendingResume, PendingResumeRepository
+
+        resume_repo = MagicMock(spec=PendingResumeRepository)
+        resume_repo.get_pending = AsyncMock(
+            return_value=[
+                PendingResume(
+                    id=1,
+                    thread_id=333,
+                    session_id="rollout-333",
+                    reason="bot_shutdown",
+                    resume_prompt="Please continue.",
+                    created_at="2026-04-09 10:10:00",
+                )
+            ]
+        )
+        resume_repo.delete = AsyncMock()
+
+        repo = MagicMock()
+        repo.get = AsyncMock(
+            return_value=SessionRecord(
+                thread_id=333,
+                session_id="rollout-333",
+                working_dir="/tmp/project",
+                model="gpt-5-codex",
+                origin="discord",
+                summary="Resume work",
+                created_at="2026-04-09 10:00:00",
+                last_used_at="2026-04-09 10:05:00",
+                backend="codex",
+            )
+        )
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 333
+        thread.parent = MagicMock(spec=discord.TextChannel)
+        thread.send = AsyncMock(return_value=MagicMock())
+
+        bot = MagicMock()
+        bot.channel_id = 111
+        bot.get_channel.return_value = thread
+
+        cog, _, _ = self._make_cog(repo=repo, resume_repo=resume_repo)
+        cog.bot = bot
+        cog._run_claude = AsyncMock()
+
+        await cog.on_ready()
+        await asyncio.sleep(0)
+
+        assert cog._run_claude.call_args.kwargs["backend"] == "codex"
+
+    @pytest.mark.asyncio
+    async def test_run_claude_uses_backend_specific_runner(self) -> None:
+        """_run_claude must clone the runner selected for the chosen backend."""
+        from unittest.mock import patch
+
+        thread = MagicMock(spec=discord.TextChannel)
+        thread.id = 444
+        thread.send = AsyncMock()
+
+        user_message = MagicMock(spec=discord.Message)
+        user_message.id = 1
+        user_message.content = "Investigate"
+        user_message.attachments = []
+
+        cog, claude_runner, codex_runner = self._make_cog()
+        codex_clone = MagicMock()
+        codex_clone.command = "codex"
+        codex_clone.model = "gpt-5-codex"
+        codex_runner.clone.return_value = codex_clone
+
+        status = MagicMock()
+        status.set_thinking = AsyncMock()
+
+        with (
+            patch("claude_discord.cogs.claude_chat.StatusManager", return_value=status),
+            patch(
+                "claude_discord.cogs.claude_chat.run_claude_with_config",
+                new=AsyncMock(),
+            ) as mock_run,
+        ):
+            await cog._run_claude(
+                user_message,
+                thread,
+                "Investigate",
+                session_id=None,
+                backend="codex",
+                chat_only=True,
+            )
+
+        claude_runner.clone.assert_not_called()
+        codex_runner.clone.assert_called_once()
+        config = mock_run.call_args.args[0]
+        assert config.backend == "codex"
+        assert config.runner is codex_clone
+
+
+class TestSessionCommand:
+    """Explicit new-session backend choice via slash command."""
+
+    def _make_interaction(self) -> MagicMock:
+        interaction = MagicMock(spec=discord.Interaction)
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = 111
+        interaction.channel = channel
+        interaction.response = MagicMock()
+        interaction.response.defer = AsyncMock()
+        interaction.response.send_message = AsyncMock()
+        interaction.followup = MagicMock()
+        interaction.followup.send = AsyncMock()
+        return interaction
+
+    @pytest.mark.asyncio
+    async def test_session_command_passes_selected_backend_to_spawn_session(self) -> None:
+        """The explicit /session command should override the default backend."""
+        bot = MagicMock()
+        bot.channel_id = 111
+        bot.user = MagicMock()
+
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+
+        runner = MagicMock()
+        runner.command = "claude"
+        runner.model = "sonnet"
+        runner.allowed_tools = None
+        runner.clone = MagicMock(return_value=MagicMock())
+
+        codex_runner = MagicMock()
+        codex_runner.command = "codex"
+        codex_runner.model = "gpt-5-codex"
+        codex_runner.allowed_tools = None
+        codex_runner.clone = MagicMock(return_value=MagicMock())
+
+        cog = ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=runner,
+            runners={"claude": runner, "codex": codex_runner},
+            default_backend="claude",
+            channel_ids={111},
+        )
+        interaction = self._make_interaction()
+        thread = MagicMock(spec=discord.Thread)
+        thread.mention = "#session"
+        cog.spawn_session = AsyncMock(return_value=thread)
+
+        await cog.start_session.callback(cog, interaction, "codex", "Investigate the bug")
+
+        assert cog.spawn_session.call_args.kwargs["backend"] == "codex"
+
+    @pytest.mark.asyncio
+    async def test_claude_command_passes_claude_backend_to_spawn_session(self) -> None:
+        """The /claude shortcut should start a Claude-backed session."""
+        bot = MagicMock()
+        bot.channel_id = 111
+        bot.user = MagicMock()
+
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+
+        runner = MagicMock()
+        runner.command = "claude"
+        runner.model = "sonnet"
+        runner.allowed_tools = None
+        runner.clone = MagicMock(return_value=MagicMock())
+
+        codex_runner = MagicMock()
+        codex_runner.command = "codex"
+        codex_runner.model = "gpt-5-codex"
+        codex_runner.allowed_tools = None
+        codex_runner.clone = MagicMock(return_value=MagicMock())
+
+        cog = ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=runner,
+            runners={"claude": runner, "codex": codex_runner},
+            default_backend="codex",
+            channel_ids={111},
+        )
+        interaction = self._make_interaction()
+        thread = MagicMock(spec=discord.Thread)
+        thread.mention = "#session"
+        cog.spawn_session = AsyncMock(return_value=thread)
+
+        await cog.start_claude_session.callback(cog, interaction, "Investigate the bug")
+
+        assert cog.spawn_session.call_args.kwargs["backend"] == "claude"
+
+    @pytest.mark.asyncio
+    async def test_codex_command_passes_codex_backend_to_spawn_session(self) -> None:
+        """The /codex shortcut should start a Codex-backed session."""
+        bot = MagicMock()
+        bot.channel_id = 111
+        bot.user = MagicMock()
+
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+
+        runner = MagicMock()
+        runner.command = "claude"
+        runner.model = "sonnet"
+        runner.allowed_tools = None
+        runner.clone = MagicMock(return_value=MagicMock())
+
+        codex_runner = MagicMock()
+        codex_runner.command = "codex"
+        codex_runner.model = "gpt-5-codex"
+        codex_runner.allowed_tools = None
+        codex_runner.clone = MagicMock(return_value=MagicMock())
+
+        cog = ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=runner,
+            runners={"claude": runner, "codex": codex_runner},
+            default_backend="claude",
+            channel_ids={111},
+        )
+        interaction = self._make_interaction()
+        thread = MagicMock(spec=discord.Thread)
+        thread.mention = "#session"
+        cog.spawn_session = AsyncMock(return_value=thread)
+
+        await cog.start_codex_session.callback(cog, interaction, "Investigate the bug")
+
+        assert cog.spawn_session.call_args.kwargs["backend"] == "codex"
+
+
 class TestSpawnSession:
     """Tests for ClaudeChatCog.spawn_session()."""
 
@@ -422,6 +789,102 @@ class TestSpawnSession:
         assert result is thread
         thread.send.assert_called_once_with("Hello")
         mock_run.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_spawn_uses_configured_default_backend_when_backend_omitted(self) -> None:
+        """Programmatic spawn should follow the configured default backend."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        bot = MagicMock()
+        bot.channel_id = 111
+
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+
+        claude_runner = MagicMock()
+        claude_runner.command = "claude"
+        claude_runner.model = "sonnet"
+        claude_runner.allowed_tools = None
+        claude_runner.clone = MagicMock(return_value=MagicMock())
+
+        codex_runner = MagicMock()
+        codex_runner.command = "codex"
+        codex_runner.model = "gpt-5-codex"
+        codex_runner.allowed_tools = None
+        codex_runner.clone = MagicMock(return_value=MagicMock())
+
+        cog = ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=claude_runner,
+            runners={"claude": claude_runner, "codex": codex_runner},
+            default_backend="codex",
+        )
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        mock_run = AsyncMock()
+        with patch.object(cog, "_run_claude", new=mock_run):
+            await cog.spawn_session(channel, "Start session")
+
+        assert mock_run.call_args.kwargs["backend"] == "codex"
+
+    @pytest.mark.asyncio
+    async def test_spawn_uses_settings_default_backend_when_backend_omitted(self) -> None:
+        """Programmatic spawn should prefer the persisted default backend."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        bot = MagicMock()
+        bot.channel_id = 111
+
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        repo.save = AsyncMock()
+
+        settings_repo = MagicMock()
+        settings_repo.get_default_backend = AsyncMock(return_value="codex")
+
+        claude_runner = MagicMock()
+        claude_runner.command = "claude"
+        claude_runner.model = "sonnet"
+        claude_runner.allowed_tools = None
+        claude_runner.clone = MagicMock(return_value=MagicMock())
+
+        codex_runner = MagicMock()
+        codex_runner.command = "codex"
+        codex_runner.model = "gpt-5-codex"
+        codex_runner.allowed_tools = None
+        codex_runner.clone = MagicMock(return_value=MagicMock())
+
+        cog = ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=claude_runner,
+            runners={"claude": claude_runner, "codex": codex_runner},
+            default_backend="claude",
+            settings_repo=settings_repo,
+        )
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        mock_run = AsyncMock()
+        with patch.object(cog, "_run_claude", new=mock_run):
+            await cog.spawn_session(channel, "Start session")
+
+        assert mock_run.call_args.kwargs["backend"] == "codex"
 
 
 class TestFetchSeedContext:

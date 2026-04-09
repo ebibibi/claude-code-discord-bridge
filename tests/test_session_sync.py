@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,47 @@ class TestSessionRecordOriginAndSummary:
     async def test_summary_defaults_to_none(self, repo):
         record = await repo.save(thread_id=1003, session_id="sess-4")
         assert record.summary is None
+
+    async def test_save_with_backend(self, repo):
+        record = await repo.save(thread_id=1004, session_id="sess-5", backend="codex")
+        assert record.backend == "codex"
+
+    async def test_default_backend_is_claude(self, repo):
+        record = await repo.save(thread_id=1005, session_id="sess-6")
+        assert record.backend == "claude"
+
+    async def test_init_db_backfills_backend_for_legacy_sessions(self, tmp_path):
+        db_path = tmp_path / "legacy.db"
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                """
+                CREATE TABLE sessions (
+                    thread_id INTEGER PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    working_dir TEXT,
+                    model TEXT,
+                    origin TEXT NOT NULL DEFAULT 'discord',
+                    summary TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                    last_used_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO sessions (thread_id, session_id) VALUES (?, ?)",
+                (42, "legacy-session"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        await init_db(str(db_path))
+
+        repo = SessionRepository(str(db_path))
+        record = await repo.get(42)
+        assert record is not None
+        assert record.backend == "claude"
 
 
 class TestGetBySessionId:

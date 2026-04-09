@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 import discord
 
 from ..claude.rewind import TurnEntry, truncate_jsonl_at_line
-from ..claude.runner import ClaudeRunner
+from ..protocols import AgentRunner
 from .embeds import COLOR_SUCCESS, stopped_embed, tool_result_embed, tool_result_preview_embed
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ class StopView(discord.ui.View):
     button at the bottom of the thread (most recently visible position).
     """
 
-    def __init__(self, runner: ClaudeRunner) -> None:
+    def __init__(self, runner: AgentRunner) -> None:
         super().__init__(timeout=None)
         self._runner = runner
         self._stopped = False
@@ -43,7 +43,7 @@ class StopView(discord.ui.View):
         """Store the message this view is attached to."""
         self._message = message
 
-    def update_runner(self, runner: ClaudeRunner) -> None:
+    def update_runner(self, runner: AgentRunner) -> None:
         """Replace the runner reference with the one that owns the live subprocess.
 
         ``run_claude_with_config`` may clone the runner to inject an
@@ -365,6 +365,7 @@ class ResumeSelectView(discord.ui.View):
             prompt="Resuming previous session. Continue from where we left off.",
             thread_name=thread_name,
             session_id=record.session_id,
+            backend=record.backend,
         )
 
         with contextlib.suppress(discord.HTTPException):

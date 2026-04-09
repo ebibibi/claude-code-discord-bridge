@@ -1,6 +1,6 @@
-"""Configuration dataclass for Claude Code execution.
+"""Configuration dataclass for backend CLI execution.
 
-Bundles all parameters needed to execute Claude Code CLI and stream results
+Bundles all parameters needed to execute a backend CLI and stream results
 to a Discord thread. Using a dataclass instead of a long positional argument
 list makes call sites more readable and extension safer (new fields can be
 added without changing every caller).
@@ -13,13 +13,14 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from ..claude.runner import ClaudeRunner
+from ..backends import BackendKind, DEFAULT_BACKEND
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..discord_ui.status import StatusManager
+from ..protocols import AgentRunner
 
 if TYPE_CHECKING:
     from ..database.inbox_repo import ThreadInboxRepository
@@ -31,11 +32,11 @@ if TYPE_CHECKING:
 
 @dataclass
 class RunConfig:
-    """All parameters needed for a single Claude Code execution.
+    """All parameters needed for a single backend CLI execution.
 
     Required fields:
         thread: Discord thread (or text channel for inline-reply mode) to post results to.
-        runner: A fresh (cloned) ClaudeRunner instance.
+        runner: A fresh (cloned) AgentRunner instance.
         prompt: The user's message or skill invocation.
 
     Optional fields:
@@ -56,8 +57,9 @@ class RunConfig:
     """
 
     thread: discord.Thread | discord.TextChannel
-    runner: ClaudeRunner
+    runner: AgentRunner
     prompt: str
+    backend: BackendKind = DEFAULT_BACKEND
     session_id: str | None = None
     repo: SessionRepository | None = None
     status: StatusManager | None = None

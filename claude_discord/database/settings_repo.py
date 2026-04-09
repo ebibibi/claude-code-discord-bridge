@@ -6,7 +6,11 @@ import logging
 
 import aiosqlite
 
+from ..backends import BackendKind, normalize_backend
+
 logger = logging.getLogger(__name__)
+
+SETTING_DEFAULT_BACKEND = "default_backend"
 
 
 class SettingsRepository:
@@ -48,3 +52,29 @@ class SettingsRepository:
             cursor = await db.execute("SELECT key, value FROM settings ORDER BY key")
             rows = await cursor.fetchall()
             return {row[0]: row[1] for row in rows}
+
+    async def get_default_backend(
+        self,
+        *,
+        fallback: BackendKind | str | None = None,
+    ) -> BackendKind:
+        """Return the persisted default backend, or a validated fallback."""
+        stored = await self.get(SETTING_DEFAULT_BACKEND)
+        if stored is None:
+            return normalize_backend(fallback)
+
+        try:
+            return normalize_backend(stored)
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid stored default backend %r; falling back to %r",
+                stored,
+                fallback,
+            )
+            return normalize_backend(fallback)
+
+    async def set_default_backend(self, backend: BackendKind | str) -> BackendKind:
+        """Persist the default backend and return the normalized value."""
+        normalized = normalize_backend(backend)
+        await self.set(SETTING_DEFAULT_BACKEND, normalized)
+        return normalized

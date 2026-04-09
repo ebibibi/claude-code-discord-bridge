@@ -23,9 +23,10 @@ from discord.ext import commands
 from ..cogs._run_helper import run_claude_with_config
 from ..cogs.run_config import RunConfig
 from ..concurrency import SessionRegistry
+from ..protocols import AgentRunner
 
 if TYPE_CHECKING:
-    from ..claude.runner import ClaudeRunner
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class WebhookTriggerCog(commands.Cog):
 
     Args:
         bot: The Discord bot instance.
-        runner: Base ClaudeRunner to clone for each trigger execution.
+        runner: Base AgentRunner to clone for each trigger execution.
         triggers: Mapping of prefix string → WebhookTrigger configuration.
         allowed_webhook_ids: Optional set of allowed Discord webhook IDs.
             If None, all webhooks are accepted.
@@ -69,7 +70,7 @@ class WebhookTriggerCog(commands.Cog):
     def __init__(
         self,
         bot: commands.Bot,
-        runner: ClaudeRunner,
+        runner: AgentRunner,
         triggers: dict[str, WebhookTrigger],
         allowed_webhook_ids: set[int] | None = None,
         channel_ids: set[int] | None = None,

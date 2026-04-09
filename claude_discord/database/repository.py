@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import aiosqlite
 
+from ..backends import BackendKind, DEFAULT_BACKEND, normalize_backend
+
 if TYPE_CHECKING:
     from ..claude.types import RateLimitInfo
 
@@ -28,6 +30,7 @@ class SessionRecord:
     last_used_at: str
     context_window: int | None = None
     context_used: int | None = None
+    backend: BackendKind = DEFAULT_BACKEND
 
 
 class SessionRepository:
@@ -57,21 +60,34 @@ class SessionRepository:
         model: str | None = None,
         origin: str = "discord",
         summary: str | None = None,
+        backend: BackendKind | None = None,
     ) -> SessionRecord:
         """Create or update a session mapping."""
+        normalized_backend = normalize_backend(backend) if backend is not None else None
+
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """INSERT INTO sessions
-                     (thread_id, session_id, working_dir, model, origin, summary)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                     (thread_id, session_id, backend, working_dir, model, origin, summary)
+                   VALUES (?, ?, COALESCE(?, 'claude'), ?, ?, ?, ?)
                    ON CONFLICT(thread_id) DO UPDATE SET
                      session_id = excluded.session_id,
+                     backend = COALESCE(?, sessions.backend, 'claude'),
                      working_dir = COALESCE(excluded.working_dir, sessions.working_dir),
                      model = COALESCE(excluded.model, sessions.model),
                      origin = COALESCE(excluded.origin, sessions.origin),
                      summary = COALESCE(excluded.summary, sessions.summary),
                      last_used_at = datetime('now', 'localtime')""",
-                (thread_id, session_id, working_dir, model, origin, summary),
+                (
+                    thread_id,
+                    session_id,
+                    normalized_backend,
+                    working_dir,
+                    model,
+                    origin,
+                    summary,
+                    normalized_backend,
+                ),
             )
             await db.commit()
 
