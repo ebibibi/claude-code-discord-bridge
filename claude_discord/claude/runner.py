@@ -127,14 +127,11 @@ class ClaudeRunner:
             "Starting Claude CLI: %s (cwd=%s, pid will follow)", " ".join(args[:6]) + " ...", cwd
         )
 
-        # When image attachments are present we use --input-format stream-json and
-        # write the user message (with image URLs) to stdin immediately after
-        # process start.  This requires stdin=PIPE.
-        #
-        # For text-only sessions we keep stdin=DEVNULL: Claude CLI blocks on startup
-        # when stdin is an open pipe in default text-input mode, and we have no data
-        # to send.
-        stdin_mode = asyncio.subprocess.PIPE if self.image_urls else asyncio.subprocess.DEVNULL
+        # Always use stdin=PIPE so that we can respond to permission_request /
+        # elicitation events from the Claude CLI via inject_tool_result().
+        # Previously text-only sessions used DEVNULL, which silently dropped
+        # Allow/Deny button responses sent from Discord.
+        stdin_mode = asyncio.subprocess.PIPE
 
         self._process = await asyncio.create_subprocess_exec(
             *args,
