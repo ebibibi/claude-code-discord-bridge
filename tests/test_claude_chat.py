@@ -1391,3 +1391,72 @@ class TestAutoRenameThreads:
         ):
             # Should not raise
             await cog._background_rename_thread(mock_thread, "some message")
+
+
+class TestCompactCommand:
+    """Tests for /compact slash command."""
+
+    @pytest.mark.asyncio
+    async def test_compact_outside_thread_sends_ephemeral(self) -> None:
+        cog = _make_cog()
+        interaction = _make_channel_interaction()
+
+        await cog.compact_session.callback(cog, interaction)
+
+        interaction.response.send_message.assert_called_once()
+        call_kwargs = interaction.response.send_message.call_args.kwargs
+        assert call_kwargs.get("ephemeral") is True
+
+    @pytest.mark.asyncio
+    async def test_compact_no_session_sends_ephemeral(self) -> None:
+        cog = _make_cog()
+        interaction = _make_thread_interaction(thread_id=12345)
+        cog.repo.get = AsyncMock(return_value=None)
+
+        await cog.compact_session.callback(cog, interaction)
+
+        interaction.response.send_message.assert_called_once()
+        call_kwargs = interaction.response.send_message.call_args.kwargs
+        assert call_kwargs.get("ephemeral") is True
+
+    @pytest.mark.asyncio
+    async def test_compact_while_running_sends_ephemeral(self) -> None:
+        cog = _make_cog()
+        thread_id = 12345
+        interaction = _make_thread_interaction(thread_id=thread_id)
+        record = MagicMock()
+        record.session_id = "abc-123"
+        record.working_dir = None
+        cog.repo.get = AsyncMock(return_value=record)
+        cog._active_runners[thread_id] = MagicMock()
+
+        await cog.compact_session.callback(cog, interaction)
+
+        interaction.response.send_message.assert_called_once()
+        call_kwargs = interaction.response.send_message.call_args.kwargs
+        assert call_kwargs.get("ephemeral") is True
+        assert "running" in interaction.response.send_message.call_args.args[0].lower()
+
+    @pytest.mark.asyncio
+    async def test_compact_defers_and_calls_run_claude(self) -> None:
+        cog = _make_cog()
+        thread_id = 12345
+        interaction = _make_thread_interaction(thread_id=thread_id)
+        record = MagicMock()
+        record.session_id = "abc-123"
+        record.working_dir = "/tmp/test"
+        cog.repo.get = AsyncMock(return_value=record)
+
+        interaction.response.defer = AsyncMock()
+        interaction.followup = MagicMock()
+        interaction.followup.send = AsyncMock()
+
+        cog._run_claude = AsyncMock()
+
+        await cog.compact_session.callback(cog, interaction)
+
+        interaction.response.defer.assert_called_once()
+        cog._run_claude.assert_called_once()
+        call_kwargs = cog._run_claude.call_args.kwargs
+        assert call_kwargs["prompt"] == "/compact"
+        assert call_kwargs["session_id"] == "abc-123"

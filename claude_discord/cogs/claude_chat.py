@@ -57,6 +57,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "stop": "📌 Session",
     "clear": "📌 Session",
     "rewind": "📌 Session",
+    "compact": "📌 Session",
     "fork": "📌 Session",
     "context": "📌 Session",
     "usage": "📌 Session",
@@ -300,6 +301,46 @@ class ClaudeChatCog(commands.Cog):
         # _active_runners cleanup is handled by _run_claude's finally block.
         # We intentionally do NOT delete from the session DB so the user can resume.
         await interaction.response.send_message(embed=stopped_embed())
+
+    @app_commands.command(
+        name="compact",
+        description="Manually compact (summarize) the conversation to free context space",
+    )
+    async def compact_session(self, interaction: discord.Interaction) -> None:
+        """Trigger manual context compaction via the CLI's /compact command."""
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message(
+                "This command can only be used in a Claude chat thread.", ephemeral=True
+            )
+            return
+
+        thread_id = interaction.channel.id
+        record = await self.repo.get(thread_id)
+        if record is None:
+            await interaction.response.send_message(
+                "No active session found for this thread.", ephemeral=True
+            )
+            return
+
+        if thread_id in self._active_runners:
+            await interaction.response.send_message(
+                "A session is currently running. Wait for it to finish before compacting.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+
+        seed_message = await interaction.followup.send("🗜️ Compacting conversation...", wait=True)
+
+        await self._run_claude(
+            user_message=seed_message,
+            thread=interaction.channel,
+            prompt="/compact",
+            session_id=record.session_id,
+            working_dir_override=record.working_dir,
+            chat_only=True,
+        )
 
     @app_commands.command(name="clear", description="Reset the Claude Code session for this thread")
     async def clear_session(self, interaction: discord.Interaction) -> None:
