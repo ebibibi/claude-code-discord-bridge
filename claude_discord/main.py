@@ -60,6 +60,7 @@ def load_config() -> dict[str, str]:
         "thread_inbox_enabled": os.getenv("THREAD_INBOX_ENABLED", "false"),
         "monitor_all_channels": os.getenv("CLAUDE_MONITOR_ALL_CHANNELS", "false"),
         "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
+        "claude_effort": os.getenv("CLAUDE_EFFORT", ""),
     }
 
 
@@ -93,6 +94,7 @@ async def main() -> None:
         in ("true", "1", "yes"),
         allowed_tools=allowed_tools,
         append_system_prompt=config["append_system_prompt"] or None,
+        effort=config["claude_effort"] or None,
     )
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None

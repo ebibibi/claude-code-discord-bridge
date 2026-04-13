@@ -93,6 +93,7 @@ class ClaudeRunner:
         append_system_prompt: str | None = None,
         images: list[ImageData] | None = None,
         fork_session: bool = False,
+        effort: str | None = None,
     ) -> None:
         self.command = command
         self.model = model
@@ -108,6 +109,7 @@ class ClaudeRunner:
         self.append_system_prompt = append_system_prompt
         self.images = images
         self.fork_session = fork_session
+        self.effort = effort
         self._process: asyncio.subprocess.Process | None = None
 
     async def run(
@@ -179,6 +181,7 @@ class ClaudeRunner:
         allowed_tools: list[str] | None | object = _UNSET,
         fork_session: bool = False,
         working_dir: str | None | object = _UNSET,
+        effort: str | None | object = _UNSET,
     ) -> ClaudeRunner:
         """Create a fresh runner with the same configuration but no active process.
 
@@ -190,16 +193,15 @@ class ClaudeRunner:
                    model switching without mutating the shared base runner.
             append_system_prompt: Text to inject via --append-system-prompt.
                    Overrides the instance-level value if provided.
-                   Use this for ephemeral context (e.g. lounge state, concurrency
-                   notices) that should NOT accumulate in session history.
             allowed_tools: Tool whitelist for --allowedTools.
                    ``_UNSET`` (default) inherits from the parent runner.
                    ``None`` means no tool restrictions.
                    A list of tool names restricts to those tools.
             working_dir: Working directory override for this clone.
                    ``_UNSET`` (default) inherits from the parent runner.
-                   A string overrides the working directory (useful for resuming
-                   CLI-imported sessions that were started in a different directory).
+            effort: Reasoning effort level override for this clone.
+                   ``_UNSET`` (default) inherits from the parent runner.
+                   ``None`` means no effort flag (CLI default).
         """
         return ClaudeRunner(
             command=self.command,
@@ -222,10 +224,8 @@ class ClaudeRunner:
                 if append_system_prompt is not None
                 else self.append_system_prompt
             ),
-            # images are NOT inherited — they are per-invocation.
-            # The caller (run_claude_with_config) passes them via RunConfig.
-            # fork_session is NOT inherited — it's a per-invocation flag.
             fork_session=fork_session,
+            effort=self.effort if effort is _UNSET else effort,  # type: ignore[arg-type]
         )
 
     async def inject_tool_result(self, request_id: str, data: dict) -> None:
@@ -367,6 +367,9 @@ class ClaudeRunner:
             args.extend(["--resume", session_id])
             if self.fork_session:
                 args.append("--fork-session")
+
+        if self.effort:
+            args.extend(["--effort", self.effort])
 
         if self.append_system_prompt:
             args.extend(["--append-system-prompt", self.append_system_prompt])
