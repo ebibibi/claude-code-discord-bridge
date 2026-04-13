@@ -67,12 +67,21 @@ class TestSuggestTitleNormal:
         assert call_args[0] == "/usr/local/bin/claude"
 
     @pytest.mark.asyncio
+    async def test_passes_model_haiku_by_default(self):
+        proc = _make_proc(b"Some Title\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+            await suggest_title("some request")
+        args = mock_exec.call_args[0]
+        assert "--model" in args
+        model_idx = args.index("--model")
+        assert args[model_idx + 1] == "haiku"
+
+    @pytest.mark.asyncio
     async def test_prompt_contains_user_message(self):
         proc = _make_proc(b"Some Title\n")
         with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
             await suggest_title("please help me with authentication")
-        # The prompt argument (3rd positional arg) should contain the message
-        prompt_arg = mock_exec.call_args[0][2]
+        prompt_arg = mock_exec.call_args[0][4]
         assert "please help me with authentication" in prompt_arg
 
 
