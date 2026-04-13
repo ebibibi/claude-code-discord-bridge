@@ -64,6 +64,16 @@ _MODEL_CHOICES = [
     app_commands.Choice(name="Opus 4.6 (powerful, deep reasoning)", value="opus"),
 ]
 
+# Effort level management
+SETTING_CLAUDE_EFFORT = "claude_effort"
+_VALID_EFFORTS = {"low", "medium", "high", "max"}
+_EFFORT_CHOICES = [
+    app_commands.Choice(name="Low (fast, minimal reasoning)", value="low"),
+    app_commands.Choice(name="Medium (balanced)", value="medium"),
+    app_commands.Choice(name="High (thorough, default)", value="high"),
+    app_commands.Choice(name="Max (maximum reasoning)", value="max"),
+]
+
 # Tool permission management
 SETTING_ALLOWED_TOOLS = "allowed_tools"
 KNOWN_TOOLS: list[str] = [
@@ -234,6 +244,107 @@ class SessionManageCog(commands.Cog):
         embed = discord.Embed(
             title="✅ Model Updated",
             description=f"Global model set to **`{model}`**.\nAll new sessions will use this model.",  # noqa: E501
+            color=COLOR_SUCCESS,
+        )
+        await interaction.response.send_message(embed=embed)
+
+    # ── Effort commands ───────────────────────────────────────────────────────
+
+    async def _get_effective_effort(self) -> str | None:
+        """Return the effective effort: settings_repo override or runner default."""
+        if self.settings_repo is not None:
+            stored = await self.settings_repo.get(SETTING_CLAUDE_EFFORT)
+            if stored:
+                return stored
+        runner = self._get_runner()
+        if runner is not None and hasattr(runner, "effort"):
+            return runner.effort  # type: ignore[return-value]
+        return None
+
+    @app_commands.command(name="effort-show", description="Show the current effort level")
+    async def effort_show(self, interaction: discord.Interaction) -> None:
+        """Display the current global effort level."""
+        effective = await self._get_effective_effort()
+
+        embed = discord.Embed(
+            title="⚡ Current Effort Level",
+            color=COLOR_INFO,
+        )
+
+        stored = await self.settings_repo.get(SETTING_CLAUDE_EFFORT) if self.settings_repo else None
+        runner = self._get_runner()
+        runner_effort = getattr(runner, "effort", None) if runner else None
+
+        if stored:
+            desc = f"**Global override:** `{stored}`"
+            if runner_effort:
+                desc += f"\n*(runner default: `{runner_effort}`)*"
+            embed.description = desc
+        elif runner_effort:
+            embed.description = (
+                f"**Default effort:** `{runner_effort}`\n"
+                "*(no override set — use `/effort-set` to change)*"
+            )
+        else:
+            embed.description = (
+                "**No effort level set** (CLI default)\n*(use `/effort-set` to change)*"
+            )
+
+        embed.set_footer(
+            text=f"Effective effort for new sessions: {effective or 'not set (CLI default)'}"
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="effort-set", description="Change the global effort level for new sessions"
+    )
+    @app_commands.describe(effort="Effort level for all new Claude sessions")
+    @app_commands.choices(effort=_EFFORT_CHOICES)
+    async def effort_set(self, interaction: discord.Interaction, effort: str) -> None:
+        """Set the global default effort level stored in settings_repo."""
+        if effort not in _VALID_EFFORTS:
+            await interaction.response.send_message(
+                f"❌ Unknown effort `{effort}`. Valid choices: {', '.join(sorted(_VALID_EFFORTS))}",
+                ephemeral=True,
+            )
+            return
+
+        if self.settings_repo is None:
+            await interaction.response.send_message(
+                "❌ Settings repository is unavailable — effort cannot be persisted.",
+                ephemeral=True,
+            )
+            return
+
+        await self.settings_repo.set(SETTING_CLAUDE_EFFORT, effort)
+
+        embed = discord.Embed(
+            title="✅ Effort Updated",
+            description=(
+                f"Global effort set to **`{effort}`**.\n"
+                "All new sessions will use this effort level."
+            ),
+            color=COLOR_SUCCESS,
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="effort-clear", description="Clear the effort override (use CLI default)"
+    )
+    async def effort_clear(self, interaction: discord.Interaction) -> None:
+        """Remove the effort override so CLI default is used."""
+        if self.settings_repo is None:
+            await interaction.response.send_message(
+                "❌ Settings repository is unavailable.",
+                ephemeral=True,
+            )
+            return
+
+        await self.settings_repo.delete(SETTING_CLAUDE_EFFORT)
+
+        embed = discord.Embed(
+            title="✅ Effort Cleared",
+            description="Effort override removed. New sessions will use the CLI default.",
             color=COLOR_SUCCESS,
         )
         await interaction.response.send_message(embed=embed)

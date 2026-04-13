@@ -68,6 +68,9 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "sync-settings": "📌 Session",
     "model-show": "🤖 Model",
     "model-set": "🤖 Model",
+    "effort-show": "⚡ Effort",
+    "effort-set": "⚡ Effort",
+    "effort-clear": "⚡ Effort",
     "tools-show": "🔧 Advanced",
     "tools-set": "🔧 Advanced",
     "tools-reset": "🔧 Advanced",
@@ -78,7 +81,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
 }
 
 # Section display order in the embed.
-_HELP_SECTION_ORDER: list[str] = ["📌 Session", "🤖 Model", "🔧 Advanced"]
+_HELP_SECTION_ORDER: list[str] = ["📌 Session", "🤖 Model", "⚡ Effort", "🔧 Advanced"]
 
 
 class ClaudeChatCog(commands.Cog):
@@ -173,6 +176,14 @@ class ClaudeChatCog(commands.Cog):
         from .session_manage import SETTING_CLAUDE_MODEL
 
         return await self._settings_repo.get(SETTING_CLAUDE_MODEL)
+
+    async def _get_current_effort(self) -> str | None:
+        """Return the effort override from settings_repo, or None to use runner default."""
+        if self._settings_repo is None:
+            return None
+        from .session_manage import SETTING_CLAUDE_EFFORT
+
+        return await self._settings_repo.get(SETTING_CLAUDE_EFFORT)
 
     async def _get_allowed_tools(self) -> list[str] | None:
         """Return the tool override from settings_repo, or None to use runner default.
@@ -883,6 +894,7 @@ class ClaudeChatCog(commands.Cog):
             await status.set_thinking()
 
             tools_override = await self._get_allowed_tools()
+            effort_override = await self._get_current_effort()
             from ..claude.runner import _UNSET
 
             runner = self.runner.clone(
@@ -891,6 +903,7 @@ class ClaudeChatCog(commands.Cog):
                 allowed_tools=tools_override if tools_override is not None else _UNSET,
                 fork_session=fork,
                 working_dir=working_dir_override if working_dir_override is not None else _UNSET,
+                effort=effort_override if effort_override is not None else _UNSET,
             )
             self._active_runners[thread.id] = runner
 
