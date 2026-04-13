@@ -114,6 +114,10 @@ async def suggest_title(
             logger.warning("thread title renamer timed out after %ds", _TIMEOUT_SECONDS)
             return None
 
+        if proc.returncode != 0:
+            logger.warning("thread title renamer exited with code %d", proc.returncode)
+            return None
+
         raw = stdout.decode(errors="replace")
         stderr_text = _stderr.decode(errors="replace").strip()
         if stderr_text:

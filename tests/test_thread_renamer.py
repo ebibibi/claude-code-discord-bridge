@@ -261,6 +261,17 @@ class TestSuggestTitleErrors:
         assert mock_exec.call_args[1].get("env") is None
 
     @pytest.mark.asyncio
+    async def test_returns_none_on_nonzero_exit_code(self):
+        """CLI errors (e.g. bad model) should not become thread titles."""
+        proc = _make_proc(
+            b"There's an issue with the selected model (claude-haiku-4-5).",
+            returncode=1,
+        )
+        with patch("asyncio.create_subprocess_exec", return_value=proc):
+            result = await suggest_title("some request")
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_kills_process_on_timeout(self):
         """After asyncio.TimeoutError, proc.kill() and cleanup communicate() are called.
 
