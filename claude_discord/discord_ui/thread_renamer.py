@@ -101,6 +101,8 @@ async def suggest_title(
         proc = await asyncio.create_subprocess_exec(
             claude_command,
             "-p",
+            "--model",
+            "haiku",
             prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
