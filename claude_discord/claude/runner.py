@@ -429,6 +429,7 @@ class ClaudeRunner:
             env["CCDB_API_SECRET"] = self.api_secret
         if self.thread_id is not None:
             env["DISCORD_THREAD_ID"] = str(self.thread_id)
+        env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
         return env
 
     async def _read_stream(self) -> AsyncGenerator[StreamEvent, None]:
