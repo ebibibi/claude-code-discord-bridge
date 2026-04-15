@@ -301,6 +301,11 @@ class TestBuildEnv:
             if original is not None:
                 os.environ["CCDB_CLI_ENV_FILE"] = original
 
+    def test_disables_background_tasks(self) -> None:
+        runner = ClaudeRunner()
+        env = runner._build_env()
+        assert env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
     def test_cli_env_overlay_overrides_process_env(self, tmp_path: Path) -> None:
         overlay = tmp_path / "overlay.env"
         overlay.write_text("PATH=/custom/path\n")
