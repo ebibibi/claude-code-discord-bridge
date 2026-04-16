@@ -9,10 +9,12 @@ build/
 *.egg
 
 # Virtual environment (uv manages this)
+.venv
 .venv/
 
 # Environment variables
 .env
+.env.test*
 
 # Database
 data/
@@ -31,3 +33,11 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Local operator/runtime artifacts
+*.log
+HANDOFF_PROMPT.md
+discord-bot-test-codex.service
+setup_test_codex_bot.sh
+scripts/migrate_codex_from_snap.sh
+scripts/rollback_codex_to_snap.sh
