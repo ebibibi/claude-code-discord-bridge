@@ -1,11 +1,12 @@
-"""Minimal SQLite database schema for Claude Code core.
+"""SQLite database schema for Claude Code core.
 
-Contains only the tables needed by any Claude Code integration:
+Contains the tables needed by any Claude Code integration:
 - sessions: thread/channel-to-session mapping
 - usage_stats: rate limit tracking
+- lounge_messages: AI Lounge cross-session coordination
 
-Frontend-specific tables (pending_asks, lounge_messages, pending_resumes,
-thread_inbox, settings) remain in the frontend package (e.g. ccdb).
+Frontend-specific tables (pending_asks, pending_resumes, thread_inbox,
+settings) remain in the frontend package (e.g. ccdb).
 """
 
 from __future__ import annotations
@@ -42,6 +43,16 @@ CREATE TABLE IF NOT EXISTS usage_stats (
     is_using_overage INTEGER NOT NULL DEFAULT 0,
     recorded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+CREATE TABLE IF NOT EXISTS lounge_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT NOT NULL DEFAULT 'AI',
+    message TEXT NOT NULL,
+    thread_id INTEGER,
+    posted_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_lounge_posted_at ON lounge_messages(posted_at);
 """
 
 # Migrations for existing databases that lack new columns.
@@ -62,6 +73,16 @@ _MIGRATIONS = [
         "is_using_overage INTEGER NOT NULL DEFAULT 0, "
         "recorded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
     ),
+    # lounge_messages table — cross-platform AI Lounge coordination
+    (
+        "CREATE TABLE IF NOT EXISTS lounge_messages ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "label TEXT NOT NULL DEFAULT 'AI', "
+        "message TEXT NOT NULL, "
+        "thread_id INTEGER, "
+        "posted_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
+    ),
+    "CREATE INDEX IF NOT EXISTS idx_lounge_posted_at ON lounge_messages(posted_at)",
 ]
 
 

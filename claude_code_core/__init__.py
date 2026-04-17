@@ -25,6 +25,7 @@ Usage::
 from __future__ import annotations
 
 # Database
+from .lounge_repo import LoungeMessage, LoungeRepository
 from .models import init_db
 
 # Parser
@@ -74,6 +75,8 @@ __all__ = [
     # Runner
     "ClaudeRunner",
     # Database
+    "LoungeMessage",
+    "LoungeRepository",
     "SessionRecord",
     "SessionRepository",
     "UsageStatsRepository",

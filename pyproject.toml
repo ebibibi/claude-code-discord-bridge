@@ -23,7 +23,7 @@ images = ["pillow>=10.0"]
 ccdb = "claude_discord.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["claude_discord"]
+packages = ["claude_discord", "claude_code_core"]
 
 [dependency-groups]
 dev = [
