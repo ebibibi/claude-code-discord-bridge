@@ -44,9 +44,9 @@ dependencies = [
 packages = ["claude_code_core"]
 EOF
 
-# Build
+# Build using uv (available in the repo's venv)
 cd "$TMPDIR"
-python -m build --wheel --no-isolation 2>/dev/null || pip install build && python -m build --wheel --no-isolation
+uv build --wheel 2>/dev/null || python -m build --wheel
 
 # Copy wheel to repo dist/
 mkdir -p "$REPO_ROOT/dist"
