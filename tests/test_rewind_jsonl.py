@@ -269,11 +269,11 @@ def test_truncate_jsonl_beyond_end_keeps_all(tmp_path: Path) -> None:
 
 def test_find_session_jsonl_via_working_dir(tmp_path: Path, monkeypatch) -> None:
     """Should find the JSONL at the expected path when working_dir matches."""
-    from claude_discord.claude import rewind as rewind_mod
+    import claude_code_core.rewind as core_rewind_mod
 
     projects_dir = tmp_path / "projects"
     projects_dir.mkdir()
-    monkeypatch.setattr(rewind_mod, "_CLAUDE_PROJECTS_DIR", projects_dir)
+    monkeypatch.setattr(core_rewind_mod, "_CLAUDE_PROJECTS_DIR", projects_dir)
 
     project_dir = projects_dir / "-home-ebi-myrepo"
     project_dir.mkdir()
@@ -287,11 +287,11 @@ def test_find_session_jsonl_via_working_dir(tmp_path: Path, monkeypatch) -> None
 
 def test_find_session_jsonl_fallback_search(tmp_path: Path, monkeypatch) -> None:
     """Should find the JSONL via glob fallback when working_dir doesn't match."""
-    from claude_discord.claude import rewind as rewind_mod
+    import claude_code_core.rewind as core_rewind_mod
 
     projects_dir = tmp_path / "projects"
     projects_dir.mkdir()
-    monkeypatch.setattr(rewind_mod, "_CLAUDE_PROJECTS_DIR", projects_dir)
+    monkeypatch.setattr(core_rewind_mod, "_CLAUDE_PROJECTS_DIR", projects_dir)
 
     other_dir = projects_dir / "-some-other-dir"
     other_dir.mkdir()
@@ -305,9 +305,9 @@ def test_find_session_jsonl_fallback_search(tmp_path: Path, monkeypatch) -> None
 
 
 def test_find_session_jsonl_returns_none_when_not_found(tmp_path: Path, monkeypatch) -> None:
-    from claude_discord.claude import rewind as rewind_mod
+    import claude_code_core.rewind as core_rewind_mod
 
-    monkeypatch.setattr(rewind_mod, "_CLAUDE_PROJECTS_DIR", tmp_path / "empty")
+    monkeypatch.setattr(core_rewind_mod, "_CLAUDE_PROJECTS_DIR", tmp_path / "empty")
 
     result = find_session_jsonl("no-such-session", "/some/dir")
     assert result is None

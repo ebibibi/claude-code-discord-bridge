@@ -963,7 +963,7 @@ class TestResolveWindowsCmd:
         rel = r"node_modules\@anthropic-ai\claude-code\cli.js"
         cmd_path = self._make_cmd(tmp_path, rel)
 
-        with patch("claude_discord.claude.runner.shutil.which", return_value="/usr/bin/node"):
+        with patch("claude_code_core.runner.shutil.which", return_value="/usr/bin/node"):
             result = _resolve_windows_cmd(cmd_path)
 
         assert result is not None
@@ -981,7 +981,7 @@ class TestResolveWindowsCmd:
         cli_js.parent.mkdir(parents=True, exist_ok=True)
         cli_js.write_text("// cli entry\n")
 
-        with patch("claude_discord.claude.runner.shutil.which", return_value="node"):
+        with patch("claude_code_core.runner.shutil.which", return_value="node"):
             result = _resolve_windows_cmd(cmd_path)
 
         assert result is not None
@@ -1010,7 +1010,7 @@ class TestResolveWindowsCmd:
         rel = r"node_modules\@anthropic-ai\claude-code\cli.js"
         cmd_path = self._make_cmd(tmp_path, rel)
 
-        with patch("claude_discord.claude.runner.shutil.which", return_value=None):
+        with patch("claude_code_core.runner.shutil.which", return_value=None):
             result = _resolve_windows_cmd(cmd_path)
 
         assert result is not None
@@ -1024,8 +1024,8 @@ class TestResolveWindowsCmd:
         runner = ClaudeRunner(command=str(cmd_path), model="sonnet")
 
         with (
-            patch("claude_discord.claude.runner.sys.platform", "win32"),
-            patch("claude_discord.claude.runner.shutil.which", return_value="/usr/bin/node"),
+            patch("claude_code_core.runner.sys.platform", "win32"),
+            patch("claude_code_core.runner.shutil.which", return_value="/usr/bin/node"),
         ):
             args = runner._build_args("hello", session_id=None)
 
@@ -1039,7 +1039,7 @@ class TestResolveWindowsCmd:
 
         runner = ClaudeRunner(command=str(cmd_path), model="sonnet")
 
-        with patch("claude_discord.claude.runner.sys.platform", "linux"):
+        with patch("claude_code_core.runner.sys.platform", "linux"):
             args = runner._build_args("hello", session_id=None)
 
         assert args[0] == str(cmd_path)
