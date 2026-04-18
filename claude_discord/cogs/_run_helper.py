@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+from dataclasses import replace
 
 import discord
 
@@ -200,8 +201,6 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
         # Without this, compact_boundary and AskUserQuestion interrupt the
         # original (process-less) runner — a no-op that leaves Claude running
         # invisibly.  See: https://github.com/ebibibi/claude-code-discord-bridge/issues/306
-        from dataclasses import replace
-
         config = replace(config, runner=runner)
 
     processor = EventProcessor(config)
@@ -234,8 +233,6 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
     # After compact_boundary, rerun with a guardrail to prevent Claude from
     # auto-executing "pending tasks" from the compacted context summary.
     if processor.compact_occurred:
-        from dataclasses import replace
-
         session_id = processor.session_id or config.session_id
         logger.info(
             "Compact detected for session %s — rerunning with post-compact guardrail", session_id
