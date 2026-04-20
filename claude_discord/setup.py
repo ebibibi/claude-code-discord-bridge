@@ -78,6 +78,7 @@ async def setup_bridge(
     enable_scheduler: bool = True,
     task_db_path: str = "data/tasks.db",
     lounge_channel_id: int | None = None,
+    max_concurrent: int | None = None,
     worktree_base_dir: str | None = None,
     enable_thread_inbox: bool = False,
     auto_rename_threads: bool | None = None,
@@ -202,6 +203,13 @@ async def setup_bridge(
     if monitor_all_channels:
         logger.info("Monitor-all-channels enabled — bot will respond in ANY guild channel")
 
+    # Max concurrent sessions — fall back to MAX_CONCURRENT_SESSIONS env var, then 3
+    if max_concurrent is None:
+        _env_max = os.getenv("MAX_CONCURRENT_SESSIONS", "")
+        max_concurrent = int(_env_max) if _env_max.isdigit() else 3
+    if max_concurrent != 3:
+        logger.info("Max concurrent sessions: %d", max_concurrent)
+
     # WorktreeManager — attach to bot so cogs can access it via bot.worktree_manager
     if worktree_base_dir is None:
         worktree_base_dir = os.getenv("WORKTREE_BASE_DIR")
@@ -237,6 +245,7 @@ async def setup_bridge(
         bot,  # type: ignore[arg-type]  # consumers pass their own Bot subclass
         repo=session_repo,
         runner=runner,
+        max_concurrent=max_concurrent,
         allowed_user_ids=allowed_user_ids,
         ask_repo=ask_repo,
         lounge_repo=lounge_repo,

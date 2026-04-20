@@ -285,3 +285,86 @@ async def test_setup_bridge_preserves_existing_runner_api_port(tmp_path: object)
 
     # Should NOT overwrite the existing value
     assert runner.api_port == 9999
+
+
+@pytest.mark.asyncio
+async def test_setup_bridge_passes_max_concurrent_to_chat_cog(tmp_path: object) -> None:
+    """max_concurrent parameter should be forwarded to ClaudeChatCog."""
+    from claude_discord.cogs.claude_chat import ClaudeChatCog
+
+    bot = _make_bot()
+    runner = _make_runner()
+
+    await setup_bridge(
+        bot,
+        runner,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        claude_channel_id=111,
+        max_concurrent=7,
+        enable_scheduler=False,
+    )
+
+    chat_cog = next(
+        call.args[0]
+        for call in bot.add_cog.call_args_list
+        if isinstance(call.args[0], ClaudeChatCog)
+    )
+    assert chat_cog._max_concurrent == 7
+
+
+@pytest.mark.asyncio
+async def test_setup_bridge_reads_max_concurrent_from_env(tmp_path: object) -> None:
+    """MAX_CONCURRENT_SESSIONS env var should be used when parameter is None."""
+    from unittest.mock import patch
+
+    from claude_discord.cogs.claude_chat import ClaudeChatCog
+
+    bot = _make_bot()
+    runner = _make_runner()
+
+    with patch.dict("os.environ", {"MAX_CONCURRENT_SESSIONS": "10"}):
+        await setup_bridge(
+            bot,
+            runner,
+            session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+            claude_channel_id=111,
+            enable_scheduler=False,
+        )
+
+    chat_cog = next(
+        call.args[0]
+        for call in bot.add_cog.call_args_list
+        if isinstance(call.args[0], ClaudeChatCog)
+    )
+    assert chat_cog._max_concurrent == 10
+
+
+@pytest.mark.asyncio
+async def test_setup_bridge_defaults_max_concurrent_to_3(tmp_path: object) -> None:
+    """Without env var or parameter, max_concurrent defaults to 3."""
+    from unittest.mock import patch
+
+    from claude_discord.cogs.claude_chat import ClaudeChatCog
+
+    bot = _make_bot()
+    runner = _make_runner()
+
+    with patch.dict("os.environ", {}, clear=False):
+        # Ensure env var is not set
+        import os
+
+        os.environ.pop("MAX_CONCURRENT_SESSIONS", None)
+        await setup_bridge(
+            bot,
+            runner,
+            session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+            claude_channel_id=111,
+            enable_scheduler=False,
+        )
+
+    chat_cog = next(
+        call.args[0]
+        for call in bot.add_cog.call_args_list
+        if isinstance(call.args[0], ClaudeChatCog)
+    )
+    assert chat_cog._max_concurrent == 3
