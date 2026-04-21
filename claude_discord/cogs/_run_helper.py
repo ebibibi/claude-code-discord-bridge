@@ -15,6 +15,7 @@ Legacy shim:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import re
@@ -29,6 +30,25 @@ from .event_processor import EventProcessor
 from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Global session slot limiter
+# ---------------------------------------------------------------------------
+_global_semaphore: asyncio.Semaphore | None = None
+_max_concurrent: int = 3
+
+
+def configure_session_limit(max_concurrent: int) -> None:
+    """Set the process-wide concurrent session limit.
+
+    Called once from ``setup_bridge()`` during startup.  All subsequent calls to
+    ``run_claude_with_config()`` — regardless of which Cog invokes them — will
+    honour the limit.
+    """
+    global _global_semaphore, _max_concurrent  # noqa: PLW0603
+    _max_concurrent = max_concurrent
+    _global_semaphore = asyncio.Semaphore(max_concurrent)
+
 
 # Max characters for tool result display (re-exported for backward compat).
 TOOL_RESULT_MAX_CHARS = 3000
@@ -205,6 +225,17 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
 
     processor = EventProcessor(config)
 
+    # --- Session slot limiter (global semaphore) ---
+    sem = _global_semaphore
+    if sem is not None and sem.locked():
+        with contextlib.suppress(discord.HTTPException):
+            await config.thread.send(
+                f"\u23f3 Waiting for a free session slot\u2026 "
+                f"({_max_concurrent} max sessions running)"
+            )
+    if sem is not None:
+        await sem.acquire()
+
     try:
         async for event in runner.run(config.prompt, session_id=config.session_id):
             if processor.should_drain:
@@ -212,8 +243,6 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
             await processor.process(event)
     except Exception as exc:
         logger.exception("Error running Claude CLI for thread %d", config.thread.id)
-        # Wrap Discord sends in suppress — the connection may already be closed
-        # (e.g. ServerDisconnectedError on bot shutdown), and sending would fail too.
         with contextlib.suppress(Exception):
             detail = f"{type(exc).__name__}: {exc}"
             await config.thread.send(
@@ -224,6 +253,8 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
                 await config.status.set_error()
         return processor.session_id
     finally:
+        if sem is not None:
+            sem.release()
         await processor.finalize()
         if config.registry is not None:
             config.registry.unregister(config.thread.id)

@@ -210,6 +210,10 @@ async def setup_bridge(
     if max_concurrent != 3:
         logger.info("Max concurrent sessions: %d", max_concurrent)
 
+    from .cogs._run_helper import configure_session_limit
+
+    configure_session_limit(max_concurrent)
+
     # WorktreeManager — attach to bot so cogs can access it via bot.worktree_manager
     if worktree_base_dir is None:
         worktree_base_dir = os.getenv("WORKTREE_BASE_DIR")
