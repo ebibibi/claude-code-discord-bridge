@@ -129,7 +129,6 @@ class ClaudeChatCog(commands.Cog):
         # Channels where only text responses are shown (no tool embeds, thinking, etc.).
         self._chat_only_channel_ids: set[int] = chat_only_channel_ids or set()
         self._registry = registry or getattr(bot, "session_registry", None)
-        self._semaphore = asyncio.Semaphore(max_concurrent)
         self._active_runners: dict[int, ClaudeRunner] = {}
         # Tracks the asyncio.Task running _run_claude for each thread.
         # Used by _handle_thread_reply to wait for an interrupted session
@@ -851,102 +850,95 @@ class ClaudeChatCog(commands.Cog):
         chat_only: bool = False,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
-        if self._semaphore.locked():
-            await thread.send(
-                f"\u23f3 Waiting for a free session slot... "
-                f"({self._max_concurrent} max sessions running)"
+        dashboard = self._get_dashboard()
+        description = prompt[:100].replace("\n", " ")
+
+        # Register the current asyncio Task so _handle_thread_reply can
+        # await it after sending SIGINT to the runner.
+        current_task = asyncio.current_task()
+        if current_task is not None:
+            self._active_tasks[thread.id] = current_task
+
+        # Mark thread as PROCESSING when Claude starts
+        if dashboard is not None:
+            await dashboard.set_state(
+                thread.id,
+                ThreadState.PROCESSING,
+                description,
+                thread=thread,
             )
 
-        async with self._semaphore:
-            dashboard = self._get_dashboard()
-            description = prompt[:100].replace("\n", " ")
+        model_override = await self._get_current_model()
+        effective_model = model_override or self.runner.model
 
-            # Register the current asyncio Task so _handle_thread_reply can
-            # await it after sending SIGINT to the runner.
-            current_task = asyncio.current_task()
-            if current_task is not None:
-                self._active_tasks[thread.id] = current_task
+        async def _notify_stall() -> None:
+            threshold = status._stall_hard
+            await thread.send(
+                f"-# \u26a0\ufe0f No activity for {threshold}s — could be extended thinking "
+                "or context compression. Will resume automatically."
+            )
 
-            # Mark thread as PROCESSING when Claude starts
+        status = StatusManager(
+            user_message,
+            on_hard_stall=_notify_stall,
+            model=effective_model,
+        )
+        await status.set_thinking()
+
+        tools_override = await self._get_allowed_tools()
+        effort_override = await self._get_current_effort()
+        from ..claude.runner import _UNSET
+
+        runner = self.runner.clone(
+            thread_id=thread.id,
+            model=model_override,
+            allowed_tools=tools_override if tools_override is not None else _UNSET,
+            fork_session=fork,
+            working_dir=working_dir_override if working_dir_override is not None else _UNSET,
+            effort=effort_override if effort_override is not None else _UNSET,
+        )
+        self._active_runners[thread.id] = runner
+
+        # In chat_only mode, skip the "Session running" message and stop button.
+        stop_view: StopView | None = None
+        if not chat_only:
+            stop_view = StopView(runner)
+            stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
+            stop_view.set_message(stop_msg)
+
+        try:
+            await run_claude_with_config(
+                RunConfig(
+                    thread=thread,
+                    runner=runner,
+                    repo=self.repo,
+                    prompt=prompt,
+                    session_id=session_id,
+                    status=status,
+                    registry=self._registry,
+                    ask_repo=self._ask_repo,
+                    lounge_repo=self._lounge_repo,
+                    stop_view=stop_view,
+                    worktree_manager=getattr(self.bot, "worktree_manager", None),
+                    images=images,
+                    attach_on_request=wants_file_attachment(prompt),
+                    inbox_repo=getattr(self.bot, "inbox_repo", None),
+                    inbox_dashboard=dashboard,
+                    claude_command=runner.command,
+                    chat_only=chat_only,
+                )
+            )
+        finally:
+            if stop_view is not None:
+                await stop_view.disable()
+            self._active_runners.pop(thread.id, None)
+            self._active_tasks.pop(thread.id, None)
+
+            # Transition to WAITING_INPUT so owner knows a reply is needed
             if dashboard is not None:
                 await dashboard.set_state(
                     thread.id,
-                    ThreadState.PROCESSING,
+                    ThreadState.WAITING_INPUT,
                     description,
                     thread=thread,
                 )
-
-            model_override = await self._get_current_model()
-            effective_model = model_override or self.runner.model
-
-            async def _notify_stall() -> None:
-                threshold = status._stall_hard
-                await thread.send(
-                    f"-# \u26a0\ufe0f No activity for {threshold}s — could be extended thinking "
-                    "or context compression. Will resume automatically."
-                )
-
-            status = StatusManager(
-                user_message,
-                on_hard_stall=_notify_stall,
-                model=effective_model,
-            )
-            await status.set_thinking()
-
-            tools_override = await self._get_allowed_tools()
-            effort_override = await self._get_current_effort()
-            from ..claude.runner import _UNSET
-
-            runner = self.runner.clone(
-                thread_id=thread.id,
-                model=model_override,
-                allowed_tools=tools_override if tools_override is not None else _UNSET,
-                fork_session=fork,
-                working_dir=working_dir_override if working_dir_override is not None else _UNSET,
-                effort=effort_override if effort_override is not None else _UNSET,
-            )
-            self._active_runners[thread.id] = runner
-
-            # In chat_only mode, skip the "Session running" message and stop button.
-            stop_view: StopView | None = None
-            if not chat_only:
-                stop_view = StopView(runner)
-                stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
-                stop_view.set_message(stop_msg)
-
-            try:
-                await run_claude_with_config(
-                    RunConfig(
-                        thread=thread,
-                        runner=runner,
-                        repo=self.repo,
-                        prompt=prompt,
-                        session_id=session_id,
-                        status=status,
-                        registry=self._registry,
-                        ask_repo=self._ask_repo,
-                        lounge_repo=self._lounge_repo,
-                        stop_view=stop_view,
-                        worktree_manager=getattr(self.bot, "worktree_manager", None),
-                        images=images,
-                        attach_on_request=wants_file_attachment(prompt),
-                        inbox_repo=getattr(self.bot, "inbox_repo", None),
-                        inbox_dashboard=dashboard,
-                        claude_command=runner.command,
-                        chat_only=chat_only,
-                    )
-                )
-            finally:
-                if stop_view is not None:
-                    await stop_view.disable()
-                self._active_runners.pop(thread.id, None)
-                self._active_tasks.pop(thread.id, None)
-
-                # Transition to WAITING_INPUT so owner knows a reply is needed
-                if dashboard is not None:
-                    await dashboard.set_state(
-                        thread.id,
-                        ThreadState.WAITING_INPUT,
-                        description,
-                        thread=thread,
-                    )

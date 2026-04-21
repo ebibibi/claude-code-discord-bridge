@@ -16,10 +16,12 @@ from claude_discord.claude.types import (
     ToolCategory,
     ToolUseEvent,
 )
+from claude_discord.cogs import _run_helper as _rh_module
 from claude_discord.cogs._run_helper import (
     TOOL_RESULT_MAX_CHARS,
     _make_error_embed,
     _truncate_result,
+    configure_session_limit,
     run_claude_in_thread,
     run_claude_with_config,
 )
@@ -1403,3 +1405,201 @@ class TestCompactRerun:
         cloned_runner.interrupt.assert_awaited()
         # The original runner must NOT be interrupted (it has no process).
         original_runner.interrupt.assert_not_awaited()
+
+
+class TestGlobalSessionSemaphore:
+    """Tests for the global session slot limiter in _run_helper."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_semaphore(self):
+        """Save and restore module-level semaphore state around each test."""
+        orig_sem = _rh_module._global_semaphore
+        orig_max = _rh_module._max_concurrent
+        yield
+        _rh_module._global_semaphore = orig_sem
+        _rh_module._max_concurrent = orig_max
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        t.id = 77777
+        t.send = AsyncMock(return_value=MagicMock(spec=discord.Message))
+        return t
+
+    def _simple_events(self, session_id: str = "sess-sem") -> list[StreamEvent]:
+        return [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id=session_id),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id=session_id,
+                cost_usd=0.001,
+                duration_ms=100,
+            ),
+        ]
+
+    def _make_async_gen(self, events: list[StreamEvent]):
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return gen
+
+    def test_configure_session_limit_sets_semaphore(self) -> None:
+        configure_session_limit(5)
+        assert _rh_module._max_concurrent == 5
+        assert isinstance(_rh_module._global_semaphore, asyncio.Semaphore)
+
+    @pytest.mark.asyncio
+    async def test_semaphore_limits_concurrent_sessions(self, thread: MagicMock) -> None:
+        """With max=2, a 3rd session must wait until one finishes."""
+        configure_session_limit(2)
+
+        gate = asyncio.Event()
+        started = asyncio.Event()
+
+        async def slow_gen(*args, **kwargs):
+            started.set()
+            await gate.wait()
+            for e in self._simple_events():
+                yield e
+
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.images = None
+        runner.run = slow_gen
+
+        config = RunConfig(thread=thread, runner=runner, prompt="test")
+
+        # Start 2 sessions that block on `gate`
+        t1 = asyncio.create_task(run_claude_with_config(config))
+        await started.wait()
+        started.clear()
+
+        t2 = asyncio.create_task(run_claude_with_config(config))
+        await started.wait()
+        started.clear()
+
+        # 3rd session should not start immediately
+        t3 = asyncio.create_task(run_claude_with_config(config))
+        await asyncio.sleep(0.05)
+        assert not started.is_set(), "3rd session should be waiting for a semaphore slot"
+
+        # Release all
+        gate.set()
+        await asyncio.gather(t1, t2, t3)
+
+    @pytest.mark.asyncio
+    async def test_waiting_message_sent_when_full(self, thread: MagicMock) -> None:
+        """When all slots are taken, a waiting message should be posted."""
+        configure_session_limit(1)
+
+        gate = asyncio.Event()
+        started = asyncio.Event()
+
+        async def slow_gen(*args, **kwargs):
+            started.set()
+            await gate.wait()
+            for e in self._simple_events():
+                yield e
+
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.images = None
+        runner.run = slow_gen
+
+        config = RunConfig(thread=thread, runner=runner, prompt="test")
+
+        t1 = asyncio.create_task(run_claude_with_config(config))
+        await started.wait()
+
+        # 2nd session should see the semaphore locked and post a waiting message
+        t2 = asyncio.create_task(run_claude_with_config(config))
+        await asyncio.sleep(0.05)
+
+        gate.set()
+        await asyncio.gather(t1, t2)
+
+        waiting_msgs = [
+            c
+            for c in thread.send.call_args_list
+            if c.args and isinstance(c.args[0], str) and "\u23f3" in c.args[0]
+        ]
+        assert len(waiting_msgs) >= 1
+
+    @pytest.mark.asyncio
+    async def test_semaphore_released_on_error(self, thread: MagicMock) -> None:
+        """Semaphore must be released even when runner.run() raises."""
+        configure_session_limit(1)
+
+        async def failing_gen(*args, **kwargs):
+            raise RuntimeError("boom")
+            yield  # noqa: E501
+
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.images = None
+        runner.run = failing_gen
+
+        config = RunConfig(thread=thread, runner=runner, prompt="test")
+        await run_claude_with_config(config)
+
+        sem = _rh_module._global_semaphore
+        assert not sem.locked(), "Semaphore should be released after error"
+
+    @pytest.mark.asyncio
+    async def test_no_semaphore_when_not_configured(self, thread: MagicMock) -> None:
+        """When configure_session_limit was never called, no limiting occurs."""
+        _rh_module._global_semaphore = None
+
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.images = None
+        runner.run = self._make_async_gen(self._simple_events())
+
+        config = RunConfig(thread=thread, runner=runner, prompt="test")
+        result = await run_claude_with_config(config)
+        assert result == "sess-sem"
+
+    @pytest.mark.asyncio
+    async def test_compact_rerun_does_not_deadlock(self, thread: MagicMock) -> None:
+        """With max=1, compact rerun must not deadlock (semaphore released before rerun)."""
+        configure_session_limit(1)
+
+        compact_events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-dl"),
+            StreamEvent(message_type=MessageType.SYSTEM, is_compact=True),
+        ]
+        rerun_events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-dl"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-dl",
+                cost_usd=0.01,
+                duration_ms=100,
+            ),
+        ]
+
+        call_count = 0
+
+        async def mock_run(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            events = compact_events if call_count == 1 else rerun_events
+            for e in events:
+                yield e
+
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.images = None
+        runner.interrupt = AsyncMock()
+        runner.run = mock_run
+        runner.clone = MagicMock(return_value=runner)
+
+        config = RunConfig(thread=thread, runner=runner, prompt="test", session_id="sess-dl")
+
+        # Must complete within 5 seconds — deadlock would hang forever
+        result = await asyncio.wait_for(run_claude_with_config(config), timeout=5.0)
+        assert result == "sess-dl"
+        assert call_count == 2
