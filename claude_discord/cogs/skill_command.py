@@ -88,6 +88,7 @@ class SkillCommandCog(commands.Cog):
         claude_channel_id: int,
         skills_dir: Path | str | None = None,
         allowed_user_ids: set[int] | None = None,
+        allowed_skills: set[str] | None = None,
         registry: SessionRegistry | None = None,
     ) -> None:
         self.bot = bot
@@ -95,20 +96,34 @@ class SkillCommandCog(commands.Cog):
         self.runner = runner
         self.claude_channel_id = claude_channel_id
         self._allowed_user_ids = allowed_user_ids
+        self._allowed_skills = allowed_skills  # None = 全スキル許可
         self._registry = registry or getattr(bot, "session_registry", None)
 
         # Default to ~/.claude/skills/
         if skills_dir is None:
             skills_dir = Path.home() / ".claude" / "skills"
         self._skills_dir = Path(skills_dir)
-        self._skills = _load_skills(self._skills_dir)
+        self._skills = self._load_and_filter_skills()
         self._last_loaded: float = time.monotonic()
+
+    def _load_and_filter_skills(self) -> list[dict[str, str]]:
+        """スキルを読み込み、allowed_skillsでフィルタして返す。"""
+        all_skills = _load_skills(self._skills_dir)
+        if self._allowed_skills is None:
+            return all_skills
+        filtered = [s for s in all_skills if s["name"] in self._allowed_skills]
+        logger.info(
+            "Skill filter: %d/%d skills allowed (%s)",
+            len(filtered), len(all_skills),
+            ", ".join(sorted(self._allowed_skills)),
+        )
+        return filtered
 
     def _maybe_reload_skills(self) -> None:
         """Reload skills from disk if SKILL_RELOAD_INTERVAL has elapsed."""
         now = time.monotonic()
         if now - self._last_loaded >= SKILL_RELOAD_INTERVAL:
-            self._skills = _load_skills(self._skills_dir)
+            self._skills = self._load_and_filter_skills()
             self._last_loaded = now
 
     def _is_authorized(self, user_id: int) -> bool:
@@ -163,6 +178,20 @@ class SkillCommandCog(commands.Cog):
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
+
+        # autocompleteラベル（"name — description"）が送られてくる場合の処理
+        if " — " in name:
+            name = name.split(" — ", 1)[0].strip()
+
+        # nameフィールドに引数も一緒に入力された場合（"youtube https://..."）
+        # → 先頭をスキル名、残りをargsに分離する
+        if " " in name:
+            parts = name.split(None, 1)
+            name = parts[0]
+            if args:
+                args = parts[1] + " " + args
+            else:
+                args = parts[1]
 
         # Validate skill name — only alphanumeric, hyphens, underscores
         if not re.match(r"^[\w-]+$", name):

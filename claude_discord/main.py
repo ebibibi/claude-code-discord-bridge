@@ -47,6 +47,8 @@ def load_config() -> dict[str, str]:
         "max_concurrent": os.getenv("MAX_CONCURRENT_SESSIONS", "3"),
         "timeout": os.getenv("SESSION_TIMEOUT_SECONDS", "300"),
         "owner_id": os.getenv("DISCORD_OWNER_ID", ""),
+        "allowed_user_ids": os.getenv("DISCORD_ALLOWED_USER_IDS", ""),
+        "allowed_skills": os.getenv("ALLOWED_SKILLS", ""),
         "coordination_channel_id": os.getenv("COORDINATION_CHANNEL_ID", ""),
         "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
     }
@@ -89,12 +91,34 @@ async def main() -> None:
         lounge_channel_id=coordination_channel_id,  # lounge uses the same channel
     )
 
+    # Build allowed_user_ids early (used by both ClaudeChatCog and SkillCommandCog)
+    allowed_user_ids_str = config.get("allowed_user_ids", "")
+    if allowed_user_ids_str:
+        allowed_user_ids = {
+            int(uid.strip()) for uid in allowed_user_ids_str.split(",") if uid.strip()
+        }
+    elif config["owner_id"]:
+        allowed_user_ids = {int(config["owner_id"])}
+    else:
+        allowed_user_ids = None
+
+    # Build allowed_skills (Bot別スキル権限フィルタ)
+    allowed_skills_str = config.get("allowed_skills", "")
+    if allowed_skills_str:
+        allowed_skills: set[str] | None = {
+            s.strip() for s in allowed_skills_str.split(",") if s.strip()
+        }
+        logger.info("Allowed skills configured: %s", ", ".join(sorted(allowed_skills)))
+    else:
+        allowed_skills = None  # 全スキル許可
+
     # Register cog
     cog = ClaudeChatCog(
         bot=bot,
         repo=repo,
         runner=runner,
         max_concurrent=int(config["max_concurrent"]),
+        allowed_user_ids=allowed_user_ids,
         ask_repo=ask_repo,
         lounge_repo=lounge_repo,
     )
@@ -110,7 +134,6 @@ async def main() -> None:
     from .cogs.session_manage import SessionManageCog
 
     channel_id_int = int(config["channel_id"])
-    allowed_user_ids = {int(config["owner_id"])} if config["owner_id"] else None
 
     skill_cog = SkillCommandCog(
         bot,
@@ -118,6 +141,7 @@ async def main() -> None:
         runner=runner,
         claude_channel_id=channel_id_int,
         allowed_user_ids=allowed_user_ids,
+        allowed_skills=allowed_skills,
     )
 
     settings_repo = SettingsRepository(db_path)
@@ -160,6 +184,16 @@ async def main() -> None:
 
     shell_exec_cog = ShellExecCog(bot)
 
+    # ShohinSearchCog — /shohin (商品マスター検索)
+    from .cogs.shohin_search import ShohinSearchCog
+
+    shohin_cog = ShohinSearchCog(bot)
+
+    # KwTriggerCog — /kw, /kw-opt (n8n KW WF Webhook trigger)
+    from .cogs.kw_trigger import KwTriggerCog
+
+    kw_cog = KwTriggerCog(bot)
+
     async with bot:
         await bot.add_cog(cog)
         await bot.add_cog(repo_viewer_cog)
@@ -167,6 +201,8 @@ async def main() -> None:
         await bot.add_cog(skill_cog)
         await bot.add_cog(session_manage_cog)
         await bot.add_cog(shell_exec_cog)
+        await bot.add_cog(shohin_cog)
+        await bot.add_cog(kw_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)
