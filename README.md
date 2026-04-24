@@ -146,7 +146,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Chat-only mode** — When `CHAT_ONLY_CHANNEL_IDS` includes a channel, only Claude's text responses are shown; tool embeds, thinking blocks, session start/complete embeds, and todo lists are hidden. Permission requests and `AskUserQuestion` are always shown. Ideal for public channels where non-technical users are watching.
 - **Thread = Session** — 1:1 mapping between Discord thread and Claude Code session
 - **Session persistence** — Resume conversations across messages via `--resume`
-- **Concurrent sessions** — Multiple parallel sessions with configurable limit
+- **Concurrent sessions** — Global limit on concurrent Claude CLI invocations shared across all features (chat, `/skill` commands, webhooks, and scheduled tasks all count against the same pool); configurable via `MAX_CONCURRENT_SESSIONS`
 - **Stop without clearing** — `/stop` halts a session while preserving it for resume
 - **Session interrupt** — Sending a new message to an active thread sends SIGINT to the running session and starts fresh with the new instruction; no manual `/stop` needed
 - **Auto-rename threads** — When `THREAD_AUTO_RENAME=true`, each new thread is automatically renamed with a Claude-generated title derived from the first message (background task, never delays session start)
@@ -525,7 +525,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CLAUDE_PERMISSION_MODE` | Permission mode for CLI | `acceptEdits` |
 | `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | Skip all permission checks (use with caution) | `false` |
 | `CLAUDE_WORKING_DIR` | Working directory for Claude | current dir |
-| `MAX_CONCURRENT_SESSIONS` | Max parallel sessions | `3` |
+| `MAX_CONCURRENT_SESSIONS` | Max concurrent Claude CLI invocations; the limit is enforced globally across all features (chat sessions, `/skill` commands, webhook tasks, and scheduled tasks all share the same pool). Callers wait and receive a ⏳ message while a slot is occupied. | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Session inactivity timeout | `300` |
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
 | `COORDINATION_CHANNEL_ID` | Channel ID used as default fallback for AI Lounge channel | (optional) |

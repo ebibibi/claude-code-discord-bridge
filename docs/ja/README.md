@@ -147,7 +147,7 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **チャットのみモード** — `CHAT_ONLY_CHANNEL_IDS` にチャンネルを設定すると、Claude のテキスト応答のみを表示。ツール embed、思考ブロック、セッション開始/完了 embed、Todo リストはすべて非表示。許可リクエストと `AskUserQuestion` は常に表示。技術的な詳細を見せたくないパブリックチャンネルに最適。
 - **Thread = Session** — Discord スレッドと Claude Code セッションの 1:1 マッピング
 - **セッション永続化** — `--resume` で複数メッセージをまたいだ会話を継続
-- **並行セッション** — 設定可能な上限での複数並行セッション
+- **並行セッション** — Claude CLI 呼び出しに対するグローバル上限。チャット・`/skill` コマンド・Webhook・スケジュールタスクがすべて同じプールを共有する。`MAX_CONCURRENT_SESSIONS` で設定可能
 - **削除せず停止** — `/stop` でセッションを保持したまま停止し、リジューム可能
 - **セッション割り込み** — アクティブなスレッドに新しいメッセージを送ると実行中のセッションに SIGINT を送り、新しい指示で即座に再開。手動での `/stop` 不要
 - **スレッド自動リネーム** — `THREAD_AUTO_RENAME=true` のとき、最初のメッセージをもとに Claude が生成した短いタイトルでスレッドを自動リネーム（バックグラウンドタスクのためセッション開始を遅延させない）
@@ -526,7 +526,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CLAUDE_PERMISSION_MODE` | CLI のパーミッションモード | `auto` |
 | `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | 全パーミッションチェックをスキップ（注意して使用） | `false` |
 | `CLAUDE_WORKING_DIR` | Claude の作業ディレクトリ | カレントディレクトリ |
-| `MAX_CONCURRENT_SESSIONS` | 最大並行セッション数 | `3` |
+| `MAX_CONCURRENT_SESSIONS` | Claude CLI 呼び出しの最大同時実行数。チャットセッション・`/skill` コマンド・Webhook タスク・スケジュールタスクすべてが同じプールを共有する。スロットが埋まっている間、呼び出し元は待機し ⏳ メッセージを受け取る。 | `3` |
 | `SESSION_TIMEOUT_SECONDS` | セッション非アクティブタイムアウト | `300` |
 | `DISCORD_OWNER_ID` | Claude が入力待ちのとき @mention する Discord ユーザー ID | （オプション） |
 | `COORDINATION_CHANNEL_ID` | AI Lounge チャンネルのデフォルトフォールバック用チャンネル ID | （オプション） |
