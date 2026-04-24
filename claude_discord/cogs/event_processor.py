@@ -40,15 +40,21 @@ from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
 
-# Marker file written by Claude when the user asks to receive specific files.
-_ATTACHMENT_MARKER = ".ccdb-attachments"
+# Marker file prefix. The full name includes the thread ID to prevent
+# cross-contamination when multiple sessions share the same working_dir.
+_ATTACHMENT_MARKER_PREFIX = ".ccdb-attachments"
+
+
+def _attachment_marker_name(thread_id: int) -> str:
+    return f"{_ATTACHMENT_MARKER_PREFIX}-{thread_id}"
 
 
 async def _send_attachment_requests(
     thread: object,
     working_dir: str | None,
+    thread_id: int,
 ) -> None:
-    """Read .ccdb-attachments and send listed files to Discord.
+    """Read .ccdb-attachments-{thread_id} and send listed files to Discord.
 
     If the marker file does not exist or is empty, this is a no-op.
     The marker file is deleted after sending so it does not persist into
@@ -58,7 +64,7 @@ async def _send_attachment_requests(
     if not working_dir:
         logger.debug("_send_attachment_requests: no working_dir, skipping")
         return
-    marker = Path(working_dir) / _ATTACHMENT_MARKER
+    marker = Path(working_dir) / _attachment_marker_name(thread_id)
     if not marker.exists():
         logger.debug("_send_attachment_requests: %s not found, skipping", marker)
         return
@@ -425,10 +431,11 @@ class EventProcessor:
                     last_assistant_url = last_sent.jump_url
                 last_assistant_text = response_text
 
-            # Send files listed in the .ccdb-attachments marker file, if present.
+            # Send files listed in the .ccdb-attachments-{thread_id} marker file.
             await _send_attachment_requests(
                 self._config.thread,
                 self._config.runner.working_dir,
+                self._config.thread.id,
             )
 
             # In chat_only mode, skip session_complete embed, statusline, and inbox.
