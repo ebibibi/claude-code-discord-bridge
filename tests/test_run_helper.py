@@ -729,6 +729,7 @@ class TestStopViewRunnerSync:
         return gen
 
     @pytest.mark.asyncio
+    @pytest.mark.real_system_context
     async def test_stop_view_updated_to_cloned_runner(self, thread: MagicMock) -> None:
         """stop_view.update_runner() is called when a clone is created for system context.
 
@@ -858,6 +859,7 @@ class TestConcurrencyIntegration:
         ]
 
     @pytest.mark.asyncio
+    @pytest.mark.real_system_context
     async def test_concurrency_notice_injected_as_system_prompt(
         self, thread: MagicMock, runner: MagicMock, repo: MagicMock
     ) -> None:
@@ -889,6 +891,7 @@ class TestConcurrencyIntegration:
         assert "[CONCURRENCY NOTICE" in system_prompt
 
     @pytest.mark.asyncio
+    @pytest.mark.real_system_context
     async def test_session_registered_during_run(
         self, thread: MagicMock, runner: MagicMock, repo: MagicMock
     ) -> None:
@@ -941,6 +944,7 @@ class TestConcurrencyIntegration:
         assert registry.list_active() == []
 
     @pytest.mark.asyncio
+    @pytest.mark.real_system_context
     async def test_other_sessions_in_system_prompt(
         self, thread: MagicMock, runner: MagicMock, repo: MagicMock
     ) -> None:
@@ -1254,6 +1258,7 @@ class TestCompactRerun:
         assert session_id == "sess-1"
 
     @pytest.mark.asyncio
+    @pytest.mark.real_system_context
     async def test_compact_rerun_injects_guardrail_via_clone(self, thread: MagicMock) -> None:
         """The rerun invokes runner.clone() with an append_system_prompt guardrail."""
         runner = MagicMock()
@@ -1337,6 +1342,7 @@ class TestCompactRerun:
         assert session_id == "sess-3"
 
     @pytest.mark.asyncio
+    @pytest.mark.real_system_context
     async def test_compact_interrupts_cloned_runner_not_original(self, thread: MagicMock) -> None:
         """interrupt() must target the cloned runner (which owns the process), not config.runner.
 

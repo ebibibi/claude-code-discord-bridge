@@ -27,9 +27,14 @@ def thread() -> MagicMock:
 
 @pytest.fixture
 def runner() -> MagicMock:
-    """A MagicMock ClaudeRunner with interrupt() wired up."""
+    """A MagicMock ClaudeRunner with interrupt() wired up.
+
+    clone() returns the same mock so tests that set runner.run = ...
+    keep working after _build_system_context triggers runner.clone().
+    """
     r = MagicMock()
     r.interrupt = AsyncMock()
+    r.clone = MagicMock(return_value=r)
     return r
 
 
@@ -40,6 +45,24 @@ def repo() -> MagicMock:
     r.save = AsyncMock()
     r.get = AsyncMock(return_value=None)
     return r
+
+
+@pytest.fixture(autouse=True)
+def _patch_build_system_context(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Patch _build_system_context to return None by default.
+
+    The always-on File Delivery injection causes runner.clone() on every run,
+    which breaks tests using runner.run = async_gen on a plain MagicMock.
+    Tests that need real system context should use @pytest.mark.real_system_context.
+    """
+    if "real_system_context" in {m.name for m in request.node.iter_markers()}:
+        return
+    monkeypatch.setattr(
+        "claude_discord.cogs._run_helper._build_system_context",
+        AsyncMock(return_value=None),
+    )
 
 
 def make_async_gen(events: list[StreamEvent]):

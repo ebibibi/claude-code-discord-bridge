@@ -39,6 +39,9 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "real_system_context: opt out of the _build_system_context autouse patch",
+]
 
 [tool.ruff]
 target-version = "py311"
