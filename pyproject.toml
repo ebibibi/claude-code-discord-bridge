@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-code-discord-bridge"
-version = "2.1.37"
+version = "2.1.38"
 description = "Connect Claude Code to Discord and GitHub — interactive chat, CI/CD automation, and workflow integration"
 readme = "README.md"
 license = {text = "MIT"}
