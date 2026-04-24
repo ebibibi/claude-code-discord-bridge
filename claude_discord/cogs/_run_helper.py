@@ -122,23 +122,22 @@ async def _build_system_context(config: RunConfig) -> str | None:
             "No session registry — concurrency notice skipped for thread %d", config.thread.id
         )
 
-    # File attachment instruction: injected only when the user asked for files.
-    if config.attach_on_request:
-        from .event_processor import _attachment_marker_name
+    # File delivery marker: always injected so Claude knows the per-thread
+    # marker name, even when it discovers the mechanism from session history
+    # or CLAUDE.md rather than from an explicit "send me the file" request.
+    from .event_processor import _attachment_marker_name
 
-        wd = config.runner.working_dir or "your current working directory"
-        marker = _attachment_marker_name(config.thread.id)
-        parts.append(
-            "## File Delivery\n"
-            "The user wants you to send specific files to Discord.\n"
-            "After creating the file(s) to deliver, use your Bash tool to append "
-            "each file's ABSOLUTE path (one path per line, UTF-8) to:\n"
-            f"  {wd}/{marker}\n"
-            f"Example: `echo /absolute/path/to/file >> {wd}/{marker}`\n"
-            "The bot will attach those files to Discord when this session ends.\n"
-            "Only include files the user explicitly asked to receive — "
-            "not everything you create."
-        )
+    wd = config.runner.working_dir or "your current working directory"
+    marker = _attachment_marker_name(config.thread.id)
+    parts.append(
+        "## File Delivery\n"
+        "When you need to send files to Discord, use your Bash tool to append "
+        "each file's ABSOLUTE path (one path per line, UTF-8) to:\n"
+        f"  {wd}/{marker}\n"
+        f"Example: `echo /absolute/path/to/file >> {wd}/{marker}`\n"
+        "The bot will attach those files when this session ends.\n"
+        "Only include files the user explicitly asked to receive."
+    )
 
     # Post-compact guardrail: prevent auto-execution of "pending tasks" from summary.
     if config.post_compact_rerun:
