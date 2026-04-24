@@ -238,7 +238,7 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
 
     try:
         async for event in runner.run(config.prompt, session_id=config.session_id):
-            if processor.should_drain:
+            if processor.should_drain and not event.is_complete:
                 continue
             await processor.process(event)
     except Exception as exc:

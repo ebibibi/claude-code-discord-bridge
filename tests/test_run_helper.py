@@ -10,6 +10,8 @@ import discord
 import pytest
 
 from claude_discord.claude.types import (
+    AskOption,
+    AskQuestion,
     ImageData,
     MessageType,
     StreamEvent,
@@ -1603,3 +1605,112 @@ class TestGlobalSessionSemaphore:
         result = await asyncio.wait_for(run_claude_with_config(config), timeout=5.0)
         assert result == "sess-dl"
         assert call_count == 2
+
+
+class TestDrainAllowsResultEvent:
+    """RESULT events must be processed even when should_drain is True.
+
+    Regression test for #366: should_drain skips ALL events including RESULT,
+    which prevents _on_complete() from firing and silently drops voice response
+    callbacks and other completion hooks.
+    """
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        msg = MagicMock(spec=discord.Message)
+        t.send = AsyncMock(return_value=msg)
+        msg.edit = AsyncMock()
+        t.id = 36600
+        return t
+
+    def _make_async_gen(self, events: list[StreamEvent]):
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return gen
+
+    @pytest.mark.asyncio
+    async def test_result_processed_during_ask_drain(self, thread: MagicMock) -> None:
+        """When AskUserQuestion triggers drain, RESULT must still reach _on_complete."""
+        from unittest.mock import patch
+
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.images = None
+        runner.interrupt = AsyncMock()
+        runner.model = "test-model"
+
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-366"),
+            StreamEvent(
+                message_type=MessageType.ASSISTANT,
+                ask_questions=[AskQuestion(question="Pick one", options=[AskOption(label="A")])],
+            ),
+            StreamEvent(message_type=MessageType.ASSISTANT, text="drained text"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-366",
+                cost_usd=0.01,
+                duration_ms=100,
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+        runner.clone = MagicMock(return_value=runner)
+
+        config = RunConfig(thread=thread, runner=runner, prompt="test", session_id="sess-366")
+        with patch(
+            "claude_discord.cogs._run_helper.collect_ask_answers",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await run_claude_with_config(config)
+
+        send_calls = [str(c) for c in thread.send.call_args_list]
+        assert any("embed" in c for c in send_calls), (
+            "RESULT event must reach _on_complete even during drain"
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_result_events_still_drained(self, thread: MagicMock) -> None:
+        """Non-RESULT events after should_drain must still be skipped."""
+        from unittest.mock import patch
+
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.images = None
+        runner.interrupt = AsyncMock()
+        runner.model = "test-model"
+
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="sess-366b"),
+            StreamEvent(
+                message_type=MessageType.ASSISTANT,
+                ask_questions=[AskQuestion(question="Pick one", options=[AskOption(label="A")])],
+            ),
+            StreamEvent(message_type=MessageType.ASSISTANT, text="should be drained"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                session_id="sess-366b",
+                cost_usd=0.01,
+                duration_ms=100,
+            ),
+        ]
+        runner.run = self._make_async_gen(events)
+        runner.clone = MagicMock(return_value=runner)
+
+        config = RunConfig(thread=thread, runner=runner, prompt="test", session_id="sess-366b")
+        with patch(
+            "claude_discord.cogs._run_helper.collect_ask_answers",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await run_claude_with_config(config)
+
+        all_text = " ".join(str(c) for c in thread.send.call_args_list)
+        assert "should be drained" not in all_text, (
+            "Non-RESULT text must be drained when should_drain is True"
+        )
