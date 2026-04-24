@@ -795,7 +795,10 @@ class TestTodoWrite:
 
 
 class TestCcdbAttachmentsDelivery:
-    """_on_complete() reads .ccdb-attachments and sends listed files."""
+    """_on_complete() reads .ccdb-attachments-{thread_id} and sends listed files."""
+
+    def _marker_name(self, thread: MagicMock) -> str:
+        return f".ccdb-attachments-{thread.id}"
 
     @pytest.mark.asyncio
     async def test_sends_files_listed_in_marker(
@@ -806,7 +809,7 @@ class TestCcdbAttachmentsDelivery:
         runner.working_dir = str(tmp_path)
         f = tmp_path / "out.py"
         f.write_text("result = 42", encoding="utf-8")
-        (tmp_path / ".ccdb-attachments").write_text(str(f) + "\n", encoding="utf-8")
+        (tmp_path / self._marker_name(thread)).write_text(str(f) + "\n", encoding="utf-8")
 
         config = _make_config(thread, runner)
         p = EventProcessor(config)
@@ -828,7 +831,7 @@ class TestCcdbAttachmentsDelivery:
         runner.working_dir = str(tmp_path)
         f = tmp_path / "out.py"
         f.write_text("x = 1", encoding="utf-8")
-        marker = tmp_path / ".ccdb-attachments"
+        marker = tmp_path / self._marker_name(thread)
         marker.write_text(str(f) + "\n", encoding="utf-8")
 
         config = _make_config(thread, runner)
@@ -841,7 +844,7 @@ class TestCcdbAttachmentsDelivery:
 
     @pytest.mark.asyncio
     async def test_no_marker_no_send(self, thread: MagicMock, runner: MagicMock, tmp_path) -> None:
-        """When .ccdb-attachments is absent nothing is sent."""
+        """When the marker is absent nothing is sent."""
         from unittest.mock import patch
 
         runner.working_dir = str(tmp_path)
@@ -864,7 +867,7 @@ class TestCcdbAttachmentsDelivery:
         runner.working_dir = str(tmp_path)
         f = tmp_path / "out.py"
         f.write_text("x = 1", encoding="utf-8")
-        (tmp_path / ".ccdb-attachments").write_text(str(f) + "\n", encoding="utf-8")
+        (tmp_path / self._marker_name(thread)).write_text(str(f) + "\n", encoding="utf-8")
 
         config = _make_config(thread, runner)
         p = EventProcessor(config)
@@ -881,14 +884,14 @@ class TestCcdbAttachmentsDelivery:
     async def test_logging_when_marker_found(
         self, thread: MagicMock, runner: MagicMock, tmp_path, caplog
     ) -> None:
-        """INFO log is emitted when .ccdb-attachments is found and processed."""
+        """INFO log is emitted when marker is found and processed."""
         import logging
         from unittest.mock import patch
 
         runner.working_dir = str(tmp_path)
         f = tmp_path / "out.py"
         f.write_text("x = 1", encoding="utf-8")
-        (tmp_path / ".ccdb-attachments").write_text(str(f) + "\n", encoding="utf-8")
+        (tmp_path / self._marker_name(thread)).write_text(str(f) + "\n", encoding="utf-8")
 
         config = _make_config(thread, runner)
         p = EventProcessor(config)
@@ -905,7 +908,7 @@ class TestCcdbAttachmentsDelivery:
     async def test_logging_when_marker_absent(
         self, thread: MagicMock, runner: MagicMock, tmp_path, caplog
     ) -> None:
-        """DEBUG log is emitted when .ccdb-attachments is absent."""
+        """DEBUG log is emitted when marker is absent."""
         import logging
         from unittest.mock import patch
 
@@ -925,7 +928,7 @@ class TestCcdbAttachmentsDelivery:
     async def test_relative_path_resolved_against_working_dir(
         self, thread: MagicMock, runner: MagicMock, tmp_path
     ) -> None:
-        """Relative paths in .ccdb-attachments are resolved against working_dir.
+        """Relative paths are resolved against working_dir.
 
         Claude may write a bare filename instead of an absolute path.
         The bot must resolve it against the session working directory so the
@@ -936,8 +939,7 @@ class TestCcdbAttachmentsDelivery:
         runner.working_dir = str(tmp_path)
         f = tmp_path / "out.py"
         f.write_text("result = 42", encoding="utf-8")
-        # Write only the bare filename (relative path) — no directory prefix
-        (tmp_path / ".ccdb-attachments").write_text("out.py\n", encoding="utf-8")
+        (tmp_path / self._marker_name(thread)).write_text("out.py\n", encoding="utf-8")
 
         config = _make_config(thread, runner)
         p = EventProcessor(config)
@@ -948,8 +950,59 @@ class TestCcdbAttachmentsDelivery:
         ) as mock_send:
             await p.process(_make_result_event(session_id="s1"))
 
-        # "out.py" must be resolved to tmp_path / "out.py"
         mock_send.assert_called_once_with(thread, [str(f)], str(tmp_path))
+
+
+class TestAttachmentThreadIsolation:
+    """Marker file must be per-thread to prevent cross-contamination."""
+
+    @pytest.mark.asyncio
+    async def test_marker_uses_thread_id_in_filename(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        """The marker file must include the thread ID to isolate concurrent sessions."""
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        f = tmp_path / "out.py"
+        f.write_text("result = 42", encoding="utf-8")
+        # Write to the thread-specific marker (thread.id = 12345 from conftest)
+        (tmp_path / f".ccdb-attachments-{thread.id}").write_text(str(f) + "\n", encoding="utf-8")
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with patch(
+            "claude_discord.cogs.event_processor.send_files",
+            new_callable=AsyncMock,
+        ) as mock_send:
+            await p.process(_make_result_event(session_id="s1"))
+
+        mock_send.assert_called_once_with(thread, [str(f)], str(tmp_path))
+
+    @pytest.mark.asyncio
+    async def test_other_thread_marker_not_read(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        """A marker for thread 99999 must NOT be read by thread 12345."""
+        from unittest.mock import patch
+
+        runner.working_dir = str(tmp_path)
+        f = tmp_path / "secret.py"
+        f.write_text("secret = True", encoding="utf-8")
+        # Write to a DIFFERENT thread's marker
+        (tmp_path / ".ccdb-attachments-99999").write_text(str(f) + "\n", encoding="utf-8")
+
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with patch(
+            "claude_discord.cogs.event_processor.send_files",
+            new_callable=AsyncMock,
+        ) as mock_send:
+            await p.process(_make_result_event(session_id="s1"))
+
+        mock_send.assert_not_called()
 
 
 class TestToolUseCount:
