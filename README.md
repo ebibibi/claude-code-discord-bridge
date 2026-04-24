@@ -525,7 +525,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CLAUDE_PERMISSION_MODE` | Permission mode for CLI | `acceptEdits` |
 | `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | Skip all permission checks (use with caution) | `false` |
 | `CLAUDE_WORKING_DIR` | Working directory for Claude | current dir |
-| `MAX_CONCURRENT_SESSIONS` | Max parallel sessions | `3` |
+| `MAX_CONCURRENT_SESSIONS` | Max parallel Claude CLI sessions across all code paths (chat, skills, scheduler, webhooks) | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Session inactivity timeout | `300` |
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
 | `COORDINATION_CHANNEL_ID` | Channel ID used as default fallback for AI Lounge channel | (optional) |

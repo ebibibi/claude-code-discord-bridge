@@ -312,7 +312,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLAUDE_PERMISSION_MODE` | CLI 权限模式 | `acceptEdits` |
 | `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | 跳过所有权限检查（谨慎使用） | `false` |
 | `CLAUDE_WORKING_DIR` | Claude 的工作目录 | 当前目录 |
-| `MAX_CONCURRENT_SESSIONS` | 最大并发会话数 | `3` |
+| `MAX_CONCURRENT_SESSIONS` | 最大并发 Claude CLI 会话数（适用于所有路径：聊天、技能、调度器、Webhook） | `3` |
 | `SESSION_TIMEOUT_SECONDS` | 会话非活动超时 | `300` |
 | `DISCORD_OWNER_ID` | Claude 需要输入时 @提及的用户 ID | （可选） |
 | `COORDINATION_CHANNEL_ID` | AI Lounge 频道的默认回退频道 ID | （可选） |
