@@ -189,7 +189,8 @@ claude-code-discord-bridge is a thin UI layer that bridges Discord messages to t
 
 - Each Claude CLI invocation gets its own `ClaudeRunner` instance via `clone()`.
 - The `_active_runners` dict tracks runners by thread_id for kill-on-demand (`/clear`).
-- The semaphore prevents resource exhaustion — excess requests queue with a "waiting" message.
+- The semaphore is held in `_run_helper.run_claude_with_config()` and applies to **all** code paths — chat, skills, scheduler, and webhooks. It is released in the `finally` block before compact/ask reruns to prevent deadlocks on recursive calls.
+- Excess requests queue with a "waiting" message to prevent resource exhaustion.
 - All I/O is async (asyncio subprocess, aiosqlite), so the event loop is never blocked.
 
 ## Extension Points

@@ -526,7 +526,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CLAUDE_PERMISSION_MODE` | CLI のパーミッションモード | `auto` |
 | `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | 全パーミッションチェックをスキップ（注意して使用） | `false` |
 | `CLAUDE_WORKING_DIR` | Claude の作業ディレクトリ | カレントディレクトリ |
-| `MAX_CONCURRENT_SESSIONS` | 最大並行セッション数 | `3` |
+| `MAX_CONCURRENT_SESSIONS` | 最大並行 Claude CLI セッション数（チャット・スキル・スケジューラ・Webhook の全パスに適用） | `3` |
 | `SESSION_TIMEOUT_SECONDS` | セッション非アクティブタイムアウト | `300` |
 | `DISCORD_OWNER_ID` | Claude が入力待ちのとき @mention する Discord ユーザー ID | （オプション） |
 | `COORDINATION_CHANNEL_ID` | AI Lounge チャンネルのデフォルトフォールバック用チャンネル ID | （オプション） |

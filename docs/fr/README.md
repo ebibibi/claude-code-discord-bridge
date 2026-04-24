@@ -295,7 +295,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `CLAUDE_PERMISSION_MODE` | Mode de permission du CLI | `acceptEdits` |
 | `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | Ignorer toutes les vérifications de permissions (à utiliser avec précaution) | `false` |
 | `CLAUDE_WORKING_DIR` | Répertoire de travail pour Claude | répertoire courant |
-| `MAX_CONCURRENT_SESSIONS` | Nombre maximum de sessions parallèles | `3` |
+| `MAX_CONCURRENT_SESSIONS` | Nombre maximum de sessions Claude CLI parallèles (s'applique à tous les chemins : chat, skills, scheduler, webhooks) | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Timeout d'inactivité de session | `300` |
 | `DISCORD_OWNER_ID` | ID utilisateur à @mentionner quand Claude a besoin d'une saisie | (optionnel) |
 | `COORDINATION_CHANNEL_ID` | ID du canal utilisé comme valeur de repli par défaut pour le canal AI Lounge | (optionnel) |
