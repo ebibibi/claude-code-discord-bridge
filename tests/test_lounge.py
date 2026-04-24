@@ -440,6 +440,7 @@ class TestLoungeApiEndpoints:
 class TestRunHelperLoungeInjection:
     """Verify that lounge context is injected as --append-system-prompt when lounge_repo is set."""
 
+    @pytest.mark.real_system_context
     async def test_lounge_context_injected_as_system_prompt(self) -> None:
         """When lounge_repo has messages, they appear in --append-system-prompt (not user prompt).
 
@@ -497,8 +498,9 @@ class TestRunHelperLoungeInjection:
         assert "BotX" in system_prompt
         assert "Busy here!" in system_prompt
 
+    @pytest.mark.real_system_context
     async def test_no_lounge_context_when_repo_is_none(self) -> None:
-        """When lounge_repo is None, the prompt is unchanged and runner is not cloned."""
+        """When lounge_repo is None, no lounge messages appear in --append-system-prompt."""
         from claude_discord.cogs._run_helper import run_claude_in_thread
 
         captured_prompt: list[str] = []
@@ -519,6 +521,7 @@ class TestRunHelperLoungeInjection:
         runner = MagicMock()
         runner.working_dir = None
         runner.run = fake_run
+        runner.clone = MagicMock(return_value=runner)
 
         user_prompt = "Plain prompt without lounge"
         await run_claude_in_thread(
@@ -531,6 +534,8 @@ class TestRunHelperLoungeInjection:
         )
 
         assert captured_prompt
-        # Without lounge_repo, prompt is as-is and runner is used directly.
         assert captured_prompt[0] == user_prompt
-        runner.clone.assert_not_called()
+        # clone is called (File Delivery always injected), but no lounge context
+        if runner.clone.called:
+            system_prompt = runner.clone.call_args[1].get("append_system_prompt", "")
+            assert "AI Lounge" not in system_prompt

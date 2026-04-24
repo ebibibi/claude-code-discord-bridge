@@ -48,6 +48,8 @@ jobs:
 
       - name: Test
         run: uv run pytest tests/ -v --cov=claude_discord --cov-branch --cov-report=term-missing --cov-fail-under=75
+        env:
+          HOME: ${{ runner.temp }}/fakehome
 
   notify-failure:
     needs: [test]
