@@ -169,7 +169,7 @@ def _parse_session_file(path: Path, *, max_lines: int = 20) -> CliSession | None
                 if data.get("isMeta"):
                     continue
 
-                content = _extract_content_text(data.get("message", {}).get("content", ""))
+                content = _extract_content_text(data.get("message", {}).get("content", "")).strip()
                 if not content:
                     continue
 
@@ -265,7 +265,7 @@ def extract_recent_messages(
                 if data.get("isMeta"):
                     continue
 
-                content = _extract_content_text(data.get("message", {}).get("content", ""))
+                content = _extract_content_text(data.get("message", {}).get("content", "")).strip()
                 if not content:
                     continue
 

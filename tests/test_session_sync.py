@@ -210,6 +210,34 @@ class TestScanCliSessions:
         sessions = scan_cli_sessions(str(tmp_path))
         assert sessions[0].summary == "Actual user prompt"
 
+    def test_scan_strips_whitespace_only_content(self, tmp_path):
+        """Whitespace-only content should be treated as empty and skipped."""
+        session_id = "aaa11111-1234-5678-9abc-def012345678"
+        _write_session_jsonl(
+            tmp_path / f"{session_id}.jsonl",
+            session_id,
+            [
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": session_id,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:00.000Z",
+                    "message": {"role": "user", "content": "   \n\t  "},
+                },
+                {
+                    "type": "user",
+                    "isMeta": False,
+                    "sessionId": session_id,
+                    "cwd": "/home",
+                    "timestamp": "2026-02-19T10:00:01.000Z",
+                    "message": {"role": "user", "content": "Real prompt"},
+                },
+            ],
+        )
+        sessions = scan_cli_sessions(str(tmp_path))
+        assert sessions[0].summary == "Real prompt"
+
     def test_scan_truncates_long_summary(self, tmp_path):
         session_id = "222bbbbb-1234-5678-9abc-def012345678"
         long_text = "x" * 200
