@@ -17,6 +17,9 @@ build/
 # Database
 data/
 
+# User-specific config
+context_links.json
+
 # IDE
 .vscode/
 .idea/
