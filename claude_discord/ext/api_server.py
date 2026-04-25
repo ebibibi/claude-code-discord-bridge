@@ -100,6 +100,7 @@ class ApiServer:
 
     def _setup_routes(self) -> None:
         self.app.router.add_get("/api/health", self.health)
+        self.app.router.add_get("/obsidian", self.open_obsidian)
         self.app.router.add_post("/api/notify", self.notify)
         self.app.router.add_post("/api/schedule", self.schedule)
         self.app.router.add_get("/api/scheduled", self.list_scheduled)
@@ -124,7 +125,7 @@ class ApiServer:
         handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
     ) -> web.StreamResponse:
         """Bearer token authentication middleware."""
-        if request.path == "/api/health":
+        if request.path == "/api/health" or request.path == "/obsidian":
             return await handler(request)
 
         auth_header = request.headers.get("Authorization", "")
@@ -158,6 +159,23 @@ class ApiServer:
                 "timestamp": datetime.now().isoformat(),
             }
         )
+
+    async def open_obsidian(self, request: web.Request) -> web.Response:
+        """GET /open/obsidian — redirect to ``obsidian://open`` URI.
+
+        No authentication required.  Used by Discord link buttons to open
+        Obsidian notes on the user's machine.
+        """
+        from urllib.parse import quote
+
+        vault = request.rel_url.query.get("vault", "")
+        file_path = request.rel_url.query.get("file", "")
+        if not vault or not file_path:
+            return web.json_response(
+                {"error": "vault and file query parameters are required"}, status=400
+            )
+        target = f"obsidian://open?vault={quote(vault, safe='')}&file={quote(file_path, safe='')}"
+        raise web.HTTPFound(location=target)
 
     async def notify(self, request: web.Request) -> web.Response:
         """POST /api/notify — send an immediate notification."""

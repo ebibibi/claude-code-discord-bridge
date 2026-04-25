@@ -13,6 +13,8 @@ import pytest
 from claude_discord.cogs.context_links import (
     ContextLinksCog,
     build_context_embed,
+    build_link_view,
+    build_obsidian_redirect_url,
     build_obsidian_uri,
     load_config,
     match_project,
@@ -41,6 +43,31 @@ class TestBuildObsidianUri:
     def test_path_with_spaces(self) -> None:
         uri = build_obsidian_uri("vault", "My Notes/project a/status.md")
         assert "My%20Notes" in uri or "My+Notes" in uri
+
+
+# ---------------------------------------------------------------------------
+# Pure function tests: build_obsidian_redirect_url
+# ---------------------------------------------------------------------------
+
+
+class TestBuildObsidianRedirectUrl:
+    def test_basic(self) -> None:
+        url = build_obsidian_redirect_url(
+            "https://example.com", "MyVault", "Projects/ccdb/status.md"
+        )
+        assert url.startswith("https://example.com/open/obsidian?")
+        assert "vault=MyVault" in url
+        assert "file=Projects%2Fccdb%2Fstatus.md" in url
+
+    def test_strips_trailing_slash(self) -> None:
+        url = build_obsidian_redirect_url("https://example.com/", "vault", "path.md")
+        assert "example.com/open/obsidian?" in url
+        assert "//open" not in url
+
+    def test_unicode_path(self) -> None:
+        url = build_obsidian_redirect_url("https://example.com", "obsidian", "個人開発/status.md")
+        assert url.startswith("https://example.com/open/obsidian?")
+        assert "vault=obsidian" in url
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +177,20 @@ class TestMatchProject:
         assert result is not None
         assert len(result) == 2  # ccdb project has 2 links
 
+    def test_with_public_api_url(self, sample_config: dict[str, Any]) -> None:
+        result = match_project("ccdb", sample_config, public_api_url="https://example.com")
+        assert result is not None
+        obsidian_link = next(lnk for lnk in result if "obsidian" in lnk)
+        assert obsidian_link["_resolved"].startswith("https://example.com/open/obsidian?")
+
+    def test_without_public_api_url_uses_obsidian_scheme(
+        self, sample_config: dict[str, Any]
+    ) -> None:
+        result = match_project("ccdb", sample_config)
+        assert result is not None
+        obsidian_link = next(lnk for lnk in result if "obsidian" in lnk)
+        assert obsidian_link["_resolved"].startswith("obsidian://open?")
+
 
 # ---------------------------------------------------------------------------
 # Pure function tests: build_context_embed
@@ -157,7 +198,31 @@ class TestMatchProject:
 
 
 class TestBuildContextEmbed:
-    def test_https_links_are_markdown(self) -> None:
+    def test_obsidian_links_as_text_when_no_redirect(self) -> None:
+        links = [
+            {
+                "label": "Status",
+                "obsidian": "Projects/ccdb/status.md",
+                "_resolved": "obsidian://open?vault=v&file=Projects%2Fccdb%2Fstatus.md",
+            },
+        ]
+        embed = build_context_embed(links)
+        desc = embed.description or ""
+        assert "Status" in desc
+        assert "`Projects/ccdb/status.md`" in desc
+
+    def test_obsidian_excluded_when_redirect_url(self) -> None:
+        links = [
+            {
+                "label": "Status",
+                "obsidian": "path.md",
+                "_resolved": "https://example.com/open/obsidian?vault=v&file=path.md",
+            },
+        ]
+        embed = build_context_embed(links)
+        assert embed.description is None or embed.description == ""
+
+    def test_https_links_excluded_from_embed(self) -> None:
         links = [
             {
                 "label": "GitHub",
@@ -166,23 +231,9 @@ class TestBuildContextEmbed:
             },
         ]
         embed = build_context_embed(links)
-        assert isinstance(embed, discord.Embed)
-        assert "GitHub" in (embed.description or "")
-        assert "https://github.com/example/ccdb" in (embed.description or "")
+        assert embed.description is None or embed.description == ""
 
-    def test_obsidian_links_as_code(self) -> None:
-        links = [
-            {
-                "label": "Status",
-                "obsidian": "path.md",
-                "_resolved": "obsidian://open?vault=v&file=path.md",
-            },
-        ]
-        embed = build_context_embed(links)
-        desc = embed.description or ""
-        assert "`obsidian://open" in desc
-
-    def test_mixed_links(self) -> None:
+    def test_mixed_links_only_non_https_in_embed(self) -> None:
         links = [
             {
                 "label": "Status",
@@ -198,14 +249,138 @@ class TestBuildContextEmbed:
         embed = build_context_embed(links)
         desc = embed.description or ""
         assert "Status" in desc
-        assert "GitHub" in desc
+        assert "GitHub" not in desc
 
     def test_embed_title(self) -> None:
         links = [
-            {"label": "Test", "url": "https://example.com", "_resolved": "https://example.com"},
+            {
+                "label": "Status",
+                "obsidian": "path.md",
+                "_resolved": "obsidian://open?vault=v&file=path.md",
+            },
         ]
         embed = build_context_embed(links)
         assert embed.title is not None
+
+    def test_all_links_are_https_empty_embed(self) -> None:
+        links = [
+            {"label": "Test", "url": "https://example.com", "_resolved": "https://example.com"},
+            {
+                "label": "Status",
+                "obsidian": "path.md",
+                "_resolved": "https://redirect.com/open/obsidian?vault=v&file=path.md",
+            },
+        ]
+        embed = build_context_embed(links)
+        assert embed.description is None or embed.description == ""
+
+
+# ---------------------------------------------------------------------------
+# Pure function tests: build_link_view
+# ---------------------------------------------------------------------------
+
+
+class TestBuildLinkView:
+    @pytest.mark.asyncio()
+    async def test_https_links_become_buttons(self) -> None:
+        links = [
+            {
+                "label": "GitHub",
+                "url": "https://github.com/example/ccdb",
+                "_resolved": "https://github.com/example/ccdb",
+            },
+        ]
+        view = build_link_view(links)
+        assert view is not None
+        buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
+        assert len(buttons) == 1
+        assert buttons[0].url == "https://github.com/example/ccdb"
+        assert buttons[0].label == "GitHub"
+
+    @pytest.mark.asyncio()
+    async def test_obsidian_links_excluded(self) -> None:
+        links = [
+            {
+                "label": "Status",
+                "obsidian": "path.md",
+                "_resolved": "obsidian://open?vault=v&file=path.md",
+            },
+        ]
+        view = build_link_view(links)
+        assert view is None
+
+    @pytest.mark.asyncio()
+    async def test_mixed_links_only_https_buttons(self) -> None:
+        links = [
+            {
+                "label": "Status",
+                "obsidian": "path.md",
+                "_resolved": "obsidian://open?vault=v&file=path.md",
+            },
+            {
+                "label": "GitHub",
+                "url": "https://github.com/test",
+                "_resolved": "https://github.com/test",
+            },
+        ]
+        view = build_link_view(links)
+        assert view is not None
+        buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
+        assert len(buttons) == 1
+        assert buttons[0].label == "GitHub"
+
+    @pytest.mark.asyncio()
+    async def test_multiple_https_buttons(self) -> None:
+        links = [
+            {
+                "label": "GitHub",
+                "url": "https://github.com/test",
+                "_resolved": "https://github.com/test",
+            },
+            {
+                "label": "Docs",
+                "url": "https://docs.example.com",
+                "_resolved": "https://docs.example.com",
+            },
+        ]
+        view = build_link_view(links)
+        assert view is not None
+        buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
+        assert len(buttons) == 2
+
+    @pytest.mark.asyncio()
+    async def test_obsidian_redirect_becomes_button(self) -> None:
+        links = [
+            {
+                "label": "Status",
+                "obsidian": "path.md",
+                "_resolved": "https://example.com/open/obsidian?vault=v&file=path.md",
+            },
+        ]
+        view = build_link_view(links)
+        assert view is not None
+        buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
+        assert len(buttons) == 1
+        assert buttons[0].label == "Status"
+
+    @pytest.mark.asyncio()
+    async def test_all_links_as_buttons_with_redirect(self) -> None:
+        links = [
+            {
+                "label": "Status",
+                "obsidian": "path.md",
+                "_resolved": "https://example.com/open/obsidian?vault=v&file=path.md",
+            },
+            {
+                "label": "GitHub",
+                "url": "https://github.com/test",
+                "_resolved": "https://github.com/test",
+            },
+        ]
+        view = build_link_view(links)
+        assert view is not None
+        buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
+        assert len(buttons) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +436,7 @@ class TestContextLinksCog:
         thread.send.assert_called_once()
         call_kwargs = thread.send.call_args
         assert "embed" in call_kwargs.kwargs
+        assert "view" in call_kwargs.kwargs
 
     @pytest.mark.asyncio()
     async def test_on_thread_create_no_match(self, bot: MagicMock, config_file: str) -> None:
