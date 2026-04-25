@@ -1,0 +1,35 @@
+{
+  "obsidian_vault": "MyVault",
+  "projects": [
+    {
+      "match": ["my-project", "project alpha"],
+      "links": [
+        {
+          "label": "📓 Project Notes",
+          "obsidian": "Projects/my-project/status.md"
+        },
+        {
+          "label": "🔗 GitHub",
+          "url": "https://github.com/example/my-project"
+        }
+      ]
+    },
+    {
+      "match": ["website", "landing page"],
+      "links": [
+        {
+          "label": "📓 Design Doc",
+          "obsidian": "Projects/website/design.md"
+        },
+        {
+          "label": "🌐 Staging",
+          "url": "https://staging.example.com"
+        },
+        {
+          "label": "📊 Analytics",
+          "url": "https://analytics.example.com/dashboard"
+        }
+      ]
+    }
+  ]
+}

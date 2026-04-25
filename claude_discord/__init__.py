@@ -14,6 +14,7 @@ from .claude.types import MessageType, StreamEvent, ToolCategory, ToolUseEvent
 from .cog_loader import load_custom_cogs
 from .cogs.auto_upgrade import AutoUpgradeCog, UpgradeConfig
 from .cogs.claude_chat import ClaudeChatCog
+from .cogs.context_links import ContextLinksCog
 from .cogs.event_processor import EventProcessor
 from .cogs.run_config import RunConfig
 from .cogs.scheduler import SchedulerCog
@@ -41,6 +42,7 @@ __all__ = [
     # Core
     "ClaudeRunner",
     "ClaudeChatCog",
+    "ContextLinksCog",
     "RunConfig",
     "EventProcessor",
     # Concurrency
