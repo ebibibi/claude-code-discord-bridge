@@ -2,6 +2,7 @@
 
 from .auto_upgrade import AutoUpgradeCog
 from .claude_chat import ClaudeChatCog
+from .context_links import ContextLinksCog
 from .event_processor import EventProcessor
 from .run_config import RunConfig
 from .scheduler import SchedulerCog
@@ -12,6 +13,7 @@ from .webhook_trigger import WebhookTriggerCog
 __all__ = [
     "AutoUpgradeCog",
     "ClaudeChatCog",
+    "ContextLinksCog",
     "EventProcessor",
     "RunConfig",
     "SchedulerCog",

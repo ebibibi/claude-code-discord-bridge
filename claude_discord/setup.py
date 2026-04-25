@@ -83,6 +83,7 @@ async def setup_bridge(
     enable_thread_inbox: bool = False,
     auto_rename_threads: bool | None = None,
     monitor_all_channels: bool | None = None,
+    context_links_config: str | None = None,
 ) -> BridgeComponents:
     """Initialize and register all ccdb Cogs in one call.
 
@@ -132,11 +133,16 @@ async def setup_bridge(
                              title derived from the first user message.  Runs as a
                              background task so it never delays the session start.
                              Defaults to THREAD_AUTO_RENAME env var (off by default).
+        context_links_config: Path to a JSON config that maps project keywords to
+                              external resource links (Obsidian notes, GitHub repos,
+                              etc.).  Defaults to CONTEXT_LINKS_CONFIG env var, or
+                              ``context_links.json`` in the working directory.
 
     Returns:
         BridgeComponents with references to initialized repositories.
     """
     from .cogs.claude_chat import ClaudeChatCog
+    from .cogs.context_links import ContextLinksCog
     from .cogs.scheduler import SchedulerCog
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
@@ -300,6 +306,18 @@ async def setup_bridge(
         scheduler_cog = SchedulerCog(bot, runner, repo=task_repo, session_repo=session_repo)
         await bot.add_cog(scheduler_cog)
         logger.info("Registered SchedulerCog")
+
+    # --- ContextLinksCog (optional — CONTEXT_LINKS_CONFIG or context_links.json) ---
+    if context_links_config is None:
+        context_links_config = os.getenv("CONTEXT_LINKS_CONFIG", "context_links.json")
+    context_links_cog = ContextLinksCog(
+        bot,
+        config_path=context_links_config,
+        channel_ids=_all_channel_ids or None,
+    )
+    await bot.add_cog(context_links_cog)
+    if context_links_cog._config is not None:
+        logger.info("Registered ContextLinksCog (config=%s)", context_links_config)
 
     components = BridgeComponents(
         session_repo=session_repo,
