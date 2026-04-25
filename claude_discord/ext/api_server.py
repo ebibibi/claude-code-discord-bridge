@@ -100,7 +100,7 @@ class ApiServer:
 
     def _setup_routes(self) -> None:
         self.app.router.add_get("/api/health", self.health)
-        self.app.router.add_get("/open/obsidian", self.open_obsidian)
+        self.app.router.add_get("/obsidian", self.open_obsidian)
         self.app.router.add_post("/api/notify", self.notify)
         self.app.router.add_post("/api/schedule", self.schedule)
         self.app.router.add_get("/api/scheduled", self.list_scheduled)
@@ -125,7 +125,7 @@ class ApiServer:
         handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
     ) -> web.StreamResponse:
         """Bearer token authentication middleware."""
-        if request.path == "/api/health" or request.path.startswith("/open/"):
+        if request.path == "/api/health" or request.path == "/obsidian":
             return await handler(request)
 
         auth_header = request.headers.get("Authorization", "")
