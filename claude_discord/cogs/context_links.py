@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -30,6 +31,16 @@ COLOR_CONTEXT = 0x95A5A6
 def build_obsidian_uri(vault: str, file_path: str) -> str:
     """Build an ``obsidian://open`` URI from a vault name and file path."""
     return f"obsidian://open?vault={quote(vault, safe='')}&file={quote(file_path, safe='')}"
+
+
+def build_obsidian_redirect_url(base_url: str, vault: str, file_path: str) -> str:
+    """Build an HTTPS redirect URL that 302s to ``obsidian://open``.
+
+    Requires the ccdb API server (or any HTTP server) to serve a redirect
+    at ``/open/obsidian``.
+    """
+    base = base_url.rstrip("/")
+    return f"{base}/open/obsidian?vault={quote(vault, safe='')}&file={quote(file_path, safe='')}"
 
 
 def load_config(path: str) -> dict[str, Any] | None:
@@ -54,12 +65,17 @@ def load_config(path: str) -> dict[str, Any] | None:
 def match_project(
     thread_name: str,
     config: dict[str, Any],
+    *,
+    public_api_url: str | None = None,
 ) -> list[dict[str, str]] | None:
     """Return resolved links for the first project whose keywords match *thread_name*.
 
     Matching is case-insensitive substring search.  Returns ``None`` when no
     project matches.  Each returned link dict includes a ``_resolved`` key with
     the final URL string.
+
+    When *public_api_url* is set, obsidian links resolve to an HTTPS redirect
+    URL (clickable in Discord buttons).  Otherwise they use ``obsidian://``.
     """
     if not thread_name:
         return None
@@ -74,7 +90,12 @@ def match_project(
             for link in project.get("links", []):
                 entry = dict(link)
                 if "obsidian" in link:
-                    entry["_resolved"] = build_obsidian_uri(vault, link["obsidian"])
+                    if public_api_url:
+                        entry["_resolved"] = build_obsidian_redirect_url(
+                            public_api_url, vault, link["obsidian"]
+                        )
+                    else:
+                        entry["_resolved"] = build_obsidian_uri(vault, link["obsidian"])
                 elif "url" in link:
                     entry["_resolved"] = link["url"]
                 else:
@@ -85,18 +106,22 @@ def match_project(
 
 
 def build_context_embed(links: list[dict[str, str]]) -> discord.Embed:
-    """Build a Discord embed with obsidian links as clickable markdown links.
+    """Build a Discord embed for links that cannot be rendered as buttons.
 
-    HTTPS links are excluded from the embed — they go into ``build_link_view``
-    as proper Discord link buttons instead.
+    Links with HTTPS ``_resolved`` URLs are excluded — they go into
+    ``build_link_view`` as proper Discord link buttons instead.  Only
+    non-HTTPS links (e.g. ``obsidian://``) appear here as readable text.
     """
     lines: list[str] = []
     for link in links:
-        if "obsidian" not in link:
+        url = link.get("_resolved", "")
+        if url.startswith(("http://", "https://")):
             continue
         label = link.get("label", "Link")
-        uri = link.get("_resolved", "")
-        lines.append(f"[{label}]({uri})")
+        if "obsidian" in link:
+            lines.append(f"{label} — `{link['obsidian']}`")
+        else:
+            lines.append(f"{label} — `{url}`")
 
     return discord.Embed(
         title="\U0001f4ce Context Links",
@@ -131,10 +156,12 @@ class ContextLinksCog(commands.Cog):
         *,
         config_path: str | None = None,
         channel_ids: set[int] | None = None,
+        public_api_url: str | None = None,
     ) -> None:
         self.bot = bot
         self._channel_ids = channel_ids
         self._config = load_config(config_path or "")
+        self._public_api_url = public_api_url or os.getenv("CCDB_PUBLIC_API_URL")
 
     @commands.Cog.listener()
     async def on_thread_create(self, thread: discord.Thread) -> None:
@@ -150,7 +177,7 @@ class ContextLinksCog(commands.Cog):
         if self._channel_ids is not None and thread.parent_id not in self._channel_ids:
             return
 
-        links = match_project(thread.name, self._config)
+        links = match_project(thread.name, self._config, public_api_url=self._public_api_url)
         if links is None:
             return
 
