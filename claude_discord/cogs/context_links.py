@@ -85,21 +85,41 @@ def match_project(
 
 
 def build_context_embed(links: list[dict[str, str]]) -> discord.Embed:
-    """Build a compact Discord embed listing context links."""
+    """Build a Discord embed with obsidian links as clickable markdown links.
+
+    HTTPS links are excluded from the embed — they go into ``build_link_view``
+    as proper Discord link buttons instead.
+    """
     lines: list[str] = []
     for link in links:
+        if "obsidian" not in link:
+            continue
         label = link.get("label", "Link")
-        url = link.get("_resolved", "")
-        if url.startswith(("http://", "https://")):
-            lines.append(f"{label} — {url}")
-        else:
-            lines.append(f"{label} — `{url}`")
+        uri = link.get("_resolved", "")
+        lines.append(f"[{label}]({uri})")
 
     return discord.Embed(
         title="\U0001f4ce Context Links",
-        description="\n".join(lines),
+        description="\n".join(lines) or None,
         color=COLOR_CONTEXT,
     )
+
+
+def build_link_view(links: list[dict[str, str]]) -> discord.ui.View | None:
+    """Build a ``discord.ui.View`` with link buttons for HTTPS URLs.
+
+    Returns ``None`` when there are no HTTPS links.
+    """
+    view = discord.ui.View()
+    count = 0
+    for link in links:
+        url = link.get("_resolved", "")
+        if not url.startswith(("http://", "https://")):
+            continue
+        label = link.get("label", "Link")
+        view.add_item(discord.ui.Button(style=discord.ButtonStyle.link, label=label, url=url))
+        count += 1
+    return view if count > 0 else None
 
 
 class ContextLinksCog(commands.Cog):
@@ -118,6 +138,13 @@ class ContextLinksCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_thread_create(self, thread: discord.Thread) -> None:
+        logger.debug(
+            "on_thread_create fired: name=%r parent_id=%s channel_ids=%s config=%s",
+            thread.name,
+            thread.parent_id,
+            self._channel_ids,
+            self._config is not None,
+        )
         if self._config is None:
             return
         if self._channel_ids is not None and thread.parent_id not in self._channel_ids:
@@ -127,6 +154,8 @@ class ContextLinksCog(commands.Cog):
         if links is None:
             return
 
+        logger.info("Context links matched for thread %r: %d link(s)", thread.name, len(links))
         embed = build_context_embed(links)
+        view = build_link_view(links)
         with contextlib.suppress(discord.HTTPException):
-            await thread.send(embed=embed)
+            await thread.send(embed=embed, view=view or discord.utils.MISSING)
