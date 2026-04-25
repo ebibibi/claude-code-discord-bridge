@@ -781,8 +781,10 @@ class ClaudeChatCog(commands.Cog):
                 if isinstance(_dashboard, ThreadStatusDashboard):
                     await _dashboard.refresh_inbox(_inbox_repo)
 
-        # Per-thread lock prevents race conditions where two messages both
-        # see _active_runners as empty and spawn duplicate CLI processes.
+        # Per-thread lock guards only the check-and-interrupt critical section,
+        # preventing two messages from both seeing _active_runners as empty and
+        # spawning duplicate CLI processes. The lock is released before _run_claude
+        # so that subsequent messages can reach the interrupt path while a session runs.
         lock = self._thread_locks.setdefault(thread.id, asyncio.Lock())
         async with lock:
             # Interrupt any active session in this thread before starting a new one.
@@ -797,17 +799,17 @@ class ClaudeChatCog(commands.Cog):
                     with contextlib.suppress(Exception):
                         await existing_task
 
-            # Determine chat_only from the parent channel of this thread.
-            chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
-            await self._run_claude(
-                message,
-                thread,
-                prompt,
-                session_id=session_id,
-                images=images,
-                working_dir_override=record.working_dir if record else None,
-                chat_only=chat_only,
-            )
+        # Determine chat_only from the parent channel of this thread.
+        chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
+        await self._run_claude(
+            message,
+            thread,
+            prompt,
+            session_id=session_id,
+            images=images,
+            working_dir_override=record.working_dir if record else None,
+            chat_only=chat_only,
+        )
 
     async def _build_prompt_and_images(
         self, message: discord.Message
@@ -949,6 +951,7 @@ class ClaudeChatCog(commands.Cog):
                     await stop_view.disable()
                 self._active_runners.pop(thread.id, None)
                 self._active_tasks.pop(thread.id, None)
+                self._thread_locks.pop(thread.id, None)
 
                 # Transition to WAITING_INPUT so owner knows a reply is needed
                 if dashboard is not None:
