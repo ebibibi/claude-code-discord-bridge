@@ -205,7 +205,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Built-in help** — `/help` shows all available slash commands and basic usage (ephemeral, only visible to the caller)
 - **Session sync** — Import CLI sessions as Discord threads (`/sync-sessions`); `/sync-settings` to view or change sync preferences (thread style, time window, minimum results)
 - **Session list** — `/sessions` with filtering by origin (Discord / CLI / all) and time window
-- **Session resume** — `/resume` shows a select menu of recent sessions (up to 25) and resumes the selected one in a new thread; works from any channel or thread — always creates a new thread in the configured main channel
+- **Session resume** — `/resume` shows a select menu of recent sessions (up to 25) and resumes the selected one in a new thread; optional `query` parameter for keyword search (matches summary and working directory); optional `filter=orphaned` to show only sessions from deleted threads; works from any channel or thread — always creates a new thread in the configured main channel
 - **Resume info** — `/resume-info` shows the CLI command to continue the current session in a terminal (thread-only)
 - **Clear session** — `/clear` resets the Claude Code session for the current thread, starting fresh without creating a new thread
 - **Startup resume** — Interrupted sessions restart automatically after any bot reboot; `AutoUpgradeCog` (upgrade restarts) and `ClaudeChatCog.cog_unload()` (all other shutdowns) mark them automatically, or use `POST /api/mark-resume` manually
