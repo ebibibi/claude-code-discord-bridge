@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-04-26
+
+### Added
+- **Session search** — `SessionRepository.search()` with keyword search across summary and working_dir, origin filtering, and thread ID include/exclude support
+- **Enhanced `/resume` command** — optional `query` parameter for keyword search and `filter` parameter to show only orphaned (deleted thread) sessions
+- **Working directory tracking** — Discord chat sessions now save `working_dir` to the database (previously only CLI-synced sessions saved this)
+
+### Changed
+- **ResumeSelectView** — shows full `working_dir` path in session descriptions instead of just the last directory component
+
 ## [2.1.24] - 2026-04-02
 
 ### Added
