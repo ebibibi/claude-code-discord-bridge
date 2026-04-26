@@ -169,7 +169,7 @@ Se o bot reiniciar no meio de uma sessão, as sessões do Claude interrompidas s
 ### Gerenciamento de Sessões
 - **Sincronização de sessões** — Importa sessões CLI como threads do Discord (`/sync-sessions`); `/sync-settings` para visualizar ou alterar preferências de sincronização (estilo de thread, janela de tempo, resultados mínimos)
 - **Lista de sessões** — `/sessions` com filtragem por origem (Discord / CLI / todas) e janela de tempo
-- **Retomada de sessão** — `/resume` mostra um menu de seleção com sessões recentes (até 25) e retoma a selecionada em uma nova thread; funciona de qualquer canal ou thread — sempre cria uma nova thread no canal principal configurado
+- **Retomada de sessão** — `/resume` mostra um menu de seleção com sessões recentes (até 25) e retoma a selecionada em uma nova thread; funciona de qualquer canal ou thread — sempre cria uma nova thread no canal principal configurado. O parâmetro opcional `query` pesquisa por palavra-chave no resumo e no diretório de trabalho; `filter: orphaned` mostra apenas sessões cuja thread do Discord foi excluída (útil para reviver trabalhos anteriores)
 - **Informações de retomada** — `/resume-info` mostra o comando CLI para continuar a sessão atual em um terminal (apenas em threads)
 - **Limpar sessão** — `/clear` redefine a sessão do Claude Code para a thread atual, começando do zero sem criar uma nova thread
 - **Retomada ao iniciar** — Sessões interrompidas reiniciam automaticamente após qualquer reinício do bot; `AutoUpgradeCog` (reinícios por atualização) e `ClaudeChatCog.cog_unload()` (todos os outros encerramentos) as marcam automaticamente, ou use `POST /api/mark-resume` manualmente
