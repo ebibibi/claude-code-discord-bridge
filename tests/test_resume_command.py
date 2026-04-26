@@ -16,6 +16,7 @@ def _make_record(
     summary: str | None = "Fix login bug",
     working_dir: str | None = "/home/user/project",
     model: str | None = "sonnet",
+    last_used_at: str = "2026-02-19 11:00:00",
 ) -> SessionRecord:
     return SessionRecord(
         thread_id=thread_id,
@@ -25,7 +26,7 @@ def _make_record(
         origin=origin,
         summary=summary,
         created_at="2026-02-19 10:00:00",
-        last_used_at="2026-02-19 11:00:00",
+        last_used_at=last_used_at,
     )
 
 
@@ -162,3 +163,89 @@ class TestResumeSelectView:
         view = ResumeSelectView(records=records, bot=MagicMock())
         selects = [c for c in view.children if isinstance(c, discord.ui.Select)]
         assert "myproject" in (selects[0].options[0].description or "")
+
+    async def test_description_contains_full_working_dir(self):
+        """ResumeSelectView description shows full working_dir path."""
+        from claude_discord.discord_ui.views import ResumeSelectView
+
+        records = [
+            _make_record(
+                session_id="aaa-111",
+                summary="Task",
+                working_dir="/home/user/myproject",
+            ),
+        ]
+        view = ResumeSelectView(records=records, bot=MagicMock())
+        selects = [c for c in view.children if isinstance(c, discord.ui.Select)]
+        desc = selects[0].options[0].description or ""
+        assert "/home/user/myproject" in desc
+
+    async def test_description_contains_last_used_date(self):
+        """ResumeSelectView description shows last_used_at date."""
+        from claude_discord.discord_ui.views import ResumeSelectView
+
+        records = [
+            _make_record(
+                session_id="aaa-111",
+                summary="Task",
+                last_used_at="2026-04-25 14:30:00",
+            ),
+        ]
+        view = ResumeSelectView(records=records, bot=MagicMock())
+        selects = [c for c in view.children if isinstance(c, discord.ui.Select)]
+        desc = selects[0].options[0].description or ""
+        assert "2026-04-25" in desc
+
+
+class TestResumeCommandWithQuery:
+    """Tests for /resume with query parameter."""
+
+    async def test_resume_with_query_calls_search(self):
+        """When query is provided, /resume uses repo.search() instead of list_all()."""
+        cog = _make_cog()
+        records = [
+            _make_record(thread_id=100, session_id="aaa-111", summary="Fix login bug"),
+        ]
+        cog.repo.search = AsyncMock(return_value=records)
+        interaction = _make_interaction()
+        await cog.resume_session.callback(cog, interaction, query="login")
+        cog.repo.search.assert_called_once()
+        call_kwargs = cog.repo.search.call_args.kwargs
+        assert call_kwargs["query"] == "login"
+
+    async def test_resume_without_query_calls_list_all(self):
+        """When no query is provided, /resume uses list_all() as before."""
+        cog = _make_cog()
+        cog.repo.list_all = AsyncMock(return_value=[])
+        interaction = _make_interaction()
+        await cog.resume_session.callback(cog, interaction)
+        cog.repo.list_all.assert_called_once()
+
+    async def test_resume_query_no_results(self):
+        """When query matches nothing, shows ephemeral followup message."""
+        cog = _make_cog()
+        cog.repo.search = AsyncMock(return_value=[])
+        interaction = _make_interaction()
+        await cog.resume_session.callback(cog, interaction, query="nonexistent")
+        interaction.response.defer.assert_called_once()
+        call_args = interaction.followup.send.call_args
+        assert call_args.kwargs.get("ephemeral") is True
+
+    async def test_resume_with_orphaned_filter(self):
+        """When filter='orphaned', passes exclude_thread_ids of live threads."""
+        cog = _make_cog()
+        records = [_make_record(thread_id=999)]
+        cog.repo.search = AsyncMock(return_value=records)
+
+        # Mock bot.fetch_channel to simulate thread lookup
+        async def fake_fetch(tid):
+            if tid == 100:
+                return MagicMock(spec=discord.Thread)
+            raise discord.NotFound(MagicMock(), "Not found")
+
+        cog.bot.fetch_channel = AsyncMock(side_effect=fake_fetch)
+
+        interaction = _make_interaction()
+        await cog.resume_session.callback(cog, interaction, filter="orphaned")
+        # Should have called search with exclude_thread_ids
+        cog.repo.search.assert_called_once()

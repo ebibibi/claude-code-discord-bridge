@@ -325,8 +325,7 @@ class ResumeSelectView(discord.ui.View):
     def _build_description(record: SessionRecord) -> str | None:
         parts: list[str] = []
         if record.working_dir:
-            dir_short = record.working_dir.rsplit("/", 1)[-1]
-            parts.append(dir_short)
+            parts.append(record.working_dir)
         parts.append(record.last_used_at[:16])
         desc = " | ".join(parts)
         return desc[:100] if desc else None
