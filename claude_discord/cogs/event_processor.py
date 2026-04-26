@@ -262,15 +262,21 @@ class EventProcessor:
 
         self._state.session_id = event.session_id
         if self._config.repo:
+            wd = getattr(self._config.runner, "working_dir", None)
             # For new sessions, save the prompt as the summary so /resume can display it.
             # For resumed sessions (config.session_id is set), pass no summary to keep
             # the existing one via COALESCE in the SQL query.
             if self._config.session_id:
-                await self._config.repo.save(self._config.thread.id, self._state.session_id)
+                await self._config.repo.save(
+                    self._config.thread.id, self._state.session_id, working_dir=wd
+                )
             else:
                 summary = self._config.prompt[:100] if self._config.prompt else None
                 await self._config.repo.save(
-                    self._config.thread.id, self._state.session_id, summary=summary
+                    self._config.thread.id,
+                    self._state.session_id,
+                    working_dir=wd,
+                    summary=summary,
                 )
 
         # Guard: post session_start_embed only once (Claude can emit multiple SYSTEM events).

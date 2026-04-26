@@ -530,22 +530,73 @@ class SessionManageCog(commands.Cog):
         name="resume",
         description="Resume a previous session in a new thread",
     )
-    async def resume_session(self, interaction: discord.Interaction) -> None:
+    @app_commands.describe(
+        query="Search sessions by keyword (matches summary and working directory)",
+        filter="Filter sessions: all (default), orphaned (deleted threads only)",
+    )
+    @app_commands.choices(
+        filter=[
+            app_commands.Choice(name="All sessions", value="all"),
+            app_commands.Choice(name="Orphaned (deleted threads)", value="orphaned"),
+        ]
+    )
+    async def resume_session(
+        self,
+        interaction: discord.Interaction,
+        query: str | None = None,
+        filter: str | None = None,  # noqa: A002
+    ) -> None:
         """Show a select menu of recent sessions to resume."""
-        records = await self.repo.list_all(limit=25)
-        if not records:
-            await interaction.response.send_message(
-                "No sessions found. Start a conversation first!",
+        if query or filter:
+            await interaction.response.defer(ephemeral=True)
+            exclude_ids: list[int] | None = None
+
+            if filter == "orphaned":
+                all_records = await self.repo.list_all(limit=200)
+                live_ids: list[int] = []
+                for rec in all_records:
+                    try:
+                        ch = await self.bot.fetch_channel(rec.thread_id)
+                        if ch is not None:
+                            live_ids.append(rec.thread_id)
+                    except Exception:  # noqa: BLE001
+                        pass
+                exclude_ids = live_ids if live_ids else None
+
+            records = await self.repo.search(
+                query=query or "",
+                limit=25,
+                exclude_thread_ids=exclude_ids,
+            )
+
+            if not records:
+                await interaction.followup.send(
+                    "No sessions found matching your search.",
+                    ephemeral=True,
+                )
+                return
+
+            view = ResumeSelectView(records=records, bot=self.bot)
+            await interaction.followup.send(
+                f"\U0001f504 **Resume** — {len(records)} session(s) found:",
+                view=view,
                 ephemeral=True,
             )
-            return
+        else:
+            records = await self.repo.list_all(limit=25)
+            if not records:
+                await interaction.response.send_message(
+                    "No sessions found. Start a conversation first!",
+                    ephemeral=True,
+                )
+                return
 
-        view = ResumeSelectView(records=records, bot=self.bot)
-        await interaction.response.send_message(
-            "\U0001f504 **Resume** — select a session to continue:",
-            view=view,
-            ephemeral=True,
-        )
+            view = ResumeSelectView(records=records, bot=self.bot)
+            await interaction.response.send_message(
+                "\U0001f504 **Resume** — select a session to continue:",
+                view=view,
+                ephemeral=True,
+            )
 
     @app_commands.command(
         name="resume-info",

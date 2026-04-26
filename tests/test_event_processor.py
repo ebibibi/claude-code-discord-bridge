@@ -111,7 +111,9 @@ class TestOnSystem:
 
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
 
-        repo.save.assert_called_once_with(thread.id, "s1", summary="test prompt")
+        repo.save.assert_called_once_with(
+            thread.id, "s1", working_dir=runner.working_dir, summary="test prompt"
+        )
 
     @pytest.mark.asyncio
     async def test_saves_to_repo_without_summary_for_resumed_session(
@@ -125,7 +127,9 @@ class TestOnSystem:
 
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="existing-sess"))
 
-        repo.save.assert_called_once_with(thread.id, "existing-sess")
+        repo.save.assert_called_once_with(
+            thread.id, "existing-sess", working_dir=runner.working_dir
+        )
 
     @pytest.mark.asyncio
     async def test_summary_truncated_to_100_chars(
@@ -140,7 +144,9 @@ class TestOnSystem:
 
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
 
-        repo.save.assert_called_once_with(thread.id, "s1", summary="x" * 100)
+        repo.save.assert_called_once_with(
+            thread.id, "s1", working_dir=runner.working_dir, summary="x" * 100
+        )
 
     @pytest.mark.asyncio
     async def test_sends_start_embed_for_new_session(

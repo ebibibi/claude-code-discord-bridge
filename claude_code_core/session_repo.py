@@ -119,6 +119,57 @@ class SessionRepository:
             rows = await cursor.fetchall()
             return [SessionRecord(**dict(row)) for row in rows]
 
+    async def search(
+        self,
+        query: str | None = None,
+        *,
+        origin: str | None = None,
+        limit: int = 50,
+        thread_ids: list[int] | None = None,
+        exclude_thread_ids: list[int] | None = None,
+    ) -> list[SessionRecord]:
+        """Search sessions by keyword with optional filters.
+
+        Args:
+            query: Search term matched against summary and working_dir (LIKE).
+                   Empty string or None returns all sessions.
+            origin: Filter by origin ('discord', 'cli'). None returns all.
+            limit: Maximum number of records to return.
+            thread_ids: If set, only return sessions with these thread IDs.
+            exclude_thread_ids: If set, exclude sessions with these thread IDs.
+        """
+        conditions: list[str] = []
+        params: list[object] = []
+
+        if query:
+            conditions.append("(summary LIKE ? OR working_dir LIKE ?)")
+            like = f"%{query}%"
+            params.extend([like, like])
+
+        if origin:
+            conditions.append("origin = ?")
+            params.append(origin)
+
+        if thread_ids is not None:
+            placeholders = ",".join("?" for _ in thread_ids)
+            conditions.append(f"thread_id IN ({placeholders})")
+            params.extend(thread_ids)
+
+        if exclude_thread_ids:
+            placeholders = ",".join("?" for _ in exclude_thread_ids)
+            conditions.append(f"thread_id NOT IN ({placeholders})")
+            params.extend(exclude_thread_ids)
+
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM sessions{where} ORDER BY last_used_at DESC LIMIT ?"  # noqa: S608
+        params.append(limit)
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(sql, params)
+            rows = await cursor.fetchall()
+            return [SessionRecord(**dict(row)) for row in rows]
+
     async def delete(self, thread_id: int) -> bool:
         """Delete a session mapping. Returns True if a row was deleted."""
         async with aiosqlite.connect(self.db_path) as db:
