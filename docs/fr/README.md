@@ -169,7 +169,7 @@ Si le bot redémarre en cours de session, les sessions Claude interrompues repre
 ### Gestion des Sessions
 - **Synchronisation de sessions** — Importe les sessions CLI comme fils Discord (`/sync-sessions`) ; `/sync-settings` pour afficher ou modifier les préférences de synchronisation (style de fil, fenêtre temporelle, résultats minimum)
 - **Liste des sessions** — `/sessions` avec filtrage par origine (Discord / CLI / toutes) et fenêtre temporelle
-- **Reprise de session** — `/resume` affiche un menu de sélection des sessions récentes (jusqu'à 25) et reprend celle sélectionnée dans un nouveau fil ; fonctionne depuis n'importe quel canal ou fil — crée toujours un nouveau fil dans le canal principal configuré
+- **Reprise de session** — `/resume` affiche un menu de sélection des sessions récentes (jusqu'à 25) et reprend celle sélectionnée dans un nouveau fil ; paramètre optionnel `query` pour la recherche par mot-clé (correspond au résumé et au répertoire de travail), `filter=orphaned` pour afficher uniquement les sessions des fils supprimés ; fonctionne depuis n'importe quel canal ou fil — crée toujours un nouveau fil dans le canal principal configuré
 - **Informations de reprise** — `/resume-info` affiche la commande CLI pour continuer la session actuelle dans un terminal (fils uniquement)
 - **Effacer la session** — `/clear` réinitialise la session Claude Code pour le fil actuel, repartant de zéro sans créer un nouveau fil
 - **Reprise au démarrage** — Les sessions interrompues redémarrent automatiquement après tout redémarrage du bot ; `AutoUpgradeCog` (redémarrages par mise à jour) et `ClaudeChatCog.cog_unload()` (tous les autres arrêts) les marquent automatiquement, ou utilisez `POST /api/mark-resume` manuellement

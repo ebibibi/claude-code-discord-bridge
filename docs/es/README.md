@@ -169,7 +169,7 @@ Si el bot se reinicia a mitad de sesión, las sesiones de Claude interrumpidas s
 ### Gestión de Sesiones
 - **Sincronización de sesiones** — Importa sesiones CLI como hilos de Discord (`/sync-sessions`); `/sync-settings` para ver o cambiar preferencias de sincronización (estilo de hilo, ventana de tiempo, resultados mínimos)
 - **Lista de sesiones** — `/sessions` con filtrado por origen (Discord / CLI / todas) y ventana de tiempo
-- **Reanudación de sesión** — `/resume` muestra un menú de selección con sesiones recientes (hasta 25) y reanuda la seleccionada en un nuevo hilo; funciona desde cualquier canal o hilo — siempre crea un nuevo hilo en el canal principal configurado
+- **Reanudación de sesión** — `/resume` muestra un menú de selección con sesiones recientes (hasta 25) y reanuda la seleccionada en un nuevo hilo; parámetro opcional `query` para búsqueda por palabras clave (coincide con resumen y directorio de trabajo), `filter=orphaned` para mostrar solo sesiones de hilos eliminados; funciona desde cualquier canal o hilo — siempre crea un nuevo hilo en el canal principal configurado
 - **Información de reanudación** — `/resume-info` muestra el comando CLI para continuar la sesión actual en un terminal (solo en hilos)
 - **Limpiar sesión** — `/clear` reinicia la sesión de Claude Code para el hilo actual, empezando de cero sin crear un nuevo hilo
 - **Reanudación al inicio** — Las sesiones interrumpidas se reinician automáticamente tras cualquier reinicio del bot; `AutoUpgradeCog` (reinicios por actualización) y `ClaudeChatCog.cog_unload()` (todos los demás apagados) las marcan automáticamente, o usa `POST /api/mark-resume` manualmente
