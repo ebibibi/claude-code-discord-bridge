@@ -318,6 +318,46 @@ class TestInterruptOnNewMessage:
         assert isinstance(cog._active_tasks, dict)
         assert len(cog._active_tasks) == 0
 
+    @pytest.mark.asyncio
+    async def test_thread_locks_dict_initialized(self) -> None:
+        """ClaudeChatCog must initialize _thread_locks as an empty dict."""
+        cog = _make_cog()
+        assert hasattr(cog, "_thread_locks")
+        assert isinstance(cog._thread_locks, dict)
+        assert len(cog._thread_locks) == 0
+
+    @pytest.mark.asyncio
+    async def test_concurrent_messages_only_spawn_one_session(self) -> None:
+        """Two near-simultaneous messages should not both spawn CLI processes."""
+        cog = _make_cog()
+        thread_id = 42
+
+        call_count = 0
+
+        async def slow_run_claude(*args: object, **kwargs: object) -> None:
+            nonlocal call_count
+            call_count += 1
+            runner = MagicMock()
+            runner.interrupt = AsyncMock()
+            cog._active_runners[thread_id] = runner
+            await asyncio.sleep(0.05)
+
+        cog._run_claude = slow_run_claude
+
+        msg1 = self._make_thread_message(thread_id)
+        msg2 = self._make_thread_message(thread_id)
+
+        t1 = asyncio.create_task(cog._handle_thread_reply(msg1))
+        await asyncio.sleep(0)
+        t2 = asyncio.create_task(cog._handle_thread_reply(msg2))
+
+        await asyncio.gather(t1, t2, return_exceptions=True)
+
+        assert call_count == 2
+        thread = msg2.channel
+        send_calls = [c.args[0] for c in thread.send.call_args_list]
+        assert any("⚡" in s for s in send_calls)
+
 
 class TestSpawnSession:
     """Tests for ClaudeChatCog.spawn_session()."""

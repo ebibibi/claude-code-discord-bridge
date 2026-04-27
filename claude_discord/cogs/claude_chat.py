@@ -134,6 +134,7 @@ class ClaudeChatCog(commands.Cog):
         # Used by _handle_thread_reply to wait for an interrupted session
         # to fully clean up before starting the replacement session.
         self._active_tasks: dict[int, asyncio.Task] = {}
+        self._thread_locks: dict[int, asyncio.Lock] = {}
         # Dashboard may be None until bot is ready; resolved lazily in _get_dashboard()
         self._dashboard = dashboard
         # For AskUserQuestion persistence across restarts
@@ -776,17 +777,16 @@ class ClaudeChatCog(commands.Cog):
                 if isinstance(_dashboard, ThreadStatusDashboard):
                     await _dashboard.refresh_inbox(_inbox_repo)
 
-        # Interrupt any active session in this thread before starting a new one.
-        existing_runner = self._active_runners.get(thread.id)
-        existing_task = self._active_tasks.get(thread.id)
-        if existing_runner is not None:
-            await thread.send("-# ⚡ Interrupted. Starting with new instruction...")
-            await existing_runner.interrupt()
-            # Wait for the interrupted _run_claude to finish its finally block
-            # (which releases the semaphore and removes entries from dicts).
-            if existing_task is not None and not existing_task.done():
-                with contextlib.suppress(Exception):
-                    await existing_task
+        lock = self._thread_locks.setdefault(thread.id, asyncio.Lock())
+        async with lock:
+            existing_runner = self._active_runners.get(thread.id)
+            existing_task = self._active_tasks.get(thread.id)
+            if existing_runner is not None:
+                await thread.send("-# ⚡ Interrupted. Starting with new instruction...")
+                await existing_runner.interrupt()
+                if existing_task is not None and not existing_task.done():
+                    with contextlib.suppress(Exception):
+                        await existing_task
 
         # Determine chat_only from the parent channel of this thread.
         chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
@@ -933,6 +933,7 @@ class ClaudeChatCog(commands.Cog):
                 await stop_view.disable()
             self._active_runners.pop(thread.id, None)
             self._active_tasks.pop(thread.id, None)
+            self._thread_locks.pop(thread.id, None)
 
             # Transition to WAITING_INPUT so owner knows a reply is needed
             if dashboard is not None:
