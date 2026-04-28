@@ -24,7 +24,7 @@ jobs:
       github.event.pull_request.user.login == 'ebibibi' &&
       github.event.pull_request.draft == false &&
       !contains(github.event.pull_request.labels.*.name, 'external-issue')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64]
     permissions:
       pull-requests: write
       contents: write
