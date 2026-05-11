@@ -216,6 +216,13 @@ async def setup_bridge(
     await bot.add_cog(shohin_cog)
     logger.info("Registered ShohinSearchCog")
 
+    # --- KwTriggerCog（KW調査 n8n Webhookトリガー） ---
+    from .cogs.kw_trigger import KwTriggerCog
+
+    kw_cog = KwTriggerCog(bot)
+    await bot.add_cog(kw_cog)
+    logger.info("Registered KwTriggerCog")
+
     # --- SchedulerCog (optional) ---
     task_repo: TaskRepository | None = None
     if enable_scheduler:

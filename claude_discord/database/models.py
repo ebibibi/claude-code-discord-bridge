@@ -58,6 +58,25 @@ CREATE TABLE IF NOT EXISTS pending_resumes (
     resume_prompt TEXT,        -- message to post + send to Claude on resume
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+-- Project Board: persistent structured tracking of all projects/tasks.
+-- Unlike lounge (ephemeral chat), board items have status, category, blocker.
+CREATE TABLE IF NOT EXISTS board_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    status TEXT NOT NULL DEFAULT 'not_started',
+    blocker TEXT,
+    next_action TEXT,
+    priority INTEGER NOT NULL DEFAULT 3,
+    wf_id TEXT,
+    owner TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_board_status ON board_items(status);
+CREATE INDEX IF NOT EXISTS idx_board_category ON board_items(category);
+CREATE INDEX IF NOT EXISTS idx_board_priority ON board_items(priority);
 """
 
 # Migrations for existing databases that lack new columns.
@@ -84,6 +103,27 @@ _MIGRATIONS = [
         "resume_prompt TEXT, "
         "created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
     ),
+    # board_items added for Project Board feature
+    (
+        "CREATE TABLE IF NOT EXISTS board_items ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "title TEXT NOT NULL, "
+        "category TEXT NOT NULL DEFAULT 'other', "
+        "status TEXT NOT NULL DEFAULT 'not_started', "
+        "blocker TEXT, "
+        "next_action TEXT, "
+        "priority INTEGER NOT NULL DEFAULT 3, "
+        "wf_id TEXT, "
+        "owner TEXT, "
+        "created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')), "
+        "updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
+    ),
+    "CREATE INDEX IF NOT EXISTS idx_board_status ON board_items(status)",
+    "CREATE INDEX IF NOT EXISTS idx_board_category ON board_items(category)",
+    "CREATE INDEX IF NOT EXISTS idx_board_priority ON board_items(priority)",
+    # channel_id for cross-thread context — added in v1.5
+    "ALTER TABLE sessions ADD COLUMN channel_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id)",
 ]
 
 

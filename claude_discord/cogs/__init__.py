@@ -7,12 +7,14 @@ from .run_config import RunConfig
 from .scheduler import SchedulerCog
 from .session_manage import SessionManageCog
 from .skill_command import SkillCommandCog
+from .kw_trigger import KwTriggerCog
 from .webhook_trigger import WebhookTriggerCog
 
 __all__ = [
     "AutoUpgradeCog",
     "ClaudeChatCog",
     "EventProcessor",
+    "KwTriggerCog",
     "RunConfig",
     "SchedulerCog",
     "SessionManageCog",

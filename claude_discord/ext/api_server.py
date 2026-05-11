@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     import discord
     from discord.ext.commands import Bot
 
+    from ..database.board_repo import BoardRepository
     from ..database.lounge_repo import LoungeRepository
     from ..database.notification_repo import NotificationRepository
     from ..database.repository import SessionRepository
@@ -64,6 +65,7 @@ class ApiServer:
         lounge_channel_id: int | None = None,
         resume_repo: PendingResumeRepository | None = None,
         session_repo: SessionRepository | None = None,
+        board_repo: BoardRepository | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -75,6 +77,7 @@ class ApiServer:
         self.lounge_repo = lounge_repo
         self.resume_repo = resume_repo
         self.session_repo = session_repo
+        self.board_repo = board_repo
         # Fall back to COORDINATION_CHANNEL_ID so lounge shares the same channel
         if lounge_channel_id is None:
             ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
@@ -115,6 +118,12 @@ class ApiServer:
         self.app.router.add_post("/api/channels/{id}/webhooks", self.create_channel_webhook)
         self.app.router.add_get("/api/channels/{id}/webhooks", self.list_channel_webhooks)
         self.app.router.add_get("/api/categories", self.list_categories)
+        # Project Board routes (requires board_repo)
+        self.app.router.add_get("/api/board", self.get_board)
+        self.app.router.add_get("/api/board/summary", self.get_board_summary)
+        self.app.router.add_post("/api/board", self.create_board_item)
+        self.app.router.add_patch("/api/board/{id}", self.update_board_item)
+        self.app.router.add_delete("/api/board/{id}", self.delete_board_item)
 
     @web.middleware
     async def _auth_middleware(
@@ -965,3 +974,190 @@ class ApiServer:
             color=color or 0x00BFFF,
             timestamp=datetime.now(),
         )
+
+    # ------------------------------------------------------------------
+    # Project Board endpoints (/api/board)
+    # ------------------------------------------------------------------
+
+    def _require_board_repo(self) -> web.Response | None:
+        """Return a 503 response if board_repo is not configured."""
+        if self.board_repo is None:
+            return web.json_response(
+                {"error": "Project Board not configured (board_repo is None)"},
+                status=503,
+            )
+        return None
+
+    async def get_board(self, request: web.Request) -> web.Response:
+        """GET /api/board — list board items with optional filters.
+
+        Query params:
+            status: Comma-separated statuses (e.g. "blocked,in_progress").
+            category: Filter by category.
+            limit: Maximum items (default 100, max 500).
+        """
+        if err := self._require_board_repo():
+            return err
+
+        status = request.rel_url.query.get("status")
+        category = request.rel_url.query.get("category")
+        try:
+            raw_limit = request.rel_url.query.get("limit", "100")
+            limit = max(1, min(500, int(raw_limit)))
+        except ValueError:
+            return web.json_response({"error": "limit must be an integer"}, status=400)
+
+        items = await self.board_repo.list(status=status, category=category, limit=limit)  # type: ignore[union-attr]
+        return web.json_response(
+            {
+                "items": [
+                    {
+                        "id": item.id,
+                        "title": item.title,
+                        "category": item.category,
+                        "status": item.status,
+                        "blocker": item.blocker,
+                        "next_action": item.next_action,
+                        "priority": item.priority,
+                        "wf_id": item.wf_id,
+                        "owner": item.owner,
+                        "created_at": item.created_at,
+                        "updated_at": item.updated_at,
+                    }
+                    for item in items
+                ]
+            }
+        )
+
+    async def get_board_summary(self, request: web.Request) -> web.Response:
+        """GET /api/board/summary — return count of items per status."""
+        if err := self._require_board_repo():
+            return err
+
+        summary = await self.board_repo.summary()  # type: ignore[union-attr]
+        total = sum(summary.values())
+        return web.json_response({"summary": summary, "total": total})
+
+    async def create_board_item(self, request: web.Request) -> web.Response:
+        """POST /api/board — create a new board item.
+
+        Body (JSON):
+            title: Project/task name (required).
+            category: Category key (optional, default "other").
+            status: Initial status (optional, default "not_started").
+            blocker: What's blocking (optional).
+            next_action: Next step (optional).
+            priority: 1-5 (optional, default 3).
+            wf_id: Related n8n workflow ID (optional).
+            owner: Who's responsible (optional).
+        """
+        if err := self._require_board_repo():
+            return err
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        title = (data.get("title") or "").strip()
+        if not title:
+            return web.json_response({"error": "title is required"}, status=400)
+
+        try:
+            item = await self.board_repo.create(  # type: ignore[union-attr]
+                title=title,
+                category=data.get("category", "other"),
+                status=data.get("status", "not_started"),
+                blocker=data.get("blocker"),
+                next_action=data.get("next_action"),
+                priority=data.get("priority", 3),
+                wf_id=data.get("wf_id"),
+                owner=data.get("owner"),
+            )
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+        return web.json_response(
+            {
+                "status": "created",
+                "item": {
+                    "id": item.id,
+                    "title": item.title,
+                    "category": item.category,
+                    "status": item.status,
+                    "blocker": item.blocker,
+                    "next_action": item.next_action,
+                    "priority": item.priority,
+                    "wf_id": item.wf_id,
+                    "owner": item.owner,
+                    "created_at": item.created_at,
+                    "updated_at": item.updated_at,
+                },
+            },
+            status=201,
+        )
+
+    async def update_board_item(self, request: web.Request) -> web.Response:
+        """PATCH /api/board/{id} — update a board item.
+
+        Body (JSON): any combination of title, category, status, blocker,
+        next_action, priority, wf_id, owner.
+        """
+        if err := self._require_board_repo():
+            return err
+
+        try:
+            item_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid item ID"}, status=400)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        if not data:
+            return web.json_response({"error": "No fields to update"}, status=400)
+
+        try:
+            item = await self.board_repo.update(item_id, **data)  # type: ignore[union-attr]
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+
+        if item is None:
+            return web.json_response({"error": "Item not found"}, status=404)
+
+        return web.json_response(
+            {
+                "status": "updated",
+                "item": {
+                    "id": item.id,
+                    "title": item.title,
+                    "category": item.category,
+                    "status": item.status,
+                    "blocker": item.blocker,
+                    "next_action": item.next_action,
+                    "priority": item.priority,
+                    "wf_id": item.wf_id,
+                    "owner": item.owner,
+                    "created_at": item.created_at,
+                    "updated_at": item.updated_at,
+                },
+            }
+        )
+
+    async def delete_board_item(self, request: web.Request) -> web.Response:
+        """DELETE /api/board/{id} — delete a board item."""
+        if err := self._require_board_repo():
+            return err
+
+        try:
+            item_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid item ID"}, status=400)
+
+        deleted = await self.board_repo.delete(item_id)  # type: ignore[union-attr]
+        if not deleted:
+            return web.json_response({"error": "Item not found"}, status=404)
+
+        return web.json_response({"status": "deleted", "id": item_id})

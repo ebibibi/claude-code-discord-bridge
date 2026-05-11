@@ -22,6 +22,7 @@ class SessionRecord:
     summary: str | None
     created_at: str
     last_used_at: str
+    channel_id: int | None = None
 
 
 class SessionRepository:
@@ -51,21 +52,23 @@ class SessionRepository:
         model: str | None = None,
         origin: str = "discord",
         summary: str | None = None,
+        channel_id: int | None = None,
     ) -> SessionRecord:
         """Create or update a session mapping."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """INSERT INTO sessions
-                     (thread_id, session_id, working_dir, model, origin, summary)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                     (thread_id, session_id, working_dir, model, origin, summary, channel_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(thread_id) DO UPDATE SET
                      session_id = excluded.session_id,
                      working_dir = COALESCE(excluded.working_dir, sessions.working_dir),
                      model = COALESCE(excluded.model, sessions.model),
                      origin = COALESCE(excluded.origin, sessions.origin),
                      summary = COALESCE(excluded.summary, sessions.summary),
+                     channel_id = COALESCE(excluded.channel_id, sessions.channel_id),
                      last_used_at = datetime('now', 'localtime')""",
-                (thread_id, session_id, working_dir, model, origin, summary),
+                (thread_id, session_id, working_dir, model, origin, summary, channel_id),
             )
             await db.commit()
 
@@ -118,6 +121,36 @@ class SessionRepository:
             )
             await db.commit()
             return cursor.rowcount > 0
+
+    async def get_recent_summaries(
+        self,
+        channel_id: int,
+        limit: int = 5,
+        exclude_thread: int | None = None,
+    ) -> list[SessionRecord]:
+        """Get recent sessions with summaries from the same channel.
+
+        Used for cross-thread context injection — lets new sessions know
+        what was discussed in recent threads of the same channel.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if exclude_thread is not None:
+                cursor = await db.execute(
+                    """SELECT * FROM sessions
+                       WHERE channel_id = ? AND thread_id != ? AND summary IS NOT NULL
+                       ORDER BY last_used_at DESC LIMIT ?""",
+                    (channel_id, exclude_thread, limit),
+                )
+            else:
+                cursor = await db.execute(
+                    """SELECT * FROM sessions
+                       WHERE channel_id = ? AND summary IS NOT NULL
+                       ORDER BY last_used_at DESC LIMIT ?""",
+                    (channel_id, limit),
+                )
+            rows = await cursor.fetchall()
+            return [SessionRecord(**dict(row)) for row in rows]
 
     async def cleanup_old(self, days: int = 30) -> int:
         """Delete sessions older than N days. Returns count deleted."""

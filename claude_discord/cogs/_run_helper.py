@@ -24,6 +24,7 @@ import discord
 from ..discord_ui.ask_handler import collect_ask_answers
 from ..discord_ui.embeds import error_embed, timeout_embed
 from ..lounge import build_lounge_prompt
+from ..memory_loader import load_auto_memory
 from .event_processor import EventProcessor
 from .run_config import RunConfig
 
@@ -91,6 +92,51 @@ async def _build_system_context(config: RunConfig) -> str | None:
         logger.debug(
             "No session registry — concurrency notice skipped for thread %d", config.thread.id
         )
+
+    # Layer 4: Cross-thread summaries (what was discussed in recent threads).
+    # Only inject for new sessions (no session_id) to avoid bloating resumed sessions.
+    if config.repo is not None and config.session_id is None:
+        channel_id = getattr(config.thread, "parent_id", None)
+        if channel_id is not None:
+            try:
+                recent_sessions = await config.repo.get_recent_summaries(
+                    channel_id, limit=5, exclude_thread=config.thread.id
+                )
+                if recent_sessions:
+                    summary_lines = [
+                        "[RECENT THREADS — このチャンネルの直近の会話。"
+                        "ユーザーが「さっきの」「あれ」と言ったらこの文脈を参照。]"
+                    ]
+                    for s in recent_sessions:
+                        ts = s.last_used_at[5:16] if len(s.last_used_at) >= 16 else s.last_used_at
+                        summary_lines.append(f"  [{ts}] {s.summary}")
+                    parts.append("\n".join(summary_lines))
+                    logger.info(
+                        "Cross-thread context: %d recent summaries for channel %d",
+                        len(recent_sessions),
+                        channel_id,
+                    )
+            except Exception:
+                logger.warning("Failed to fetch cross-thread summaries", exc_info=True)
+
+    # Layer 5: Auto-loaded memory files (★★★ section from MEMORY.md).
+    # Only inject for new sessions to keep resumed sessions lean.
+    if config.session_id is None:
+        try:
+            import asyncio
+
+            memory_context = await asyncio.to_thread(
+                load_auto_memory, config.runner.working_dir
+            )
+            if memory_context:
+                parts.append(memory_context)
+                logger.info(
+                    "Auto-loaded memory injected (%d chars) for thread %d",
+                    len(memory_context),
+                    config.thread.id,
+                )
+        except Exception:
+            logger.warning("Failed to load auto-memory", exc_info=True)
 
     return "\n\n".join(parts) if parts else None
 

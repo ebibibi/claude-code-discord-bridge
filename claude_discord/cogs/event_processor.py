@@ -177,7 +177,12 @@ class EventProcessor:
 
         self._state.session_id = event.session_id
         if self._config.repo:
-            await self._config.repo.save(self._config.thread.id, self._state.session_id)
+            await self._config.repo.save(
+                self._config.thread.id,
+                self._state.session_id,
+                channel_id=getattr(self._config.thread, "parent_id", None),
+                summary=self._config.prompt[:200] if self._config.prompt else None,
+            )
 
         # Guard: post session_start_embed only once (Claude can emit multiple SYSTEM events).
         if not self._config.session_id and not self._session_start_sent:
@@ -188,7 +193,9 @@ class EventProcessor:
         """Handle ASSISTANT events — thinking, streaming text, tool use."""
         # Extended thinking — only post on complete events (not partials).
         if event.thinking and not event.is_partial:
-            await self._config.thread.send(embed=thinking_embed(event.thinking))
+            embed = thinking_embed(event.thinking)
+            content = None
+            await self._config.thread.send(content=content, embed=embed)
 
         # Redacted thinking — only post on complete events.
         if event.has_redacted_thinking and not event.is_partial:
@@ -237,12 +244,15 @@ class EventProcessor:
                 from ..discord_ui.views import ToolResultView
 
                 embed = tool_result_preview_embed(title, truncated)
+                content = None
                 view = ToolResultView(title, truncated)
                 with contextlib.suppress(Exception):
-                    await tool_msg.edit(embed=embed, view=view)
+                    await tool_msg.edit(content=content, embed=embed, view=view)
             else:
+                embed = tool_result_embed(title, truncated)
+                content = None
                 with contextlib.suppress(Exception):
-                    await tool_msg.edit(embed=tool_result_embed(title, truncated))
+                    await tool_msg.edit(content=content, embed=embed)
 
     async def _on_progress(self, event: StreamEvent) -> None:
         """Handle PROGRESS events — reset stall timer (compact in progress)."""
@@ -355,21 +365,23 @@ class EventProcessor:
         """Post the plan embed with Approve/Cancel buttons (ExitPlanMode)."""
         plan_text = event.text or ""
         embed = plan_embed(plan_text)
+        content = None
         # ExitPlanMode does not carry a request_id in the current CLI protocol;
         # we use the session_id as a stable identifier for the inject payload.
         request_id = self._state.session_id or "plan"
         view = PlanApprovalView(self._config.runner, request_id)
         with contextlib.suppress(Exception):
-            await self._config.thread.send(embed=embed, view=view)
+            await self._config.thread.send(content=content, embed=embed, view=view)
         logger.info("Plan approval prompt posted (session=%s)", request_id)
 
     async def _handle_permission_request(self, event: StreamEvent) -> None:
         """Post permission embed with Allow/Deny buttons."""
         assert event.permission_request is not None
         embed = permission_embed(event.permission_request)
+        content = None
         view = PermissionView(self._config.runner, event.permission_request)
         with contextlib.suppress(Exception):
-            await self._config.thread.send(embed=embed, view=view)
+            await self._config.thread.send(content=content, embed=embed, view=view)
         logger.info(
             "Permission request posted: %s (request_id=%s)",
             event.permission_request.tool_name,
