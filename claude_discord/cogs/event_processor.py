@@ -302,6 +302,27 @@ class EventProcessor:
                 await self._config.repo.save(self._config.thread.id, event.session_id)
             self._state.session_id = event.session_id
 
+        # Record usage data for billing visibility
+        if self._config.usage_repo is not None and not event.error:
+            try:
+                await self._config.usage_repo.record(
+                    thread_id=self._config.thread.id,
+                    session_id=event.session_id or self._state.session_id,
+                    discord_user_id=self._config.discord_user_id,
+                    discord_username=self._config.discord_username,
+                    bot_name=self._config.bot_name,
+                    model=self._config.runner.model,
+                    cost_usd=event.cost_usd,
+                    input_tokens=event.input_tokens,
+                    output_tokens=event.output_tokens,
+                    cache_read_tokens=event.cache_read_tokens,
+                    cache_creation_tokens=event.cache_creation_tokens,
+                    duration_ms=event.duration_ms,
+                    prompt_summary=(self._config.prompt[:100] if self._config.prompt else None),
+                )
+            except Exception:
+                logger.warning("Failed to record usage data", exc_info=True)
+
         # Reset for potential next streamer
         self._streamer = StreamingMessageManager(self._config.thread)
 

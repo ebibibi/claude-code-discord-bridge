@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .database.repository import SessionRepository
     from .database.resume_repo import PendingResumeRepository
     from .database.task_repo import TaskRepository
+    from .database.usage_repo import UsageRepository
     from .ext.api_server import ApiServer
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class BridgeComponents:
     lounge_repo: LoungeRepository | None = None
     resume_repo: PendingResumeRepository | None = None
     board_repo: BoardRepository | None = None
+    usage_repo: UsageRepository | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -63,6 +65,8 @@ class BridgeComponents:
             api_server.resume_repo = self.resume_repo
         if self.board_repo is not None:
             api_server.board_repo = self.board_repo
+        if self.usage_repo is not None:
+            api_server.usage_repo = self.usage_repo
         api_server.session_repo = self.session_repo
 
 
@@ -127,6 +131,7 @@ async def setup_bridge(
     from .database.resume_repo import PendingResumeRepository
     from .database.settings_repo import SettingsRepository
     from .database.task_repo import TaskRepository
+    from .database.usage_repo import UsageRepository
     from .worktree import WorktreeManager
 
     # Lounge shares the coordination channel unless explicitly overridden
@@ -152,6 +157,8 @@ async def setup_bridge(
     resume_repo = PendingResumeRepository(session_db_path)
     board_repo = BoardRepository(session_db_path)
     await board_repo.ensure_schema()
+    usage_repo = UsageRepository(session_db_path)
+    await usage_repo.ensure_schema()
     logger.info("Session DB initialized: %s", session_db_path)
 
     # Attach repos to bot so generic cogs (e.g. AutoUpgradeCog) can discover them
@@ -169,6 +176,7 @@ async def setup_bridge(
         lounge_repo=lounge_repo,
         resume_repo=resume_repo,
         settings_repo=settings_repo,
+        usage_repo=usage_repo,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")
@@ -239,6 +247,7 @@ async def setup_bridge(
         lounge_repo=lounge_repo,
         resume_repo=resume_repo,
         board_repo=board_repo,
+        usage_repo=usage_repo,
     )
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided

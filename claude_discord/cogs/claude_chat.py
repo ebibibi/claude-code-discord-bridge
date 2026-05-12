@@ -29,6 +29,7 @@ from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..database.resume_repo import PendingResumeRepository
 from ..database.settings_repo import SettingsRepository
+from ..database.usage_repo import UsageRepository
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
@@ -60,6 +61,7 @@ class ClaudeChatCog(commands.Cog):
         lounge_repo: LoungeRepository | None = None,
         resume_repo: PendingResumeRepository | None = None,
         settings_repo: SettingsRepository | None = None,
+        usage_repo: UsageRepository | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -96,6 +98,10 @@ class ClaudeChatCog(commands.Cog):
         self._resume_repo = resume_repo or getattr(bot, "resume_repo", None)
         # Settings repo for dynamic model lookup (optional — falls back to runner.model)
         self._settings_repo = settings_repo or getattr(bot, "settings_repo", None)
+        # Usage tracking repo (optional — disabled when None)
+        self._usage_repo = usage_repo or getattr(bot, "usage_repo", None)
+        # Bot name for usage attribution (from env or bot user)
+        self._bot_name = os.getenv("BOT_NAME")
 
     @property
     def active_session_count(self) -> int:
@@ -536,6 +542,10 @@ class ClaudeChatCog(commands.Cog):
                         stop_view=stop_view,
                         worktree_manager=getattr(self.bot, "worktree_manager", None),
                         image_urls=image_urls,
+                        usage_repo=self._usage_repo,
+                        discord_user_id=str(user_message.author.id),
+                        discord_username=user_message.author.display_name,
+                        bot_name=self._bot_name or getattr(self.bot.user, "name", None),
                     )
                 )
             finally:

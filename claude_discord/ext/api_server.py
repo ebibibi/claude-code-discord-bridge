@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from ..database.repository import SessionRepository
     from ..database.resume_repo import PendingResumeRepository
     from ..database.task_repo import TaskRepository
+    from ..database.usage_repo import UsageRepository
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class ApiServer:
         resume_repo: PendingResumeRepository | None = None,
         session_repo: SessionRepository | None = None,
         board_repo: BoardRepository | None = None,
+        usage_repo: UsageRepository | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -78,6 +80,7 @@ class ApiServer:
         self.resume_repo = resume_repo
         self.session_repo = session_repo
         self.board_repo = board_repo
+        self.usage_repo = usage_repo
         # Fall back to COORDINATION_CHANNEL_ID so lounge shares the same channel
         if lounge_channel_id is None:
             ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
@@ -118,6 +121,14 @@ class ApiServer:
         self.app.router.add_post("/api/channels/{id}/webhooks", self.create_channel_webhook)
         self.app.router.add_get("/api/channels/{id}/webhooks", self.list_channel_webhooks)
         self.app.router.add_get("/api/categories", self.list_categories)
+        # Discord message reading routes (read-only, for cross-session visibility)
+        self.app.router.add_get("/api/channels/{id}/messages", self.get_channel_messages)
+        self.app.router.add_get("/api/channels/{id}/threads", self.get_channel_threads)
+        # Usage tracking routes (requires usage_repo)
+        self.app.router.add_get("/api/usage/summary", self.get_usage_summary)
+        self.app.router.add_get("/api/usage/users", self.get_usage_users)
+        self.app.router.add_get("/api/usage/daily", self.get_usage_daily)
+        self.app.router.add_get("/api/usage/recent", self.get_usage_recent)
         # Project Board routes (requires board_repo)
         self.app.router.add_get("/api/board", self.get_board)
         self.app.router.add_get("/api/board/summary", self.get_board_summary)
@@ -822,6 +833,149 @@ class ApiServer:
         return web.json_response({"categories": categories})
 
     # ------------------------------------------------------------------
+    # Discord message reading endpoints
+    # ------------------------------------------------------------------
+
+    async def get_channel_messages(self, request: web.Request) -> web.Response:
+        """GET /api/channels/{id}/messages — read messages from a channel or thread.
+
+        Query params:
+            limit: Number of messages to fetch (default 50, max 200).
+            before: Message ID — fetch messages before this ID (for paging).
+        """
+        import discord as _discord
+
+        try:
+            channel_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid channel ID"}, status=400)
+
+        try:
+            raw_limit = request.rel_url.query.get("limit", "50")
+            limit = max(1, min(200, int(raw_limit)))
+        except ValueError:
+            return web.json_response({"error": "limit must be an integer"}, status=400)
+
+        before_id = request.rel_url.query.get("before")
+        before_obj = None
+        if before_id:
+            try:
+                before_obj = _discord.Object(id=int(before_id))
+            except (ValueError, TypeError):
+                return web.json_response({"error": "before must be a message ID"}, status=400)
+
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception as exc:
+                return web.json_response({"error": str(exc)}, status=404)
+
+        if not hasattr(channel, "history"):
+            return web.json_response(
+                {"error": "Channel does not support message history"},
+                status=400,
+            )
+
+        try:
+            messages = []
+            async for msg in channel.history(limit=limit, before=before_obj):
+                author_data = {
+                    "id": str(msg.author.id),
+                    "username": msg.author.name,
+                    "display_name": msg.author.display_name,
+                    "bot": msg.author.bot,
+                }
+                msg_data = {
+                    "id": str(msg.id),
+                    "content": msg.content,
+                    "timestamp": msg.created_at.isoformat(),
+                    "author": author_data,
+                    "attachments": [
+                        {"filename": a.filename, "url": a.url}
+                        for a in msg.attachments
+                    ],
+                }
+                if msg.thread:
+                    msg_data["thread"] = {
+                        "id": str(msg.thread.id),
+                        "name": msg.thread.name,
+                    }
+                messages.append(msg_data)
+        except _discord.Forbidden:
+            return web.json_response({"error": "Bot lacks permission to read this channel"}, status=403)
+        except Exception as exc:
+            logger.error("Failed to fetch messages: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        return web.json_response({"messages": messages})
+
+    async def get_channel_threads(self, request: web.Request) -> web.Response:
+        """GET /api/channels/{id}/threads — list threads in a channel.
+
+        Returns both active and archived public threads.
+
+        Query params:
+            include_archived: "true" to include archived threads (default true).
+        """
+        import discord as _discord
+
+        try:
+            channel_id = int(request.match_info["id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid channel ID"}, status=400)
+
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception as exc:
+                return web.json_response({"error": str(exc)}, status=404)
+
+        if not isinstance(channel, _discord.TextChannel):
+            return web.json_response(
+                {"error": "Channel must be a text channel"},
+                status=400,
+            )
+
+        include_archived = request.rel_url.query.get("include_archived", "true").lower() != "false"
+
+        threads_list = []
+
+        try:
+            # Active threads from guild cache
+            guild = channel.guild
+            for thread in guild.threads:
+                if thread.parent_id == channel_id:
+                    threads_list.append({
+                        "id": str(thread.id),
+                        "name": thread.name,
+                        "archived": thread.archived,
+                        "message_count": thread.message_count,
+                        "created_at": thread.created_at.isoformat() if thread.created_at else None,
+                    })
+
+            # Archived threads
+            if include_archived:
+                async for thread in channel.archived_threads(limit=50):
+                    # Skip if already added from active
+                    if not any(t["id"] == str(thread.id) for t in threads_list):
+                        threads_list.append({
+                            "id": str(thread.id),
+                            "name": thread.name,
+                            "archived": thread.archived,
+                            "message_count": thread.message_count,
+                            "created_at": thread.created_at.isoformat() if thread.created_at else None,
+                        })
+        except _discord.Forbidden:
+            return web.json_response({"error": "Bot lacks permission"}, status=403)
+        except Exception as exc:
+            logger.error("Failed to fetch threads: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        return web.json_response({"threads": threads_list})
+
+    # ------------------------------------------------------------------
     # Repository push notification (/api/repo/push-notify)
     # ------------------------------------------------------------------
 
@@ -1161,3 +1315,130 @@ class ApiServer:
             return web.json_response({"error": "Item not found"}, status=404)
 
         return web.json_response({"status": "deleted", "id": item_id})
+
+    # ------------------------------------------------------------------
+    # Usage tracking endpoints (/api/usage)
+    # ------------------------------------------------------------------
+
+    def _require_usage_repo(self) -> web.Response | None:
+        """Return a 503 response if usage_repo is not configured."""
+        if self.usage_repo is None:
+            return web.json_response(
+                {"error": "Usage tracking not configured (usage_repo is None)"},
+                status=503,
+            )
+        return None
+
+    async def get_usage_summary(self, request: web.Request) -> web.Response:
+        """GET /api/usage/summary — aggregated usage stats.
+
+        Query params:
+            period: "today" (default), "month", or specific date/month.
+            date: YYYY-MM-DD for a specific day.
+            month: YYYY-MM for a specific month.
+        """
+        if err := self._require_usage_repo():
+            return err
+
+        period = request.rel_url.query.get("period", "today")
+        date = request.rel_url.query.get("date")
+        month = request.rel_url.query.get("month")
+
+        if date:
+            summary = await self.usage_repo.get_daily_summary(date)  # type: ignore[union-attr]
+        elif month or period == "month":
+            summary = await self.usage_repo.get_monthly_summary(month)  # type: ignore[union-attr]
+        else:
+            summary = await self.usage_repo.get_daily_summary()  # type: ignore[union-attr]
+
+        return web.json_response({
+            "summary": {
+                "total_sessions": summary.total_sessions,
+                "total_cost_usd": round(summary.total_cost_usd, 4),
+                "total_input_tokens": summary.total_input_tokens,
+                "total_output_tokens": summary.total_output_tokens,
+                "total_duration_ms": summary.total_duration_ms,
+            }
+        })
+
+    async def get_usage_users(self, request: web.Request) -> web.Response:
+        """GET /api/usage/users — per-user usage breakdown.
+
+        Query params:
+            date: YYYY-MM-DD for a specific day (default: today).
+            month: YYYY-MM for a specific month.
+        """
+        if err := self._require_usage_repo():
+            return err
+
+        date = request.rel_url.query.get("date")
+        month = request.rel_url.query.get("month")
+
+        users = await self.usage_repo.get_user_summaries(date=date, year_month=month)  # type: ignore[union-attr]
+
+        return web.json_response({
+            "users": [
+                {
+                    "discord_user_id": u.discord_user_id,
+                    "discord_username": u.discord_username,
+                    "total_sessions": u.total_sessions,
+                    "total_cost_usd": round(u.total_cost_usd, 4),
+                    "total_input_tokens": u.total_input_tokens,
+                    "total_output_tokens": u.total_output_tokens,
+                    "total_duration_ms": u.total_duration_ms,
+                }
+                for u in users
+            ]
+        })
+
+    async def get_usage_daily(self, request: web.Request) -> web.Response:
+        """GET /api/usage/daily — daily cost breakdown for a month.
+
+        Query params:
+            month: YYYY-MM (default: current month).
+        """
+        if err := self._require_usage_repo():
+            return err
+
+        month = request.rel_url.query.get("month")
+        breakdown = await self.usage_repo.get_daily_breakdown(year_month=month)  # type: ignore[union-attr]
+
+        return web.json_response({"days": breakdown})
+
+    async def get_usage_recent(self, request: web.Request) -> web.Response:
+        """GET /api/usage/recent — most recent usage records.
+
+        Query params:
+            limit: Number of records (default 20, max 100).
+        """
+        if err := self._require_usage_repo():
+            return err
+
+        try:
+            raw_limit = request.rel_url.query.get("limit", "20")
+            limit = max(1, min(100, int(raw_limit)))
+        except ValueError:
+            return web.json_response({"error": "limit must be an integer"}, status=400)
+
+        records = await self.usage_repo.get_recent(limit=limit)  # type: ignore[union-attr]
+
+        return web.json_response({
+            "records": [
+                {
+                    "id": r.id,
+                    "thread_id": r.thread_id,
+                    "session_id": r.session_id,
+                    "discord_user_id": r.discord_user_id,
+                    "discord_username": r.discord_username,
+                    "bot_name": r.bot_name,
+                    "model": r.model,
+                    "cost_usd": round(r.cost_usd, 4) if r.cost_usd else None,
+                    "input_tokens": r.input_tokens,
+                    "output_tokens": r.output_tokens,
+                    "duration_ms": r.duration_ms,
+                    "prompt_summary": r.prompt_summary,
+                    "created_at": r.created_at,
+                }
+                for r in records
+            ]
+        })

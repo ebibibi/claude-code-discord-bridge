@@ -77,6 +77,28 @@ CREATE TABLE IF NOT EXISTS board_items (
 CREATE INDEX IF NOT EXISTS idx_board_status ON board_items(status);
 CREATE INDEX IF NOT EXISTS idx_board_category ON board_items(category);
 CREATE INDEX IF NOT EXISTS idx_board_priority ON board_items(priority);
+
+-- Usage tracking: per-session cost/token/duration records for billing visibility.
+CREATE TABLE IF NOT EXISTS usage_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id INTEGER NOT NULL,
+    session_id TEXT,
+    discord_user_id TEXT,
+    discord_username TEXT,
+    bot_name TEXT,
+    model TEXT,
+    cost_usd REAL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_creation_tokens INTEGER,
+    duration_ms INTEGER,
+    prompt_summary TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_records(discord_user_id);
+CREATE INDEX IF NOT EXISTS idx_usage_date ON usage_records(created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_bot ON usage_records(bot_name);
 """
 
 # Migrations for existing databases that lack new columns.
@@ -124,6 +146,28 @@ _MIGRATIONS = [
     # channel_id for cross-thread context — added in v1.5
     "ALTER TABLE sessions ADD COLUMN channel_id INTEGER",
     "CREATE INDEX IF NOT EXISTS idx_sessions_channel ON sessions(channel_id)",
+    # usage_records for cost/token tracking — added for billing visibility
+    (
+        "CREATE TABLE IF NOT EXISTS usage_records ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "thread_id INTEGER NOT NULL, "
+        "session_id TEXT, "
+        "discord_user_id TEXT, "
+        "discord_username TEXT, "
+        "bot_name TEXT, "
+        "model TEXT, "
+        "cost_usd REAL, "
+        "input_tokens INTEGER, "
+        "output_tokens INTEGER, "
+        "cache_read_tokens INTEGER, "
+        "cache_creation_tokens INTEGER, "
+        "duration_ms INTEGER, "
+        "prompt_summary TEXT, "
+        "created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')))"
+    ),
+    "CREATE INDEX IF NOT EXISTS idx_usage_user ON usage_records(discord_user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_date ON usage_records(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_bot ON usage_records(bot_name)",
 ]
 
 

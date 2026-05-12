@@ -18,6 +18,7 @@ from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
+from ..database.usage_repo import UsageRepository
 from ..discord_ui.status import StatusManager
 
 if TYPE_CHECKING:
@@ -65,6 +66,11 @@ class RunConfig:
     # HTTPS URLs of image attachments to pass as stream-json url-type image blocks.
     # Claude Code CLI silently drops base64 image blocks; URL type is required.
     image_urls: list[str] | None = None
+    # Usage tracking: who invoked this session and via which bot.
+    usage_repo: UsageRepository | None = None
+    discord_user_id: str | None = None
+    discord_username: str | None = None
+    bot_name: str | None = None
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.
