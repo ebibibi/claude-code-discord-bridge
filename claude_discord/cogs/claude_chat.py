@@ -58,6 +58,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "clear": "📌 Session",
     "rewind": "📌 Session",
     "compact": "📌 Session",
+    "goal": "📌 Session",
     "fork": "📌 Session",
     "context": "📌 Session",
     "usage": "📌 Session",
@@ -351,6 +352,66 @@ class ClaudeChatCog(commands.Cog):
             session_id=record.session_id,
             working_dir_override=record.working_dir,
             chat_only=True,
+        )
+
+    @app_commands.command(
+        name="goal",
+        description="Set a completion condition — Claude keeps working until it's met",
+    )
+    @app_commands.describe(condition="Goal condition (omit to check status, 'clear' to cancel)")
+    async def goal_session(
+        self,
+        interaction: discord.Interaction,
+        condition: str | None = None,
+    ) -> None:
+        """Set, check, or clear a goal via the CLI's /goal command."""
+        if not isinstance(interaction.channel, discord.Thread):
+            await interaction.response.send_message(
+                "This command can only be used in a Claude chat thread.", ephemeral=True
+            )
+            return
+
+        thread_id = interaction.channel.id
+        record = await self.repo.get(thread_id)
+        if record is None:
+            await interaction.response.send_message(
+                "No active session found for this thread.", ephemeral=True
+            )
+            return
+
+        if thread_id in self._active_runners:
+            await interaction.response.send_message(
+                "A session is currently running. Use /stop to interrupt it first.",
+                ephemeral=True,
+            )
+            return
+
+        prompt = f"/goal {condition}" if condition else "/goal"
+
+        await interaction.response.defer()
+
+        if condition and condition.strip().lower() not in (
+            "clear",
+            "stop",
+            "off",
+            "reset",
+            "none",
+            "cancel",
+        ):
+            label = f"◎ Setting goal: {condition[:80]}"
+        elif not condition:
+            label = "◎ Checking goal status..."
+        else:
+            label = "◎ Clearing goal..."
+
+        seed_message = await interaction.followup.send(label, wait=True)
+
+        await self._run_claude(
+            user_message=seed_message,
+            thread=interaction.channel,
+            prompt=prompt,
+            session_id=record.session_id,
+            working_dir_override=record.working_dir,
         )
 
     @app_commands.command(name="clear", description="Reset the Claude Code session for this thread")
