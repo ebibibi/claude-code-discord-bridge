@@ -24,6 +24,10 @@ Usage::
 
 from __future__ import annotations
 
+# Backend
+from .backend import SessionBackend, create_backend
+from .codex_runner import CodexRunner, parse_codex_line
+
 # Database
 from .lounge_repo import LoungeMessage, LoungeRepository
 from .models import init_db
@@ -72,6 +76,11 @@ __all__ = [
     "ToolUseEvent",
     # Parser
     "parse_line",
+    # Backend
+    "CodexRunner",
+    "SessionBackend",
+    "create_backend",
+    "parse_codex_line",
     # Runner
     "ClaudeRunner",
     # Database

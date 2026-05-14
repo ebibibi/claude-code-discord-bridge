@@ -368,3 +368,24 @@ async def test_setup_bridge_defaults_max_concurrent_to_3(tmp_path: object) -> No
         if isinstance(call.args[0], ClaudeChatCog)
     )
     assert chat_cog._max_concurrent == 3
+
+
+@pytest.mark.asyncio
+async def test_setup_bridge_accepts_codex_runner(tmp_path: object) -> None:
+    """setup_bridge should accept any SessionBackend, not just ClaudeRunner."""
+    from claude_code_core.codex_runner import CodexRunner
+
+    bot = _make_bot()
+    runner = CodexRunner(command="codex", model="o4-mini")
+
+    result = await setup_bridge(
+        bot,
+        runner,  # type: ignore[arg-type]  # CodexRunner satisfies SessionBackend
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        claude_channel_id=12345,
+        enable_scheduler=False,
+    )
+
+    cog_names = [call.args[0].__class__.__name__ for call in bot.add_cog.call_args_list]
+    assert "ClaudeChatCog" in cog_names
+    assert isinstance(result, BridgeComponents)

@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from discord.ext.commands import Bot
 
-    from .claude.runner import ClaudeRunner
+    from claude_code_core.backend import SessionBackend
+
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
     from .database.resume_repo import PendingResumeRepository
@@ -64,7 +65,7 @@ class BridgeComponents:
 
 async def setup_bridge(
     bot: Bot,
-    runner: ClaudeRunner,
+    runner: SessionBackend,
     *,
     api_server: ApiServer | None = None,
     session_db_path: str = "data/sessions.db",
@@ -98,7 +99,7 @@ async def setup_bridge(
 
     Args:
         bot: Discord bot instance.
-        runner: ClaudeRunner for Claude CLI invocation.
+        runner: SessionBackend (ClaudeRunner, CodexRunner, etc.).
         api_server: Optional ApiServer to auto-wire repos into.  Also sets
                     runner.api_port so CCDB_API_URL is available to Claude.
         session_db_path: Path for session SQLite DB.

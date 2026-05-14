@@ -16,8 +16,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from claude_code_core.backend import create_backend
+
 from .bot import ClaudeDiscordBot
-from .claude.runner import ClaudeRunner
 from .cog_loader import load_custom_cogs
 from .setup import setup_bridge
 from .utils.logger import setup_logging
@@ -61,6 +62,7 @@ def load_config() -> dict[str, str]:
         "monitor_all_channels": os.getenv("CLAUDE_MONITOR_ALL_CHANNELS", "false"),
         "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
         "claude_effort": os.getenv("CLAUDE_EFFORT", ""),
+        "backend": os.getenv("CCDB_BACKEND", "claude"),
     }
 
 
@@ -83,9 +85,12 @@ async def main() -> None:
     if config["allowed_tools"]:
         allowed_tools = [t.strip() for t in config["allowed_tools"].split(",") if t.strip()] or None
 
-    # Create runner
-    runner = ClaudeRunner(
-        command=config["claude_command"],
+    # Create runner via backend factory (CCDB_BACKEND=claude|codex)
+    backend_name = config["backend"]
+    default_command = "codex" if backend_name == "codex" else "claude"
+    runner = create_backend(
+        backend=backend_name,
+        command=config["claude_command"] or default_command,
         model=config["claude_model"],
         permission_mode=config["claude_permission_mode"],
         working_dir=config["claude_working_dir"] or None,
