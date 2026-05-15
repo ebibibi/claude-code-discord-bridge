@@ -71,8 +71,10 @@ echo "[pre-start] Code at: ${COMMIT}" >&2
 for SITE_PKG in "$CCDB_HOME"/.venv/lib/python*/site-packages; do
     # Install the import hook module
     cat > "$SITE_PKG/_ccdb_dev_hook.py" << 'HOOK_EOF'
-"""Dev worktree import hook — redirects claude_discord to ~/.ccdb-dev-worktree."""
+"""Dev worktree import hook — redirects claude_discord & claude_code_core to ~/.ccdb-dev-worktree."""
 import sys, os, importlib.util
+
+_TARGETS = ("claude_discord", "claude_code_core")
 
 def _install():
     dev_file = os.path.expanduser("~/.ccdb-dev-worktree")
@@ -80,11 +82,12 @@ def _install():
         return
     with open(dev_file) as f:
         worktree = f.read().strip()
-    if not os.path.isdir(os.path.join(worktree, "claude_discord")):
+    if not any(os.path.isdir(os.path.join(worktree, t)) for t in _TARGETS):
         return
     class _Finder:
         def find_spec(self, fullname, path, target=None):
-            if not (fullname == "claude_discord" or fullname.startswith("claude_discord.")):
+            root = fullname.split(".", 1)[0]
+            if root not in _TARGETS:
                 return None
             parts = fullname.split(".")
             pkg = os.path.join(worktree, *parts)

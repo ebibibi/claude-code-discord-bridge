@@ -40,29 +40,36 @@ def load_config() -> dict[str, str]:
         logger.error("DISCORD_CHANNEL_ID is required")
         sys.exit(1)
 
+    def _env(new: str, old: str, default: str = "") -> str:
+        """Read CCDB_* env var with CLAUDE_* fallback."""
+        return os.getenv(new) or os.getenv(old, default)
+
     return {
         "token": token,
         "channel_id": channel_id,
-        "claude_command": os.getenv("CLAUDE_COMMAND", "claude"),
-        "claude_model": os.getenv("CLAUDE_MODEL", "sonnet"),
-        "claude_permission_mode": os.getenv("CLAUDE_PERMISSION_MODE", "acceptEdits"),
-        "claude_working_dir": os.getenv("CLAUDE_WORKING_DIR", ""),
+        "backend": os.getenv("CCDB_BACKEND", "claude"),
+        "command": _env("CCDB_COMMAND", "CLAUDE_COMMAND", ""),
+        "model": _env("CCDB_MODEL", "CLAUDE_MODEL", "sonnet"),
+        "permission_mode": _env("CCDB_PERMISSION_MODE", "CLAUDE_PERMISSION_MODE", "acceptEdits"),
+        "working_dir": _env("CCDB_WORKING_DIR", "CLAUDE_WORKING_DIR", ""),
+        "dangerously_skip_permissions": _env(
+            "CCDB_DANGEROUSLY_SKIP_PERMISSIONS", "CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS", ""
+        ),
+        "allowed_tools": _env("CCDB_ALLOWED_TOOLS", "CLAUDE_ALLOWED_TOOLS", ""),
+        "effort": _env("CCDB_EFFORT", "CLAUDE_EFFORT", ""),
+        "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
         "max_concurrent": os.getenv("MAX_CONCURRENT_SESSIONS", "3"),
         "timeout": os.getenv("SESSION_TIMEOUT_SECONDS", "300"),
         "owner_id": os.getenv("DISCORD_OWNER_ID", ""),
-        "dangerously_skip_permissions": os.getenv("CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS", ""),
-        # Additional config for custom cogs and multi-channel
-        "claude_channel_ids": os.getenv("CLAUDE_CHANNEL_IDS", ""),
+        "channel_ids": _env("CCDB_CHANNEL_IDS", "CLAUDE_CHANNEL_IDS", ""),
+        "monitor_all_channels": _env(
+            "CCDB_MONITOR_ALL_CHANNELS", "CLAUDE_MONITOR_ALL_CHANNELS", "false"
+        ),
         "api_host": os.getenv("API_HOST", "127.0.0.1"),
         "api_port": os.getenv("API_PORT", ""),
-        "allowed_tools": os.getenv("CLAUDE_ALLOWED_TOOLS", ""),
         "custom_cogs_dir": os.getenv("CUSTOM_COGS_DIR", ""),
         "cli_sessions_path": os.getenv("CLI_SESSIONS_PATH", ""),
         "thread_inbox_enabled": os.getenv("THREAD_INBOX_ENABLED", "false"),
-        "monitor_all_channels": os.getenv("CLAUDE_MONITOR_ALL_CHANNELS", "false"),
-        "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
-        "claude_effort": os.getenv("CLAUDE_EFFORT", ""),
-        "backend": os.getenv("CCDB_BACKEND", "claude"),
     }
 
 
@@ -75,9 +82,9 @@ async def main() -> None:
 
     # Parse optional multi-channel IDs
     claude_channel_ids: set[int] | None = None
-    if config["claude_channel_ids"]:
+    if config["channel_ids"]:
         claude_channel_ids = {
-            int(x.strip()) for x in config["claude_channel_ids"].split(",") if x.strip().isdigit()
+            int(x.strip()) for x in config["channel_ids"].split(",") if x.strip().isdigit()
         } or None
 
     # Parse allowed tools
@@ -90,16 +97,16 @@ async def main() -> None:
     default_command = "codex" if backend_name == "codex" else "claude"
     runner = create_backend(
         backend=backend_name,
-        command=config["claude_command"] or default_command,
-        model=config["claude_model"],
-        permission_mode=config["claude_permission_mode"],
-        working_dir=config["claude_working_dir"] or None,
+        command=config["command"] or default_command,
+        model=config["model"],
+        permission_mode=config["permission_mode"],
+        working_dir=config["working_dir"] or None,
         timeout_seconds=int(config["timeout"]),
         dangerously_skip_permissions=config["dangerously_skip_permissions"].lower()
         in ("true", "1", "yes"),
         allowed_tools=allowed_tools,
         append_system_prompt=config["append_system_prompt"] or None,
-        effort=config["claude_effort"] or None,
+        effort=config["effort"] or None,
     )
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None
