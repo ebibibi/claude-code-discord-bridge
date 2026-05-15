@@ -241,13 +241,23 @@ class CodexRunner:
         logger.debug("inject_tool_result called on CodexRunner (no-op): %s", request_id)
 
     def _build_args(self, prompt: str, session_id: str | None) -> list[str]:
-        """Build command-line arguments for codex CLI."""
+        """Build command-line arguments for codex CLI.
+
+        Codex CLI structure (verified against v0.124):
+            codex exec [OPTIONS] [PROMPT]
+            codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+
+        Both subcommands accept --json and --model. The resume positional
+        args come AFTER any flags, with SESSION_ID before PROMPT.
+        """
+        # Always under the `exec` subcommand. `resume` is its sub-subcommand.
+        args = [self.command, "exec"]
         if session_id:
             if not re.match(r"^[a-f0-9\-]+$", session_id):
                 raise ValueError(f"Invalid session_id format: {session_id!r}")
-            args = [self.command, "resume", session_id, "--json", "--model", self.model]
-        else:
-            args = [self.command, "exec", "--json", "--model", self.model]
+            args.append("resume")
+
+        args.extend(["--json", "--model", self.model])
 
         if self.dangerously_skip_permissions:
             args.append("--dangerously-bypass-approvals-and-sandbox")
@@ -257,6 +267,9 @@ class CodexRunner:
         if self.working_dir:
             args.extend(["--cd", self.working_dir])
 
+        # Positional args come last. For resume: SESSION_ID then PROMPT.
+        if session_id:
+            args.append(session_id)
         args.append(prompt)
         return args
 

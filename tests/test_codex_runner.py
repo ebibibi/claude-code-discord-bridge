@@ -204,3 +204,100 @@ class TestParseCodexLine:
         assert event is not None
         assert event.error is not None
         assert event.is_complete is True
+
+
+class TestCodexRunnerArgvStructure:
+    """Strict structural tests — verify args match codex CLI's actual grammar.
+
+    Codex CLI v0.124 grammar (verified against ``codex exec --help`` /
+    ``codex exec resume --help``):
+
+        codex exec [OPTIONS] [PROMPT]
+        codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+
+    Both subcommands accept ``--json``, ``--model``, ``--ask-for-approval``,
+    ``--dangerously-bypass-approvals-and-sandbox``, ``--cd``. The resume
+    positional args come AFTER all flags, with SESSION_ID before PROMPT.
+
+    These tests guard against regressions like the one that shipped briefly
+    in 3.0.0 where resume was invoked as ``codex resume <id> --json …`` —
+    a structure codex rejects with ``error: unexpected argument '--json'
+    found``.
+    """
+
+    def test_new_session_starts_with_exec(self) -> None:
+        runner = CodexRunner(command="codex", model="gpt-5.4")
+        args = runner._build_args("prompt", session_id=None)
+        # First positional must be the command, second must be 'exec',
+        # and 'resume' must NOT appear when starting a new session.
+        assert args[0] == "codex"
+        assert args[1] == "exec"
+        assert "resume" not in args
+
+    def test_resume_starts_with_exec_resume(self) -> None:
+        sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
+        runner = CodexRunner(command="codex", model="gpt-5.4")
+        args = runner._build_args("prompt", session_id=sid)
+        # The first three tokens must be exactly: codex exec resume
+        assert args[:3] == ["codex", "exec", "resume"], (
+            f"Codex resume must be invoked as `codex exec resume`, got: {args[:3]!r}"
+        )
+
+    def test_resume_flags_precede_session_id(self) -> None:
+        sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
+        runner = CodexRunner(
+            command="codex",
+            model="gpt-5.4",
+            permission_mode="acceptEdits",
+            working_dir="/work",
+        )
+        args = runner._build_args("hello", session_id=sid)
+        sid_idx = args.index(sid)
+        # --json, --model, --ask-for-approval, --cd must all come before SESSION_ID.
+        for flag in ("--json", "--model", "--ask-for-approval", "--cd"):
+            assert flag in args, f"{flag} missing from resume args"
+            assert args.index(flag) < sid_idx, (
+                f"{flag} should appear before SESSION_ID in codex exec resume"
+            )
+
+    def test_resume_session_id_before_prompt(self) -> None:
+        sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
+        runner = CodexRunner(command="codex", model="gpt-5.4")
+        args = runner._build_args("hello-prompt", session_id=sid)
+        # SESSION_ID must come BEFORE PROMPT in `codex exec resume`.
+        assert args.index(sid) < args.index("hello-prompt"), (
+            "SESSION_ID must precede PROMPT in codex exec resume"
+        )
+
+    def test_prompt_is_always_last(self) -> None:
+        runner = CodexRunner(command="codex", model="gpt-5.4")
+        # New session
+        args = runner._build_args("the-prompt", session_id=None)
+        assert args[-1] == "the-prompt"
+        # Resume
+        args = runner._build_args("the-prompt", session_id="019e29a0-d5b0-71f0-bdc0-46f09a06fdaf")
+        assert args[-1] == "the-prompt"
+
+    def test_dangerously_bypass_flag_for_resume(self) -> None:
+        sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
+        runner = CodexRunner(
+            command="codex",
+            model="gpt-5.4",
+            dangerously_skip_permissions=True,
+        )
+        args = runner._build_args("hi", session_id=sid)
+        assert "--dangerously-bypass-approvals-and-sandbox" in args
+        # Must precede SESSION_ID like the other flags
+        assert args.index("--dangerously-bypass-approvals-and-sandbox") < args.index(sid)
+
+    def test_no_lingering_resume_top_level_form(self) -> None:
+        """`codex resume` (without `exec`) is NOT a valid codex CLI form."""
+        sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
+        runner = CodexRunner(command="codex", model="gpt-5.4")
+        args = runner._build_args("hi", session_id=sid)
+        # If 'resume' appears at index 1, that means we built `codex resume <id>`
+        # which is rejected by codex. Must be at index 2 (after `exec`).
+        if "resume" in args:
+            assert args.index("resume") == 2, (
+                f"resume must follow exec at index 2, got index {args.index('resume')}"
+            )

@@ -300,9 +300,26 @@ class ClaudeChatCog(commands.Cog):
             )
 
         backend = await self._backend_settings.current_backend(thread_id)
-        if model_override:
-            model: str | None = model_override
+
+        # Model resolution order:
+        # 1. Explicit /model command value for THIS backend (thread > global).
+        #    Env fallback is NOT considered yet — see step 3.
+        # 2. Legacy /model-set value (passed in as ``model_override``).
+        #    Honoured only when the current backend is claude. Passing a
+        #    Claude model id to Codex would cause `codex exec` to fail
+        #    with an unknown model error.
+        # 3. Env-derived per-backend default, then the factory's hard-coded
+        #    default (sonnet for claude, gpt-5.4 for codex). Returned as
+        #    None here so factory.build() picks the right one.
+        explicit_model = await self._backend_settings.explicit_model(backend, thread_id)
+        model: str | None
+        if explicit_model:
+            model = explicit_model
+        elif model_override and backend == "claude":
+            model = model_override
         else:
+            # Fall back to env-set default (current_model() exposes it),
+            # or None for the factory to choose.
             model = await self._backend_settings.current_model(backend, thread_id)
 
         runner = self._factory.build(

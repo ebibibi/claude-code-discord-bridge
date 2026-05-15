@@ -481,20 +481,24 @@ class EventProcessor:
                 if self._config.status:
                     await self._config.status.set_done()
 
-                # Post the user's configured statusLine as Discord subtext.
-                # Runs only when statusLine.command is set in ~/.claude/settings.json.
-                asyncio.create_task(
-                    _post_statusline_footer(
-                        thread=self._config.thread,
-                        working_dir=self._config.runner.working_dir,
-                        model=self._config.runner.model,
-                        context_window=event.context_window,
-                        input_tokens=event.input_tokens,
-                        cache_creation_tokens=event.cache_creation_tokens,
-                        cache_read_tokens=event.cache_read_tokens,
-                    ),
-                    name=f"statusline-{self._config.thread.id}",
-                )
+                # Post the configured statusLine as Discord subtext. Only
+                # meaningful for the Claude backend — the statusLine command
+                # reads ~/.claude/settings.json and surfaces Anthropic-specific
+                # quota windows (5h, 7d) that have no Codex equivalent. Skip
+                # for non-claude backends entirely.
+                if _backend_name_from_runner(self._config.runner) == "claude":
+                    asyncio.create_task(
+                        _post_statusline_footer(
+                            thread=self._config.thread,
+                            working_dir=self._config.runner.working_dir,
+                            model=self._config.runner.model,
+                            context_window=event.context_window,
+                            input_tokens=event.input_tokens,
+                            cache_creation_tokens=event.cache_creation_tokens,
+                            cache_read_tokens=event.cache_read_tokens,
+                        ),
+                        name=f"statusline-{self._config.thread.id}",
+                    )
 
                 # Schedule inbox classification as a background task (non-blocking).
                 # Only runs when inbox_repo is wired in (THREAD_INBOX_ENABLED=true).

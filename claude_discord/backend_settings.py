@@ -60,6 +60,25 @@ class BackendSettings:
             return v
         return self._env_backend
 
+    async def explicit_model(self, backend: str, thread_id: int | None = None) -> str | None:
+        """Return only the EXPLICITLY-stored model — env fallback is NOT consulted.
+
+        Use this when callers want to distinguish 'user explicitly set a
+        per-backend model via /model' from 'we fell back to whatever was
+        in .env'. ``current_model()`` mixes those two together; this
+        method keeps them apart.
+
+        Resolution: thread > global > None.
+        """
+        if backend not in ALL_BACKENDS:
+            return None
+        if thread_id is not None:
+            v = await self.repo.get(f"{MODEL_THREAD_PREFIX}{thread_id}.{backend}")
+            if v:
+                return v
+        v = await self.repo.get(f"{MODEL_GLOBAL_PREFIX}{backend}")
+        return v if v else None
+
     async def current_model(self, backend: str, thread_id: int | None = None) -> str | None:
         """Return the model for the given backend, or None if no override.
 

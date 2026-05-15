@@ -137,8 +137,32 @@ class BackendCommandCog(commands.Cog):
             )
             return
 
-        # Persist
+        # Persist the new backend. Capture the previous one first so we can
+        # detect a real change (and decide whether to wipe the thread's
+        # stored session ID, which is not interoperable across backends).
+        prev_backend = await self._settings.current_backend(target_thread_id)
         await self._settings.set_backend(name, thread_id=target_thread_id)
+
+        # When the EFFECTIVE backend actually changed, drop any stored
+        # session ID so the next message starts a fresh session in the new
+        # backend. Codex and Claude session stores are not interoperable
+        # (passing a Claude session UUID to `codex exec resume` -- or vice
+        # versa -- fails at the CLI level).
+        if prev_backend != name and target_thread_id is not None:
+            try:
+                deleted = await self._chat_cog.repo.delete(target_thread_id)
+                if deleted:
+                    logger.info(
+                        "Cleared stored session for thread %d on backend switch %s -> %s",
+                        target_thread_id,
+                        prev_backend,
+                        name,
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to clear thread %d session on backend change",
+                    target_thread_id,
+                )
 
         # If global change, also swap the shared default runner so the next
         # ClaudeChatCog session inherits it (thread overrides will be honoured
