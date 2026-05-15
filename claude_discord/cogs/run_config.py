@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from ..claude.runner import ClaudeRunner
+from claude_code_core.backend import SessionBackend
+
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
@@ -56,7 +57,7 @@ class RunConfig:
     """
 
     thread: discord.Thread | discord.TextChannel
-    runner: ClaudeRunner
+    runner: SessionBackend
     prompt: str
     session_id: str | None = None
     repo: SessionRepository | None = None

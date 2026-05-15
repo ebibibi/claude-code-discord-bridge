@@ -25,7 +25,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..claude.runner import ClaudeRunner
+from claude_code_core.backend import SessionBackend
+
 from ..concurrency import SessionRegistry
 from ..database.repository import SessionRepository
 from ._run_helper import run_claude_with_config
@@ -137,7 +138,7 @@ class SkillCommandCog(commands.Cog):
         self,
         bot: commands.Bot,
         repo: SessionRepository,
-        runner: ClaudeRunner,
+        runner: SessionBackend,
         claude_channel_id: int,
         skills_dir: Path | str | None = None,
         allowed_user_ids: set[int] | None = None,

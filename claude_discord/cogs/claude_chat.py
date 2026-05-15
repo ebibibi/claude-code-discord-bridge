@@ -21,8 +21,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from claude_code_core.backend import SessionBackend
+
 from ..claude.rewind import find_session_jsonl, parse_user_turns
-from ..claude.runner import ClaudeRunner
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
@@ -92,7 +93,7 @@ class ClaudeChatCog(commands.Cog):
         self,
         bot: ClaudeDiscordBot,
         repo: SessionRepository,
-        runner: ClaudeRunner,
+        runner: SessionBackend,
         max_concurrent: int = 3,
         allowed_user_ids: set[int] | None = None,
         registry: SessionRegistry | None = None,
@@ -130,7 +131,7 @@ class ClaudeChatCog(commands.Cog):
         # Channels where only text responses are shown (no tool embeds, thinking, etc.).
         self._chat_only_channel_ids: set[int] = chat_only_channel_ids or set()
         self._registry = registry or getattr(bot, "session_registry", None)
-        self._active_runners: dict[int, ClaudeRunner] = {}
+        self._active_runners: dict[int, SessionBackend] = {}
         # Tracks the asyncio.Task running _run_claude for each thread.
         # Used by _handle_thread_reply to wait for an interrupted session
         # to fully clean up before starting the replacement session.

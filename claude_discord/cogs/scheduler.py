@@ -25,7 +25,8 @@ from ._run_helper import run_claude_with_config
 from .run_config import RunConfig
 
 if TYPE_CHECKING:
-    from ..claude.runner import ClaudeRunner
+    from claude_code_core.backend import SessionBackend
+
     from ..database.repository import SessionRepository
     from ..database.task_repo import TaskRepository
 
@@ -47,7 +48,7 @@ class SchedulerCog(commands.Cog):
     def __init__(
         self,
         bot: commands.Bot,
-        runner: ClaudeRunner,
+        runner: SessionBackend,
         *,
         repo: TaskRepository,
         session_repo: SessionRepository | None = None,

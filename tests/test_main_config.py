@@ -65,9 +65,11 @@ class TestLoadConfig:
 
         assert config["token"] == "fake-token"
         assert config["channel_id"] == "123456"
-        assert config["claude_command"] == "claude"
-        assert config["claude_model"] == "sonnet"
-        assert config["claude_permission_mode"] == "acceptEdits"
+        # "command" defaults to empty; backend-aware default is picked in main()
+        assert config["command"] == ""
+        assert config["model"] == "sonnet"
+        assert config["permission_mode"] == "acceptEdits"
+        assert config["backend"] == "claude"  # CCDB_BACKEND default
         assert config["max_concurrent"] == "3"
         assert config["timeout"] == "300"
         assert config["custom_cogs_dir"] == ""
@@ -103,12 +105,12 @@ class TestLoadConfig:
         ):
             config = load_config()
 
-        assert config["claude_command"] == "/usr/bin/claude"
-        assert config["claude_model"] == "opus"
-        assert config["claude_working_dir"] == "/home/test"
+        assert config["command"] == "/usr/bin/claude"
+        assert config["model"] == "opus"
+        assert config["working_dir"] == "/home/test"
         assert config["max_concurrent"] == "5"
         assert config["owner_id"] == "999"
-        assert config["claude_channel_ids"] == "111,222,333"
+        assert config["channel_ids"] == "111,222,333"
         assert config["api_host"] == "0.0.0.0"
         assert config["api_port"] == "9000"
         assert config["allowed_tools"] == "Read,Write"

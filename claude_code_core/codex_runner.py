@@ -132,6 +132,7 @@ class CodexRunner:
         working_dir: str | None = None,
         timeout_seconds: int = 300,
         dangerously_skip_permissions: bool = False,
+        allowed_tools: list[str] | None = None,
         api_port: int | None = None,
         api_secret: str | None = None,
         thread_id: int | None = None,
@@ -144,6 +145,7 @@ class CodexRunner:
         self.working_dir = working_dir
         self.timeout_seconds = timeout_seconds
         self.dangerously_skip_permissions = dangerously_skip_permissions
+        self.allowed_tools = allowed_tools
         self.api_port = api_port
         self.api_secret = api_secret
         self.thread_id = thread_id
@@ -205,6 +207,7 @@ class CodexRunner:
             ),
             timeout_seconds=self.timeout_seconds,
             dangerously_skip_permissions=self.dangerously_skip_permissions,
+            allowed_tools=self.allowed_tools,
             api_port=self.api_port,
             api_secret=self.api_secret,
             thread_id=thread_id if thread_id is not None else self.thread_id,

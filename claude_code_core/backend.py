@@ -17,12 +17,17 @@ if TYPE_CHECKING:
 class SessionBackend(Protocol):
     """Protocol that all CLI backends must satisfy."""
 
+    command: str
     model: str
     working_dir: str | None
     permission_mode: str
     images: list[ImageData] | None
+    api_port: int | None
+    timeout_seconds: int
+    dangerously_skip_permissions: bool
+    allowed_tools: list[str] | None
 
-    async def run(
+    def run(
         self,
         prompt: str,
         session_id: str | None = None,
@@ -35,6 +40,8 @@ class SessionBackend(Protocol):
     async def kill(self) -> None: ...
 
     async def inject_tool_result(self, request_id: str, data: dict) -> None: ...
+
+    def _build_env(self) -> dict[str, str]: ...
 
 
 def create_backend(

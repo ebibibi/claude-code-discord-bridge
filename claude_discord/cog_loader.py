@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from discord.ext.commands import Bot
 
-    from .claude.runner import ClaudeRunner
+    from claude_code_core.backend import SessionBackend
+
     from .setup import BridgeComponents
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 async def load_custom_cogs(
     cogs_dir: Path,
     bot: Bot,
-    runner: ClaudeRunner | None,
+    runner: SessionBackend | None,
     components: BridgeComponents,
 ) -> int:
     """Load custom Cog files from *cogs_dir*.

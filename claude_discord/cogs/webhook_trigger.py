@@ -25,7 +25,7 @@ from ..cogs.run_config import RunConfig
 from ..concurrency import SessionRegistry
 
 if TYPE_CHECKING:
-    from ..claude.runner import ClaudeRunner
+    from claude_code_core.backend import SessionBackend
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class WebhookTriggerCog(commands.Cog):
     def __init__(
         self,
         bot: commands.Bot,
-        runner: ClaudeRunner,
+        runner: SessionBackend,
         triggers: dict[str, WebhookTrigger],
         allowed_webhook_ids: set[int] | None = None,
         channel_ids: set[int] | None = None,
