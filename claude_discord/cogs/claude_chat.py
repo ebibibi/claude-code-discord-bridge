@@ -70,6 +70,8 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "sync-settings": "📌 Session",
     "model-show": "🤖 Model",
     "model-set": "🤖 Model",
+    "model": "🤖 Model",
+    "backend": "🤖 Model",
     "effort-show": "⚡ Effort",
     "effort-set": "⚡ Effort",
     "effort-clear": "⚡ Effort",

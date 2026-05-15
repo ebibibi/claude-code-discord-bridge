@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
     from claude_code_core.backend import SessionBackend
 
+    from .backend_factory import BackendFactory
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
     from .database.resume_repo import PendingResumeRepository
@@ -85,6 +86,7 @@ async def setup_bridge(
     auto_rename_threads: bool | None = None,
     monitor_all_channels: bool | None = None,
     context_links_config: str | None = None,
+    backend_factory: BackendFactory | None = None,
 ) -> BridgeComponents:
     """Initialize and register all ccdb Cogs in one call.
 
@@ -319,6 +321,27 @@ async def setup_bridge(
     await bot.add_cog(context_links_cog)
     if context_links_cog._config is not None:
         logger.info("Registered ContextLinksCog (config=%s)", context_links_config)
+
+    # --- BackendCommandCog (optional — only if a BackendFactory was provided) ---
+    if backend_factory is not None:
+        from .backend_settings import BackendSettings
+        from .cogs.backend_command import BackendCommandCog
+
+        _runner_class = runner.__class__.__name__
+        backend_settings = BackendSettings(
+            settings_repo,
+            env_backend=_runner_class.replace("Runner", "").lower(),
+            env_model_for_claude=(runner.model if _runner_class == "ClaudeRunner" else ""),
+            env_model_for_codex=(runner.model if _runner_class == "CodexRunner" else ""),
+        )
+        backend_cmd_cog = BackendCommandCog(
+            bot,  # type: ignore[arg-type]
+            settings=backend_settings,
+            factory=backend_factory,
+            chat_cog=chat_cog,
+        )
+        await bot.add_cog(backend_cmd_cog)
+        logger.info("Registered BackendCommandCog")
 
     components = BridgeComponents(
         session_repo=session_repo,

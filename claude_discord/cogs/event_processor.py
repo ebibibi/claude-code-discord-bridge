@@ -40,6 +40,15 @@ from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
 
+
+def _backend_name_from_runner(runner: object) -> str:
+    """Best-effort mapping from runner class name to embed backend tag."""
+    cls = type(runner).__name__
+    if cls == "CodexRunner":
+        return "codex"
+    return "claude"
+
+
 # Marker file prefix. The full name includes the thread ID to prevent
 # cross-contamination when multiple sessions share the same working_dir.
 _ATTACHMENT_MARKER_PREFIX = ".ccdb-attachments"
@@ -282,7 +291,13 @@ class EventProcessor:
         # Guard: post session_start_embed only once (Claude can emit multiple SYSTEM events).
         # Skip in chat_only mode — no session start embed.
         if not self._chat_only and not self._config.session_id and not self._session_start_sent:
-            await self._config.thread.send(embed=session_start_embed(self._state.session_id))
+            await self._config.thread.send(
+                embed=session_start_embed(
+                    self._state.session_id,
+                    backend=_backend_name_from_runner(self._config.runner),
+                    model=self._config.runner.model,
+                )
+            )
             self._session_start_sent = True
 
     async def _on_assistant(self, event: StreamEvent) -> None:
@@ -459,6 +474,8 @@ class EventProcessor:
                         event.cache_read_tokens,
                         event.context_window,
                         event.cache_creation_tokens,
+                        backend=_backend_name_from_runner(self._config.runner),
+                        model=self._config.runner.model,
                     )
                 )
                 if self._config.status:

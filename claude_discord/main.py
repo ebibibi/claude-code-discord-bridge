@@ -49,6 +49,10 @@ def load_config() -> dict[str, str]:
         "channel_id": channel_id,
         "backend": os.getenv("CCDB_BACKEND", "claude"),
         "command": _env("CCDB_COMMAND", "CLAUDE_COMMAND", ""),
+        # Per-backend explicit command paths. Used by BackendFactory when
+        # the user switches backend at runtime via /backend.
+        "claude_command": _env("CCDB_CLAUDE_COMMAND", "CLAUDE_COMMAND", ""),
+        "codex_command": os.getenv("CCDB_CODEX_COMMAND", ""),
         "model": _env("CCDB_MODEL", "CLAUDE_MODEL", "sonnet"),
         "permission_mode": _env("CCDB_PERMISSION_MODE", "CLAUDE_PERMISSION_MODE", "acceptEdits"),
         "working_dir": _env("CCDB_WORKING_DIR", "CLAUDE_WORKING_DIR", ""),
@@ -95,6 +99,28 @@ async def main() -> None:
     # Create runner via backend factory (CCDB_BACKEND=claude|codex)
     backend_name = config["backend"]
     default_command = "codex" if backend_name == "codex" else "claude"
+
+    # BackendFactory is the runtime authority for building Claude/Codex
+    # runners on demand (e.g. when the user switches via /backend).
+    from .backend_factory import BackendFactory
+
+    factory = BackendFactory(
+        claude_command=config["claude_command"]
+        or (config["command"] if backend_name == "claude" else "")
+        or "claude",
+        codex_command=config["codex_command"]
+        or (config["command"] if backend_name == "codex" else "")
+        or "codex",
+        permission_mode=config["permission_mode"],
+        working_dir=config["working_dir"] or None,
+        timeout_seconds=int(config["timeout"]),
+        dangerously_skip_permissions=config["dangerously_skip_permissions"].lower()
+        in ("true", "1", "yes"),
+        allowed_tools=allowed_tools,
+        append_system_prompt=config["append_system_prompt"] or None,
+        effort=config["effort"] or None,
+    )
+
     runner = create_backend(
         backend=backend_name,
         command=config["command"] or default_command,
@@ -138,6 +164,7 @@ async def main() -> None:
             bot,
             runner,
             api_server=api_server,
+            backend_factory=factory,
             allowed_user_ids=allowed_user_ids,
             claude_channel_id=channel_id,
             claude_channel_ids=claude_channel_ids,
