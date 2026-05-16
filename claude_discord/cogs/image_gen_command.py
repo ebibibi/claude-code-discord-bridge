@@ -242,19 +242,35 @@ class ImageGenCommandCog(commands.Cog):
 
     @app_commands.command(
         name="whitebg",
-        description="白抜き画像バッチ生成（JAN絞り込み or デフォルト入力フォルダの全画像）",
+        description="白抜き画像バッチ生成（JAN絞り込み・フォルダ指定・force/dry-run対応）",
     )
     @app_commands.describe(
-        jans="JANコード（スペース区切り、13桁・複数指定可）。省略時はデフォルト入力フォルダの全画像（最大250枚）",
+        jans="JANコード（スペース区切り、13桁・複数指定可）。省略時はフォルダ全画像（最大250枚）",
+        folder="入力DriveフォルダID or URL。省略時はデフォルト入力フォルダ",
+        output_folder="出力DriveフォルダID or URL。省略時はデフォルト出力フォルダ（サムネ/LP入力）",
+        force="処理済みファイルも上書きする",
+        dry_run="一覧表示のみ（実処理しない）",
     )
     async def whitebg_command(
         self,
         interaction: discord.Interaction,
         jans: str = "",
+        folder: str = "",
+        output_folder: str = "",
+        force: bool = False,
+        dry_run: bool = False,
     ) -> None:
         jan_list = _parse_jans(jans) if jans else []
 
         cmd_parts = ["bash", f"{REPO_ROOT}/scripts/whitebg_batch.sh"]
+        if folder:
+            cmd_parts.extend(["--folder", folder])
+        if output_folder:
+            cmd_parts.extend(["--output-folder", output_folder])
+        if force:
+            cmd_parts.append("--force")
+        if dry_run:
+            cmd_parts.append("--dry-run")
         if jan_list:
             cmd_parts.extend(jan_list)
 
@@ -271,18 +287,32 @@ class ImageGenCommandCog(commands.Cog):
             return
 
         # 処理時間目安: 1枚あたり約30秒（Gemini API + リトライ込み）
-        if jan_list:
+        if dry_run:
+            target_label = "（dry-run: 一覧のみ）"
+            elapsed_est = "数秒"
+        elif jan_list:
             target_label = f"**{len(jan_list)}件** (JAN指定)"
             elapsed_est = f"約{len(jan_list) * 30 // 60 + 1}分"
         else:
-            target_label = "デフォルト入力フォルダ全画像（最大250枚）"
+            target_label = "フォルダ全画像（最大250枚）"
             elapsed_est = "数十分〜数時間（枚数次第）"
+
+        # オプションラベル
+        opts = []
+        opts.append("入力:指定" if folder else "入力:デフォルト")
+        if output_folder:
+            opts.append("出力:指定")
+        if force:
+            opts.append("force=ON")
+        if dry_run:
+            opts.append("dry-run=ON")
 
         embed = discord.Embed(
             title="🔄 白抜き生成バッチ起動",
             description=(
                 f"対象: {target_label}\n"
                 f"処理時間目安: {elapsed_est}\n"
+                f"オプション: {' / '.join(opts)}\n"
                 f"進捗は <#1496390706304909332> で通知されます\n"
                 f"PID: `{pid}`"
             ),
