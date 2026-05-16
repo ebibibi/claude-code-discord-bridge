@@ -195,9 +195,14 @@ async def main() -> None:
     kw_cog = KwTriggerCog(bot)
 
     # ListingCommandCog — /shuppin (スマホ出品: JAN+原価→全モール出品)
-    from .cogs.listing_command import ListingCommandCog
-
-    listing_cog = ListingCommandCog(bot)
+    # SHUPPIN_ENABLED=1 の場合のみ読み込む（デフォルト無効）
+    listing_cog = None
+    if os.getenv("SHUPPIN_ENABLED", "").strip() in ("1", "true", "yes"):
+        from .cogs.listing_command import ListingCommandCog
+        listing_cog = ListingCommandCog(bot)
+        logger.info("ListingCommandCog enabled (SHUPPIN_ENABLED=1)")
+    else:
+        logger.info("ListingCommandCog disabled (set SHUPPIN_ENABLED=1 to enable)")
 
     async with bot:
         await bot.add_cog(cog)
@@ -208,7 +213,8 @@ async def main() -> None:
         await bot.add_cog(shell_exec_cog)
         await bot.add_cog(shohin_cog)
         await bot.add_cog(kw_cog)
-        await bot.add_cog(listing_cog)
+        if listing_cog is not None:
+            await bot.add_cog(listing_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)

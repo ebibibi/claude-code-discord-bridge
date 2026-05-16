@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import discord
@@ -39,6 +40,32 @@ COLOR_WORKING = 0xF39C12   # オレンジ - 処理中
 
 # 1人1商品ロック: {user_id: jan}
 _active_locks: dict[int, str] = {}
+
+
+def _load_allowed_user_ids() -> set[int] | None:
+    """SHUPPIN_ALLOWED_USER_IDS 環境変数からユーザーIDセットを取得.
+
+    未設定 → DISCORD_OWNER_ID のみ許可。
+    "*" → 全ユーザー許可。
+    "id1,id2,..." → 指定ユーザーのみ許可。
+    """
+    raw = os.getenv("SHUPPIN_ALLOWED_USER_IDS", "")
+    if raw.strip() == "*":
+        return None  # 全員許可
+
+    ids: set[int] = set()
+    if raw.strip():
+        for uid in raw.split(","):
+            uid = uid.strip()
+            if uid.isdigit():
+                ids.add(int(uid))
+
+    # 未設定の場合はオーナーIDだけ許可
+    owner = os.getenv("DISCORD_OWNER_ID", "")
+    if owner.strip().isdigit():
+        ids.add(int(owner.strip()))
+
+    return ids if ids else None
 
 
 class ListingConfirmView(discord.ui.View):
@@ -95,6 +122,14 @@ class ListingCommandCog(commands.Cog):
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
+        self._allowed_user_ids = _load_allowed_user_ids()
+        if self._allowed_user_ids is not None:
+            logger.info(
+                "ListingCommandCog: allowed users = %s",
+                ", ".join(str(uid) for uid in self._allowed_user_ids),
+            )
+        else:
+            logger.info("ListingCommandCog: all users allowed")
 
     @app_commands.command(
         name="shuppin",
@@ -112,6 +147,15 @@ class ListingCommandCog(commands.Cog):
     ) -> None:
         """JAN+原価を入力 → プレビュー → 承認 → 全モール出品."""
         user_id = interaction.user.id
+
+        # ユーザー権限チェック
+        if self._allowed_user_ids is not None and user_id not in self._allowed_user_ids:
+            await interaction.response.send_message(
+                "このコマンドの使用権限がありません。管理者に連絡してください。",
+                ephemeral=True,
+            )
+            return
+
         jan = jan.strip()
 
         # JAN バリデーション
