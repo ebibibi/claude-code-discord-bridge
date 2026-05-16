@@ -235,3 +235,64 @@ class ImageGenCommandCog(commands.Cog):
             color=COLOR_STARTED,
         )
         await interaction.response.send_message(embed=embed)
+
+    # ─────────────────────────────────────────────
+    # /whitebg — 白抜き画像バッチ生成
+    # ─────────────────────────────────────────────
+
+    @app_commands.command(
+        name="whitebg",
+        description="白抜き画像バッチ生成（JAN絞り込み or デフォルト入力フォルダの全画像）",
+    )
+    @app_commands.describe(
+        jans="JANコード（スペース区切り、13桁・複数指定可）。省略時はデフォルト入力フォルダの全画像（最大250枚）",
+    )
+    async def whitebg_command(
+        self,
+        interaction: discord.Interaction,
+        jans: str = "",
+    ) -> None:
+        jan_list = _parse_jans(jans) if jans else []
+
+        cmd_parts = ["bash", f"{REPO_ROOT}/scripts/whitebg_batch.sh"]
+        if jan_list:
+            cmd_parts.extend(jan_list)
+
+        try:
+            pid = await _spawn_detached(*cmd_parts)
+        except Exception as e:
+            logger.exception("白抜き生成バッチ起動失敗")
+            embed = discord.Embed(
+                title="白抜き生成バッチ起動失敗",
+                description=f"```\n{e}\n```",
+                color=COLOR_ERROR,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        # 処理時間目安: 1枚あたり約30秒（Gemini API + リトライ込み）
+        if jan_list:
+            target_label = f"**{len(jan_list)}件** (JAN指定)"
+            elapsed_est = f"約{len(jan_list) * 30 // 60 + 1}分"
+        else:
+            target_label = "デフォルト入力フォルダ全画像（最大250枚）"
+            elapsed_est = "数十分〜数時間（枚数次第）"
+
+        embed = discord.Embed(
+            title="🔄 白抜き生成バッチ起動",
+            description=(
+                f"対象: {target_label}\n"
+                f"処理時間目安: {elapsed_est}\n"
+                f"進捗は <#1496390706304909332> で通知されます\n"
+                f"PID: `{pid}`"
+            ),
+            color=COLOR_STARTED,
+        )
+        if jan_list:
+            embed.add_field(
+                name="JAN一覧",
+                value="\n".join(f"• `{j}`" for j in jan_list[:20])
+                + (f"\n…他{len(jan_list)-20}件" if len(jan_list) > 20 else ""),
+                inline=False,
+            )
+        await interaction.response.send_message(embed=embed)
