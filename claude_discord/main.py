@@ -194,6 +194,11 @@ async def main() -> None:
 
     kw_cog = KwTriggerCog(bot)
 
+    # ListingCommandCog — /shuppin (スマホ出品: JAN+原価→全モール出品)
+    from .cogs.listing_command import ListingCommandCog
+
+    listing_cog = ListingCommandCog(bot)
+
     async with bot:
         await bot.add_cog(cog)
         await bot.add_cog(repo_viewer_cog)
@@ -203,6 +208,7 @@ async def main() -> None:
         await bot.add_cog(shell_exec_cog)
         await bot.add_cog(shohin_cog)
         await bot.add_cog(kw_cog)
+        await bot.add_cog(listing_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)
