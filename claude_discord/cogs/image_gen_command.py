@@ -326,3 +326,172 @@ class ImageGenCommandCog(commands.Cog):
                 inline=False,
             )
         await interaction.response.send_message(embed=embed)
+
+    # ─────────────────────────────────────────────
+    # /prepare — SS-03 画像生成データ準備
+    # ─────────────────────────────────────────────
+
+    @app_commands.command(
+        name="prepare",
+        description="SS-03 画像生成データ準備（Drive白抜き画像→SS-03 pending登録）",
+    )
+    @app_commands.describe(
+        shop="対象店舗（デフォルト mofu）",
+        dry_run="一覧表示のみ（実処理しない）",
+    )
+    @app_commands.choices(
+        shop=[
+            app_commands.Choice(name="mofu", value="mofu"),
+            app_commands.Choice(name="fdmart", value="fdmart"),
+            app_commands.Choice(name="both（mofu→fdmart）", value="both"),
+        ]
+    )
+    async def prepare_command(
+        self,
+        interaction: discord.Interaction,
+        shop: app_commands.Choice[str] | None = None,
+        dry_run: bool = False,
+    ) -> None:
+        shop_val = shop.value if shop else "mofu"
+        cmd_parts = ["bash", f"{REPO_ROOT}/scripts/prepare_images_batch.sh", "--shop", shop_val]
+        if dry_run:
+            cmd_parts.append("--dry-run")
+
+        try:
+            pid = await _spawn_detached(*cmd_parts)
+        except Exception as e:
+            logger.exception("SS-03準備バッチ起動失敗")
+            embed = discord.Embed(
+                title="SS-03準備バッチ起動失敗",
+                description=f"```\n{e}\n```",
+                color=COLOR_ERROR,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🔄 SS-03 画像生成データ準備起動",
+            description=(
+                f"店舗: **{shop_val}**\n"
+                f"モード: {'dry-run（一覧のみ）' if dry_run else '本実行'}\n"
+                f"処理時間目安: 数秒〜数十秒\n"
+                f"進捗は <#1496390706304909332> で通知されます\n"
+                f"PID: `{pid}`"
+            ),
+            color=COLOR_STARTED,
+        )
+        await interaction.response.send_message(embed=embed)
+
+    # ─────────────────────────────────────────────
+    # /archive — SS-03 完了行アーカイブ
+    # ─────────────────────────────────────────────
+
+    @app_commands.command(
+        name="archive",
+        description="SS-03 完了行アーカイブ（done行を完了シートに移動）",
+    )
+    @app_commands.describe(
+        shop="対象店舗（デフォルト mofu）",
+        dry_run="一覧表示のみ（実処理しない）",
+    )
+    @app_commands.choices(
+        shop=[
+            app_commands.Choice(name="mofu", value="mofu"),
+            app_commands.Choice(name="fdmart", value="fdmart"),
+            app_commands.Choice(name="both（mofu→fdmart）", value="both"),
+        ]
+    )
+    async def archive_command(
+        self,
+        interaction: discord.Interaction,
+        shop: app_commands.Choice[str] | None = None,
+        dry_run: bool = False,
+    ) -> None:
+        shop_val = shop.value if shop else "mofu"
+        cmd_parts = ["bash", f"{REPO_ROOT}/scripts/archive_done_batch.sh", "--shop", shop_val]
+        if dry_run:
+            cmd_parts.append("--dry-run")
+
+        try:
+            pid = await _spawn_detached(*cmd_parts)
+        except Exception as e:
+            logger.exception("SS-03アーカイブバッチ起動失敗")
+            embed = discord.Embed(
+                title="SS-03アーカイブバッチ起動失敗",
+                description=f"```\n{e}\n```",
+                color=COLOR_ERROR,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="🔄 SS-03 完了行アーカイブ起動",
+            description=(
+                f"店舗: **{shop_val}**\n"
+                f"モード: {'dry-run（一覧のみ）' if dry_run else '本実行'}\n"
+                f"処理時間目安: 数秒〜数十秒\n"
+                f"進捗は <#1496390706304909332> で通知されます\n"
+                f"PID: `{pid}`"
+            ),
+            color=COLOR_STARTED,
+        )
+        await interaction.response.send_message(embed=embed)
+
+    # ─────────────────────────────────────────────
+    # /sp_dimensions — SP-API パッケージ寸法補完
+    # ─────────────────────────────────────────────
+
+    @app_commands.command(
+        name="sp_dimensions",
+        description="SP-API パッケージ寸法をSS-08 V〜Y列に書き込み（行範囲指定）",
+    )
+    @app_commands.describe(
+        start_row="開始行（デフォルト241）",
+        end_row="終了行（デフォルト290）",
+    )
+    async def sp_dimensions_command(
+        self,
+        interaction: discord.Interaction,
+        start_row: int = 241,
+        end_row: int = 290,
+    ) -> None:
+        if end_row < start_row:
+            await interaction.response.send_message(
+                f"end_row ({end_row}) は start_row ({start_row}) 以上を指定してください",
+                ephemeral=True,
+            )
+            return
+
+        cmd_parts = [
+            "bash",
+            f"{REPO_ROOT}/scripts/sp_dimensions_batch.sh",
+            str(start_row),
+            str(end_row),
+        ]
+        try:
+            pid = await _spawn_detached(*cmd_parts)
+        except Exception as e:
+            logger.exception("SP-API寸法補完バッチ起動失敗")
+            embed = discord.Embed(
+                title="SP-API寸法補完バッチ起動失敗",
+                description=f"```\n{e}\n```",
+                color=COLOR_ERROR,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        rows = end_row - start_row + 1
+        # 1行あたり SP-API 1回呼び出し ≒ 2秒
+        elapsed_est = max(1, rows * 2 // 60)
+
+        embed = discord.Embed(
+            title="🔄 SP-API 寸法補完バッチ起動",
+            description=(
+                f"対象行: **{start_row} 〜 {end_row}**（{rows}行）\n"
+                f"処理時間目安: 約{elapsed_est}分\n"
+                f"進捗は <#1496390706304909332> で通知されます\n"
+                f"PID: `{pid}`"
+            ),
+            color=COLOR_STARTED,
+        )
+        await interaction.response.send_message(embed=embed)
