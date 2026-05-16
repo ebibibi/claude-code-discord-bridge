@@ -224,6 +224,13 @@ async def setup_bridge(
     await bot.add_cog(shohin_cog)
     logger.info("Registered ShohinSearchCog")
 
+    # --- ImageGenCommandCog（画像生成バッチコマンド: /lp /thumbnail /manga） ---
+    from .cogs.image_gen_command import ImageGenCommandCog
+
+    image_gen_cog = ImageGenCommandCog(bot)
+    await bot.add_cog(image_gen_cog)
+    logger.info("Registered ImageGenCommandCog")
+
     # --- KwTriggerCog（KW調査 n8n Webhookトリガー） ---
     from .cogs.kw_trigger import KwTriggerCog
 

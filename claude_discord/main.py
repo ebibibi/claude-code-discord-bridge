@@ -189,6 +189,11 @@ async def main() -> None:
 
     shohin_cog = ShohinSearchCog(bot)
 
+    # ImageGenCommandCog — /lp /thumbnail /manga (画像生成バッチ)
+    from .cogs.image_gen_command import ImageGenCommandCog
+
+    image_gen_cog = ImageGenCommandCog(bot)
+
     # KwTriggerCog — /kw, /kw-opt (n8n KW WF Webhook trigger)
     from .cogs.kw_trigger import KwTriggerCog
 
@@ -212,6 +217,7 @@ async def main() -> None:
         await bot.add_cog(session_manage_cog)
         await bot.add_cog(shell_exec_cog)
         await bot.add_cog(shohin_cog)
+        await bot.add_cog(image_gen_cog)
         await bot.add_cog(kw_cog)
         if listing_cog is not None:
             await bot.add_cog(listing_cog)
