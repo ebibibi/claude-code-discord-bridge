@@ -321,14 +321,38 @@ class OrderCommandCog(commands.Cog):
             return
 
         # JAN:cs 形式のバリデーション
-        jan_items = jans.split()
-        for item in jan_items:
+        jan_items = []
+        for item in jans.split():
+            # フラグ混入を除去（--reason:欠品 のようなものを弾く）
+            if item.startswith("-"):
+                continue
             if ":" not in item:
                 await interaction.response.send_message(
                     f"不正な形式: `{item}`\nJAN:cs の形式で入力してください（例: `4902397847281:3`）",
                     ephemeral=True,
                 )
                 return
+            jan_part, cs_part = item.split(":", 1)
+            if not jan_part.isdigit():
+                await interaction.response.send_message(
+                    f"JANが数値ではありません: `{item}`",
+                    ephemeral=True,
+                )
+                return
+            if not cs_part.isdigit() or int(cs_part) <= 0:
+                await interaction.response.send_message(
+                    f"cs数が不正です: `{item}`（1以上の数値を指定）",
+                    ephemeral=True,
+                )
+                return
+            jan_items.append(item)
+
+        if not jan_items:
+            await interaction.response.send_message(
+                "有効なJAN:csが見つかりませんでした。例: `4902397847281:3`",
+                ephemeral=True,
+            )
+            return
 
         # 1人1発注ロック
         if user_id in _active_locks:
@@ -355,8 +379,17 @@ class OrderCommandCog(commands.Cog):
         user_id: int,
     ) -> None:
         """発注フローのメイン処理"""
-        reason_value = reason.value if reason else "restock"
-        reason_label = reason.name if reason else "定期補充"
+        # reason がChoiceオブジェクトか生の文字列かを安全に処理
+        if reason is None:
+            reason_value = "restock"
+            reason_label = "定期補充"
+        elif hasattr(reason, "value"):
+            reason_value = reason.value
+            reason_label = reason.name
+        else:
+            # コマンドツリー未同期時に生文字列が来る場合
+            reason_value = str(reason)
+            reason_label = str(reason)
 
         # Step 1: 処理中表示
         embed = discord.Embed(
