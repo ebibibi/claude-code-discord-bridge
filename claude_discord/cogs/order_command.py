@@ -118,7 +118,7 @@ class OrderConfirmView(discord.ui.View):
         self.stop()
 
 
-def _build_preview_embed(preview: dict) -> discord.Embed:
+def _build_preview_embed(preview: dict, user_display_name: str = "") -> discord.Embed:
     """プレビューJSONからEmbed を構築"""
     orders = preview.get("orders", [])
     errors = preview.get("errors", [])
@@ -136,16 +136,22 @@ def _build_preview_embed(preview: dict) -> discord.Embed:
         color=color,
     )
 
+    if user_display_name:
+        embed.description = f"発注者: **{user_display_name}**"
+
     # 発注明細
     if orders:
         lines = []
         for i, o in enumerate(orders):
-            name = o["productName"][:25]
+            name = o["productName"][:22]
             dup = " **[二重]**" if o.get("isDuplicate") else ""
             wh = "Y" if o.get("warehouse") == "ヤマト倉庫" else "T"
+            cost = o.get("cost", 0)
+            stock = o.get("stock", 0)
             lines.append(
                 f"`{o['jan']}` {name}\n"
-                f"  {wh} | {o['orderCs']}cs ({o['orderQty']}個) | "
+                f"  {wh} | @\\{cost:,.0f} | 在庫{stock} | "
+                f"{o['orderCs']}cs({o['orderQty']}個) | "
                 f"\\{o['amount']:,.0f} | {o['expectedDate']}{dup}"
             )
             if i >= 14:
@@ -195,7 +201,7 @@ def _build_preview_embed(preview: dict) -> discord.Embed:
     return embed
 
 
-def _build_result_embed(result: dict, dry_run: bool) -> discord.Embed:
+def _build_result_embed(result: dict, dry_run: bool, email_result: dict | None = None) -> discord.Embed:
     """実行結果JSONからEmbed を構築"""
     status = result.get("status", "")
     order_ids = result.get("orderIds", [])
@@ -264,9 +270,37 @@ def _build_result_embed(result: dict, dry_run: bool) -> discord.Embed:
             inline=False,
         )
 
+    # メール送信結果
+    if not dry_run and email_result is not None:
+        if "error" in email_result:
+            embed.add_field(
+                name="メール送信",
+                value=f"送信失敗: {email_result['error'][:200]}",
+                inline=False,
+            )
+        else:
+            sent_count = email_result.get("sentCount", 0)
+            sent_list = email_result.get("sent", [])
+            mail_lines = [f"送信成功: {sent_count}件"]
+            for s in sent_list[:5]:
+                wh = f" [{s.get('warehouse', '')}]" if s.get('warehouse') else ""
+                mail_lines.append(
+                    f"  {s.get('supplier', '?')}{wh} → {s.get('email', '?')}"
+                )
+            embed.add_field(
+                name="メール送信",
+                value="\n".join(mail_lines),
+                inline=False,
+            )
+    elif not dry_run and email_result is None:
+        embed.add_field(
+            name="メール送信",
+            value="GAS_MANUAL_ORDER_URL 未設定のためスキップ\nSS-07 メニュー「自動発注メニュー」→「手動発注メール送信」で手動送信",
+            inline=False,
+        )
+
     embed.set_footer(
         text=f"合計: {total_items}品  \\{total_amount:,.0f}"
-        + ("\nメール送信: SS-07 メニュー「自動発注メニュー」→「手動発注メール送信」" if not dry_run else "")
     )
 
     return embed
@@ -479,7 +513,8 @@ class OrderCommandCog(commands.Cog):
             return
 
         # Step 5: プレビュー Embed + ボタン表示
-        preview_embed = _build_preview_embed(preview_data)
+        user_display_name = interaction.user.display_name
+        preview_embed = _build_preview_embed(preview_data, user_display_name)
         view = OrderConfirmView(user_id, preview_path)
         await interaction.edit_original_response(embed=preview_embed, view=view)
 
@@ -515,10 +550,11 @@ class OrderCommandCog(commands.Cog):
         )
         await interaction.edit_original_response(embed=progress_embed, view=None)
 
-        # execute 実行
+        # execute 実行（--user でDiscord表示名を渡す）
         exec_cmd = [
             "python3", ORDER_SCRIPT,
             "execute", preview_path,
+            "--user", user_display_name,
         ]
         if dry_run:
             exec_cmd.append("--dry-run")
@@ -561,10 +597,7 @@ class OrderCommandCog(commands.Cog):
             except (json.JSONDecodeError, OSError):
                 pass
 
-        if proc.returncode == 0 and result_data:
-            result_embed = _build_result_embed(result_data, dry_run)
-            await interaction.edit_original_response(embed=result_embed)
-        else:
+        if proc.returncode != 0 or not result_data:
             err_msg = stderr.decode("utf-8", errors="replace")[:800] if stderr else "不明なエラー"
             embed = discord.Embed(
                 title="発注エラー",
@@ -572,12 +605,48 @@ class OrderCommandCog(commands.Cog):
                 color=COLOR_ERROR,
             )
             await interaction.edit_original_response(embed=embed)
+            return
+
+        # Step 9: メール送信（本番のみ。GAS_MANUAL_ORDER_URL が設定されている場合）
+        email_result = None
+        if not dry_run:
+            gas_url = os.environ.get("GAS_MANUAL_ORDER_URL", "")
+            if gas_url:
+                progress_embed = discord.Embed(
+                    title="メール送信中...",
+                    description="仕入先にメールを送信しています。",
+                    color=COLOR_WORKING,
+                )
+                await interaction.edit_original_response(embed=progress_embed)
+
+                try:
+                    email_proc = await asyncio.create_subprocess_exec(
+                        "python3", ORDER_SCRIPT, "send-emails",
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    email_stdout, email_stderr = await asyncio.wait_for(
+                        email_proc.communicate(), timeout=EXECUTE_TIMEOUT
+                    )
+                    if email_proc.returncode == 0:
+                        email_result_path = email_stdout.decode("utf-8", errors="replace").strip()
+                        if email_result_path and Path(email_result_path).exists():
+                            email_result = json.loads(
+                                Path(email_result_path).read_text(encoding="utf-8")
+                            )
+                except Exception as e:
+                    logger.warning("order send-emails failed: %s", e)
+                    email_result = {"error": str(e)}
+
+        # Step 10: 最終結果 Embed
+        result_embed = _build_result_embed(result_data, dry_run, email_result)
+        await interaction.edit_original_response(embed=result_embed)
 
         logger.info(
             "/order by %s: items=%s, reason=%s, result=%s, dry_run=%s",
             interaction.user.name,
-            " ".join(jan_items) if hasattr(self, '_jan_items') else "?",
-            reason_value if hasattr(self, '_reason') else "?",
+            " ".join(jan_items),
+            reason_value,
             view.result,
             dry_run,
         )
