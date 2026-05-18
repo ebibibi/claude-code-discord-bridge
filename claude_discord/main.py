@@ -209,6 +209,11 @@ async def main() -> None:
     else:
         logger.info("ListingCommandCog disabled (set SHUPPIN_ENABLED=1 to enable)")
 
+    # OrderCommandCog — /order (手動発注: JAN:cs → SS-07/SS-13書き込み)
+    from .cogs.order_command import OrderCommandCog
+
+    order_cog = OrderCommandCog(bot)
+
     async with bot:
         await bot.add_cog(cog)
         await bot.add_cog(repo_viewer_cog)
@@ -219,6 +224,7 @@ async def main() -> None:
         await bot.add_cog(shohin_cog)
         await bot.add_cog(image_gen_cog)
         await bot.add_cog(kw_cog)
+        await bot.add_cog(order_cog)
         if listing_cog is not None:
             await bot.add_cog(listing_cog)
 
