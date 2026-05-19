@@ -133,19 +133,30 @@ class ListingCommandCog(commands.Cog):
 
     @app_commands.command(
         name="shuppin",
-        description="スマホ出品（JAN+原価 → 全モール出品）",
+        description="スマホ出品（JAN+原価 → モール指定or全モール出品）",
     )
     @app_commands.describe(
         jan="JANコード（13桁）",
         genka="原価（税抜、円）",
+        mall="出品先モール（未指定=全モール）: amazon,yahoo,qoo10,aupay,temu,mercari",
     )
+    @app_commands.choices(mall=[
+        app_commands.Choice(name="全モール", value="all"),
+        app_commands.Choice(name="Amazon", value="amazon"),
+        app_commands.Choice(name="Yahoo", value="yahoo"),
+        app_commands.Choice(name="Qoo10", value="qoo10"),
+        app_commands.Choice(name="auPAY", value="aupay"),
+        app_commands.Choice(name="Temu", value="temu"),
+        app_commands.Choice(name="メルカリ", value="mercari"),
+    ])
     async def shuppin(
         self,
         interaction: discord.Interaction,
         jan: str,
         genka: int,
+        mall: str = "all",
     ) -> None:
-        """JAN+原価を入力 → プレビュー → 承認 → 全モール出品."""
+        """JAN+原価を入力 → プレビュー → 承認 → モール指定or全モール出品."""
         user_id = interaction.user.id
 
         # ユーザー権限チェック
@@ -187,7 +198,7 @@ class ListingCommandCog(commands.Cog):
         _active_locks[user_id] = jan
 
         try:
-            await self._process_listing(interaction, jan, genka, user_id)
+            await self._process_listing(interaction, jan, genka, user_id, mall=mall)
         finally:
             # ロック解放
             _active_locks.pop(user_id, None)
@@ -198,6 +209,7 @@ class ListingCommandCog(commands.Cog):
         jan: str,
         genka: int,
         user_id: int,
+        mall: str = "all",
     ) -> None:
         """出品フローのメイン処理"""
 
@@ -348,7 +360,8 @@ class ListingCommandCog(commands.Cog):
                 inline=False,
             )
 
-        embed.set_footer(text="出品先: 楽天 / Amazon / Yahoo / Qoo10 / auPAY / Temu")
+        mall_label = "全モール" if mall == "all" else mall.upper()
+        embed.set_footer(text=f"出品先: {mall_label}")
 
         # Step 5: ボタン表示
         view = ListingConfirmView(jan, genka, user_id, data)
@@ -390,6 +403,7 @@ class ListingCommandCog(commands.Cog):
             cmd = [
                 "python3", PIPELINE_SCRIPT,
                 "submit", "--jan", jan, "--genka", str(genka),
+                "--mall", mall,
             ]
             if dry_run:
                 cmd.append("--dry-run")
