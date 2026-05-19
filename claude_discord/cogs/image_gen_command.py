@@ -206,7 +206,7 @@ class ImageGenCommandCog(commands.Cog):
 
     @app_commands.command(
         name="manga",
-        description="漫画LP生成（SS-03 pending-manga 全件・n8n WFトリガ）",
+        description="漫画LP生成（SS-03 pending-manga 全件・Python完結）",
     )
     async def manga_command(
         self,
@@ -216,9 +216,9 @@ class ImageGenCommandCog(commands.Cog):
         try:
             pid = await _spawn_detached(*cmd)
         except Exception as e:
-            logger.exception("漫画LP生成トリガ失敗")
+            logger.exception("漫画LP生成バッチ起動失敗")
             embed = discord.Embed(
-                title="漫画LP生成トリガ失敗",
+                title="漫画LP生成 起動失敗",
                 description=f"```\n{e}\n```",
                 color=COLOR_ERROR,
             )
@@ -226,9 +226,10 @@ class ImageGenCommandCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🔄 漫画LP生成トリガ送信",
+            title="🔄 漫画LP生成 開始",
             description=(
-                "SS-03 K列 = `pending-manga` の全商品を A5a_漫画リーガル WF で処理\n"
+                "SS-03 K列 = `pending-manga` の全商品を脚本→リーガル→画像→SFTP の順で処理\n"
+                "（Python完結 / 動物判定はVision白抜き画像優先）\n"
                 f"進捗・完了通知は <#1496390706304909332> で\n"
                 f"PID: `{pid}`"
             ),
