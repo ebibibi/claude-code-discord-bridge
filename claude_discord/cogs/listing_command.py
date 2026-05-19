@@ -1,12 +1,11 @@
-"""スマホ出品コマンド Cog — /出品 JAN 原価 で全モール出品.
+"""出品コマンド Cog — /shuppin でモール出品.
 
-1商品ずつ完結フロー:
-  /出品 4562188860587 1200
-  → 商品情報+売価プレビュー（Embed）
-  → [出品する] [やめる] ボタン
-  → 各モール順次出品 → 完了通知
+SS-17「出品データ」を唯一のデータソースとし、指定モールに出品する。
+JAN未指定=未出品JAN全部、JAN指定=バリエーション自動展開。
 
-制約: 1人1商品ロック。前の処理が完了するまで次を受け付けない。
+使い方:
+  /shuppin mall:Yahoo                   → 未出品JAN全部をYahooに出品
+  /shuppin mall:Amazon jan:4562305934023 → そのJAN+バリエーション全部をAmazonに出品
 """
 
 from __future__ import annotations
@@ -28,30 +27,25 @@ logger = logging.getLogger(__name__)
 
 # バックエンドスクリプト
 PIPELINE_SCRIPT = "/home/ubuntu/ec-automation-system/scripts/shuppin_pipeline.py"
-PREVIEW_TIMEOUT = 60  # 秒（SS読み込みがあるので長め）
-SUBMIT_TIMEOUT = 300  # 秒（各モール出品）
+PREVIEW_TIMEOUT = 60
+SUBMIT_TIMEOUT = 600  # バリエーション一括出品は時間がかかる
 
 # Embed カラー
-COLOR_PREVIEW = 0x3498DB   # 青 - プレビュー
-COLOR_SUCCESS = 0x2ECC71   # 緑 - 成功
-COLOR_ERROR = 0xE74C3C     # 赤 - エラー
-COLOR_CANCEL = 0x95A5A6    # グレー - キャンセル
-COLOR_WORKING = 0xF39C12   # オレンジ - 処理中
+COLOR_PREVIEW = 0x3498DB   # 青
+COLOR_SUCCESS = 0x2ECC71   # 緑
+COLOR_ERROR = 0xE74C3C     # 赤
+COLOR_CANCEL = 0x95A5A6    # グレー
+COLOR_WORKING = 0xF39C12   # オレンジ
 
-# 1人1商品ロック: {user_id: jan}
+# 1人1ロック
 _active_locks: dict[int, str] = {}
 
 
 def _load_allowed_user_ids() -> set[int] | None:
-    """SHUPPIN_ALLOWED_USER_IDS 環境変数からユーザーIDセットを取得.
-
-    未設定 → DISCORD_OWNER_ID のみ許可。
-    "*" → 全ユーザー許可。
-    "id1,id2,..." → 指定ユーザーのみ許可。
-    """
+    """SHUPPIN_ALLOWED_USER_IDS 環境変数からユーザーIDセットを取得."""
     raw = os.getenv("SHUPPIN_ALLOWED_USER_IDS", "")
     if raw.strip() == "*":
-        return None  # 全員許可
+        return None
 
     ids: set[int] = set()
     if raw.strip():
@@ -60,7 +54,6 @@ def _load_allowed_user_ids() -> set[int] | None:
             if uid.isdigit():
                 ids.add(int(uid))
 
-    # 未設定の場合はオーナーIDだけ許可
     owner = os.getenv("DISCORD_OWNER_ID", "")
     if owner.strip().isdigit():
         ids.add(int(owner.strip()))
@@ -69,18 +62,16 @@ def _load_allowed_user_ids() -> set[int] | None:
 
 
 class ListingConfirmView(discord.ui.View):
-    """出品確認ボタン（出品する / やめる）"""
+    """出品確認ボタン（出品する / やめる / ドライラン）"""
 
-    def __init__(self, jan: str, genka: float, user_id: int, preview_data: dict):
-        super().__init__(timeout=300)  # 5分でタイムアウト
-        self.jan = jan
-        self.genka = genka
+    def __init__(self, user_id: int, mall: str, jan: str | None):
+        super().__init__(timeout=300)
         self.user_id = user_id
-        self.preview_data = preview_data
+        self.mall = mall
+        self.jan = jan
         self.result: str | None = None
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        """ボタンを押せるのは元のユーザーのみ"""
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "このボタンは操作できません。", ephemeral=True
@@ -118,7 +109,7 @@ class ListingConfirmView(discord.ui.View):
 
 
 class ListingCommandCog(commands.Cog):
-    """スマホ出品 — JAN+原価で全モール出品."""
+    """出品コマンド — SS-17ベースでモール出品."""
 
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -133,15 +124,13 @@ class ListingCommandCog(commands.Cog):
 
     @app_commands.command(
         name="shuppin",
-        description="スマホ出品（JAN+原価 → モール指定or全モール出品）",
+        description="SS-17ベースでモール出品（JAN未指定=未出品全部、指定=バリエーション展開）",
     )
     @app_commands.describe(
-        jan="JANコード（13桁）",
-        genka="原価（税抜、円）",
-        mall="出品先モール（未指定=全モール）: amazon,yahoo,qoo10,aupay,temu,mercari",
+        mall="出品先モール（必須）",
+        jan="JAN（任意: 未指定=未出品JAN全部、指定=バリエーション展開）",
     )
     @app_commands.choices(mall=[
-        app_commands.Choice(name="全モール", value="all"),
         app_commands.Choice(name="Amazon", value="amazon"),
         app_commands.Choice(name="Yahoo", value="yahoo"),
         app_commands.Choice(name="Qoo10", value="qoo10"),
@@ -152,11 +141,10 @@ class ListingCommandCog(commands.Cog):
     async def shuppin(
         self,
         interaction: discord.Interaction,
-        jan: str,
-        genka: int,
-        mall: str = "all",
+        mall: str,
+        jan: str = "",
     ) -> None:
-        """JAN+原価を入力 → プレビュー → 承認 → モール指定or全モール出品."""
+        """SS-17ベースでモール出品."""
         user_id = interaction.user.id
 
         # ユーザー権限チェック
@@ -167,213 +155,127 @@ class ListingCommandCog(commands.Cog):
             )
             return
 
-        jan = jan.strip()
+        jan = jan.strip() if jan else ""
 
-        # JAN バリデーション
-        if not jan.isdigit() or len(jan) not in (8, 13):
+        # JANバリデーション（指定された場合のみ）
+        if jan and (not jan.isdigit() or len(jan) not in (8, 13)):
             await interaction.response.send_message(
                 "JANコードは8桁または13桁の数字で入力してください。",
                 ephemeral=True,
             )
             return
 
-        if genka <= 0 or genka > 100000:
-            await interaction.response.send_message(
-                "原価は1〜100,000円の範囲で入力してください。",
-                ephemeral=True,
-            )
-            return
-
-        # 1商品ロックチェック
+        # 1ロックチェック
+        lock_key = f"{mall}"
         if user_id in _active_locks:
-            locked_jan = _active_locks[user_id]
+            locked = _active_locks[user_id]
             await interaction.response.send_message(
-                f"前の出品処理（JAN: {locked_jan}）が進行中です。\n"
-                "完了またはキャンセルしてから次の商品を入力してください。",
+                f"前の出品処理（{locked}）が進行中です。\n"
+                "完了またはキャンセルしてから次を入力してください。",
                 ephemeral=True,
             )
             return
 
-        # ロック取得
-        _active_locks[user_id] = jan
+        _active_locks[user_id] = f"{mall}" + (f" JAN:{jan}" if jan else " 未出品全部")
 
         try:
-            await self._process_listing(interaction, jan, genka, user_id, mall=mall)
+            await self._process_listing(interaction, mall, jan or None, user_id)
         finally:
-            # ロック解放
             _active_locks.pop(user_id, None)
 
     async def _process_listing(
         self,
         interaction: discord.Interaction,
-        jan: str,
-        genka: int,
+        mall: str,
+        jan: str | None,
         user_id: int,
-        mall: str = "all",
     ) -> None:
         """出品フローのメイン処理"""
 
-        # Step 1: 検索中の表示
+        # Step 1: プレビュー表示
+        jan_label = f"JAN: `{jan}` (バリエーション展開)" if jan else "未出品JAN全部"
         embed = discord.Embed(
-            title="商品情報を取得中...",
-            description=f"JAN: `{jan}` / 原価: {genka:,}円（税抜）",
+            title=f"{mall.upper()} 出品準備中...",
+            description=f"対象: {jan_label}",
             color=COLOR_WORKING,
         )
         await interaction.response.send_message(embed=embed)
 
-        # Step 2: バックエンドでプレビュー取得
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "python3", PIPELINE_SCRIPT,
-                "preview", "--jan", jan, "--genka", str(genka),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=PREVIEW_TIMEOUT
-            )
-        except asyncio.TimeoutError:
-            embed = discord.Embed(
-                title="タイムアウト",
-                description="商品情報の取得に時間がかかりすぎました。",
-                color=COLOR_ERROR,
-            )
-            await interaction.edit_original_response(embed=embed)
-            return
-        except Exception as e:
-            logger.exception("shuppin preview failed")
-            embed = discord.Embed(
-                title="エラー",
-                description=f"プレビュー取得に失敗: {e}",
-                color=COLOR_ERROR,
-            )
-            await interaction.edit_original_response(embed=embed)
-            return
-
-        if proc.returncode != 0:
-            err = stderr.decode("utf-8", errors="replace").strip()
-            embed = discord.Embed(
-                title="エラー",
-                description=f"```\n{err[:800]}\n```",
-                color=COLOR_ERROR,
-            )
-            await interaction.edit_original_response(embed=embed)
-            return
-
-        # Step 3: JSON解析
-        try:
-            data = json.loads(stdout.decode("utf-8"))
-        except json.JSONDecodeError:
-            embed = discord.Embed(
-                title="パースエラー",
-                description="プレビュー結果の解析に失敗しました。",
-                color=COLOR_ERROR,
-            )
-            await interaction.edit_original_response(embed=embed)
-            return
-
-        if not data.get("ok"):
-            embed = discord.Embed(
-                title="エラー",
-                description=data.get("error", "不明なエラー"),
-                color=COLOR_ERROR,
-            )
-            await interaction.edit_original_response(embed=embed)
-            return
-
-        # Step 4: プレビュー Embed 構築
-        product = data.get("product", {})
-        pricing = data.get("pricing", {})
-        prices = pricing.get("prices", {})
-
-        product_name = product.get("name") or f"JAN: {jan}"
-        source = product.get("source", "")
-        found = product.get("found", False)
-
-        embed = discord.Embed(
-            title=product_name,
-            color=COLOR_PREVIEW,
-        )
-
-        # 基本情報
-        basic_lines = [f"**JAN:** `{jan}`"]
-        if product.get("maker"):
-            basic_lines.append(f"**メーカー:** {product['maker']}")
-        if product.get("brand"):
-            basic_lines.append(f"**ブランド:** {product['brand']}")
-        if product.get("dept"):
-            basic_lines.append(f"**部門:** {product['dept']}")
-        basic_lines.append(f"**データ元:** {source or '未登録'}")
-
-        embed.add_field(
-            name="基本情報",
-            value="\n".join(basic_lines),
-            inline=True,
-        )
-
-        # コスト
-        cost_lines = [
-            f"**原価(税抜):** {genka:,}円",
-            f"**原価(税込):** {pricing.get('genka_zeikomi', 0):,}円",
-            f"**送料:** {pricing.get('shipping', 0):,}円",
-            f"**梱包費:** {pricing.get('packing', 0):,}円",
-        ]
-        embed.add_field(
-            name="コスト",
-            value="\n".join(cost_lines),
-            inline=True,
-        )
-
-        # モール別売価
-        price_lines = []
-        for mall_name in ["楽天", "Amazon", "Yahoo", "Qoo10", "auPAY", "Temu"]:
-            mp = prices.get(mall_name, {})
-            if mp:
-                p = mp.get("price", 0)
-                rate = mp.get("profit_rate", 0)
-                price_lines.append(
-                    f"**{mall_name}:** {p:,}円 (利益率 {rate}%)"
+        # Step 2: JAN指定時はプレビュー取得
+        if jan:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "python3", PIPELINE_SCRIPT,
+                    "preview", "--jan", jan,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=PREVIEW_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                embed = discord.Embed(
+                    title="タイムアウト",
+                    description="商品情報の取得に時間がかかりすぎました。",
+                    color=COLOR_ERROR,
+                )
+                await interaction.edit_original_response(embed=embed)
+                return
+            except Exception as e:
+                logger.exception("shuppin preview failed")
+                embed = discord.Embed(
+                    title="エラー",
+                    description=f"プレビュー取得に失敗: {e}",
+                    color=COLOR_ERROR,
+                )
+                await interaction.edit_original_response(embed=embed)
+                return
 
-        embed.add_field(
-            name="モール別売価（自動算出）",
-            value="\n".join(price_lines) if price_lines else "計算エラー",
-            inline=False,
-        )
+            if proc.returncode == 0:
+                try:
+                    data = json.loads(stdout.decode("utf-8"))
+                    product = data.get("product", {})
+                    product_name = product.get("name") or f"JAN: {jan}"
+                    price = product.get("price", "?")
+                    has_images = product.get("has_images", False)
+                    has_desc = product.get("has_description", False)
 
-        # 注意事項
-        warnings = []
-        if not found:
-            warnings.append("商品がマスタ未登録です。先に /shohin で確認してください。")
-        if source == "SS-17":
-            if not product.get("has_images"):
-                warnings.append("画像が未設定です（白抜き画像生成が必要）")
-            if not product.get("has_description"):
-                warnings.append("商品説明文が未設定です")
+                    embed = discord.Embed(
+                        title=f"{product_name}",
+                        description=f"**JAN:** `{jan}`\n**売価:** {price}円\n**画像:** {'あり' if has_images else '未設定'} / **説明文:** {'あり' if has_desc else '未設定'}",
+                        color=COLOR_PREVIEW,
+                    )
+                except (json.JSONDecodeError, KeyError):
+                    embed = discord.Embed(
+                        title=f"JAN: {jan}",
+                        description="プレビュー情報を解析できませんでした。出品は続行可能です。",
+                        color=COLOR_PREVIEW,
+                    )
+            else:
+                embed = discord.Embed(
+                    title=f"JAN: {jan}",
+                    description="プレビュー取得失敗。出品は続行可能です。",
+                    color=COLOR_PREVIEW,
+                )
         else:
-            warnings.append("SS-17未登録。出品時に自動登録されます。")
-
-        if warnings:
-            embed.add_field(
-                name="注意",
-                value="\n".join(f"- {w}" for w in warnings),
-                inline=False,
+            embed = discord.Embed(
+                title=f"{mall.upper()} 一括出品",
+                description="SS-17「他モール出品」で未出品のJANを全て出品します。",
+                color=COLOR_PREVIEW,
             )
 
-        mall_label = "全モール" if mall == "all" else mall.upper()
-        embed.set_footer(text=f"出品先: {mall_label}")
+        embed.set_footer(text=f"出品先: {mall.upper()}")
 
-        # Step 5: ボタン表示
-        view = ListingConfirmView(jan, genka, user_id, data)
+        # Step 3: 確認ボタン
+        view = ListingConfirmView(user_id, mall, jan)
         await interaction.edit_original_response(embed=embed, view=view)
 
-        # Step 6: ボタン待機
         await view.wait()
 
         if view.result == "cancel" or view.result is None:
             embed = discord.Embed(
                 title="出品キャンセル",
-                description=f"{product_name}\nJAN: `{jan}`",
+                description=f"モール: {mall.upper()}",
                 color=COLOR_CANCEL,
             )
             await interaction.edit_original_response(embed=embed, view=None)
@@ -382,19 +284,19 @@ class ListingCommandCog(commands.Cog):
         if view.result == "timeout":
             embed = discord.Embed(
                 title="タイムアウト",
-                description="5分以内にボタンが押されなかったため、出品をキャンセルしました。",
+                description="5分以内にボタンが押されなかったため、キャンセルしました。",
                 color=COLOR_CANCEL,
             )
             await interaction.edit_original_response(embed=embed, view=None)
             return
 
-        # Step 7: 出品実行
+        # Step 4: 出品実行
         dry_run = view.result == "dry_run"
         mode_label = "ドライラン" if dry_run else "出品"
 
         progress_embed = discord.Embed(
             title=f"{mode_label}実行中...",
-            description=f"{product_name}\n各モールへ{mode_label}しています。しばらくお待ちください。",
+            description=f"モール: {mall.upper()}\nしばらくお待ちください。",
             color=COLOR_WORKING,
         )
         await interaction.edit_original_response(embed=progress_embed, view=None)
@@ -402,9 +304,10 @@ class ListingCommandCog(commands.Cog):
         try:
             cmd = [
                 "python3", PIPELINE_SCRIPT,
-                "submit", "--jan", jan, "--genka", str(genka),
-                "--mall", mall,
+                "submit", "--mall", mall,
             ]
+            if jan:
+                cmd.extend(["--jan", jan])
             if dry_run:
                 cmd.append("--dry-run")
 
@@ -434,62 +337,56 @@ class ListingCommandCog(commands.Cog):
             await interaction.edit_original_response(embed=embed)
             return
 
-        # Step 8: 結果表示
+        # Step 5: 結果表示
+        stdout_text = stdout.decode("utf-8", errors="replace") if stdout else ""
+        stderr_text = stderr.decode("utf-8", errors="replace") if stderr else ""
+
         try:
-            result_data = json.loads(stdout.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            result_data = json.loads(stdout_text)
+        except (json.JSONDecodeError, ValueError):
             result_data = None
 
-        if proc.returncode == 0 and result_data and result_data.get("ok"):
-            ss17_info = result_data.get("ss17", {})
-            submit_info = result_data.get("submit", {})
+        if proc.returncode == 0:
+            submit_info = result_data.get("submit", {}) if result_data else {}
+            submit_stdout = submit_info.get("stdout", stdout_text)
 
             result_embed = discord.Embed(
                 title=f"{mode_label}完了",
-                description=f"**{product_name}**\nJAN: `{jan}`",
+                description=f"モール: **{mall.upper()}**",
                 color=COLOR_SUCCESS,
             )
 
-            # SS-17情報
-            ss17_action = ss17_info.get("action", "")
-            ss17_row = ss17_info.get("row", "")
-            result_embed.add_field(
-                name="SS-17",
-                value=f"{'更新' if ss17_action == 'updated' else '新規追加'} (行{ss17_row})",
-                inline=True,
-            )
-
-            # 出品結果のサマリ
-            submit_stdout = submit_info.get("stdout", "")
             if submit_stdout:
-                # 最後の数行だけ表示
                 lines = submit_stdout.strip().split("\n")
-                summary_lines = [l for l in lines[-15:] if l.strip()]
+                summary_lines = [ln for ln in lines[-15:] if ln.strip()]
                 if summary_lines:
                     result_embed.add_field(
-                        name="出品結果",
+                        name="結果",
                         value=f"```\n{chr(10).join(summary_lines[-10:])}\n```",
                         inline=False,
                     )
 
-            result_embed.set_footer(text="次の商品をどうぞ！ /shuppin JAN 原価")
+            result_embed.set_footer(text="/shuppin mall:モール名 で次の出品へ")
             await interaction.edit_original_response(embed=result_embed)
         else:
             err_msg = ""
             if result_data:
                 err_msg = result_data.get("error", "")
+                submit_info = result_data.get("submit", {})
+                if not err_msg and submit_info.get("stderr"):
+                    err_msg = submit_info["stderr"]
             if not err_msg:
-                err_msg = stderr.decode("utf-8", errors="replace")[:800] if stderr else "不明なエラー"
+                err_msg = stderr_text[:800] if stderr_text else "不明なエラー"
 
             embed = discord.Embed(
                 title="出品エラー",
-                description=f"```\n{err_msg}\n```",
+                description=f"```\n{err_msg[:1000]}\n```",
                 color=COLOR_ERROR,
             )
             await interaction.edit_original_response(embed=embed)
 
         logger.info(
-            "/shuppin by %s: jan=%s, genka=%d, result=%s",
-            interaction.user.name, jan, genka,
+            "/shuppin by %s: mall=%s, jan=%s, result=%s",
+            interaction.user.name, mall, jan or "all-unlisted",
             view.result,
         )
