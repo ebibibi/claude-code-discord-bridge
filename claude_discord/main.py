@@ -14,7 +14,7 @@ import signal
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from claude_code_core.backend import create_backend
 
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 def load_config() -> dict[str, str]:
     """Load and validate configuration from environment."""
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))
 
     token = os.getenv("DISCORD_BOT_TOKEN", "")
     if not token:

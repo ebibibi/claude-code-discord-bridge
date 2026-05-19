@@ -342,7 +342,10 @@ async def _run_start(env_path: Path) -> None:
         print("    Run 'ccdb setup' first to create it.", file=sys.stderr)
         sys.exit(1)
 
-    # Import and run the existing main() from claude_discord.main
+    from dotenv import load_dotenv
+
+    load_dotenv(env_path)
+
     from claude_discord.main import main as bot_main
 
     await bot_main()

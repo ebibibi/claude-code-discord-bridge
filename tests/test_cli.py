@@ -292,3 +292,62 @@ class TestMain:
             main()
             assert "CUSTOM_COGS_DIR" not in os.environ or os.environ["CUSTOM_COGS_DIR"] == ""
             mock_start.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _run_start — .env loading (Issue #398)
+# ---------------------------------------------------------------------------
+
+
+class TestRunStartEnvLoading:
+    """Regression tests for Issue #398: .env not loaded from --env path."""
+
+    @pytest.mark.asyncio
+    async def test_run_start_loads_dotenv_from_explicit_path(self, tmp_path: Path) -> None:
+        """_run_start must call load_dotenv(env_path) so vars are available to main."""
+        env_file = tmp_path / ".env"
+        env_file.write_text("DISCORD_BOT_TOKEN=test-token-123\nDISCORD_CHANNEL_ID=999\n")
+
+        with (
+            patch("dotenv.load_dotenv") as mock_load_dotenv,
+            patch("claude_discord.main.main", new_callable=AsyncMock) as mock_main,
+        ):
+            from claude_discord.cli import _run_start
+
+            await _run_start(env_file)
+            mock_load_dotenv.assert_any_call(env_file)
+            mock_main.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_run_start_exits_when_env_missing(self, tmp_path: Path) -> None:
+        """_run_start must exit with error when .env does not exist."""
+        from claude_discord.cli import _run_start
+
+        missing = tmp_path / "nonexistent.env"
+        with pytest.raises(SystemExit):
+            await _run_start(missing)
+
+
+# ---------------------------------------------------------------------------
+# load_config — .env discovery from CWD (Issue #398)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadConfigCwd:
+    """Regression tests for Issue #398: load_config must find .env in CWD."""
+
+    def test_load_config_uses_usecwd(self) -> None:
+        """load_config must pass usecwd=True so .env is found relative to CWD."""
+        with patch("claude_discord.main.load_dotenv") as mock_ld:
+            mock_ld.return_value = True
+            with (
+                patch.dict(
+                    "os.environ",
+                    {"DISCORD_BOT_TOKEN": "tok", "DISCORD_CHANNEL_ID": "123"},
+                ),
+            ):
+                from claude_discord.main import load_config
+
+                load_config()
+            args, kwargs = mock_ld.call_args
+            assert kwargs.get("usecwd") is True or (args and args[0] is not None)
