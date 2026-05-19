@@ -77,11 +77,28 @@ class ImageGenCommandCog(commands.Cog):
     )
     @app_commands.describe(
         jans="JANコード（スペース区切り、13桁・複数指定可）",
+        force="LP_status が pending-lp 以外でも強制再生成（reason必須）",
+        page="特定ページのみ再生成（1,3,4,5,6,7,8）。JAN1件のみ・reason必須",
+        reason="force/page 指定時の理由（必須）",
+    )
+    @app_commands.choices(
+        page=[
+            app_commands.Choice(name="P1 (トップ)", value=1),
+            app_commands.Choice(name="P3 (PASONA-P)", value=3),
+            app_commands.Choice(name="P4 (PASONA-A)", value=4),
+            app_commands.Choice(name="P5 (PASONA-S)", value=5),
+            app_commands.Choice(name="P6 (PASONA-O)", value=6),
+            app_commands.Choice(name="P7 (PASONA-N)", value=7),
+            app_commands.Choice(name="P8 (PASONA-A)", value=8),
+        ]
     )
     async def lp_command(
         self,
         interaction: discord.Interaction,
         jans: str,
+        force: bool = False,
+        page: app_commands.Choice[int] | None = None,
+        reason: str | None = None,
     ) -> None:
         jan_list = _parse_jans(jans)
         if not jan_list:
@@ -91,11 +108,32 @@ class ImageGenCommandCog(commands.Cog):
             )
             return
 
-        cmd = [
-            "bash",
-            f"{REPO_ROOT}/scripts/lp_batch.sh",
-            *jan_list,
-        ]
+        page_val = page.value if page else None
+
+        # force/page 指定時は reason 必須
+        if (force or page_val) and not (reason and reason.strip()):
+            await interaction.response.send_message(
+                "❌ `force:True` または `page` 指定時は `reason:\"理由\"` が必須です。",
+                ephemeral=True,
+            )
+            return
+
+        # page 指定時は JAN 1件のみ
+        if page_val and len(jan_list) > 1:
+            await interaction.response.send_message(
+                "❌ `page` 指定時は JAN を1件のみ指定してください。",
+                ephemeral=True,
+            )
+            return
+
+        cmd: list[str] = ["bash", f"{REPO_ROOT}/scripts/lp_batch.sh"]
+        if force or page_val:
+            cmd.append("--force")
+        if page_val:
+            cmd.extend(["--page", str(page_val)])
+        if reason and reason.strip():
+            cmd.extend(["--reason", reason.strip()])
+        cmd.extend(jan_list)
 
         try:
             pid = await _spawn_detached(*cmd)
@@ -109,15 +147,26 @@ class ImageGenCommandCog(commands.Cog):
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
-        elapsed_est = len(jan_list) * 10  # 1JAN ≒ 10分
+        # ページ指定は1ページ約2分、それ以外は1JAN約10分
+        elapsed_est = 2 if page_val else len(jan_list) * 10
+        title = "🔄 LP生成バッチ起動"
+        if page_val:
+            title = f"🔄 LP P{page_val} 単独再生成"
+        elif force:
+            title = "🔄 LP 強制再生成"
+
+        desc_lines = [
+            f"対象JAN: **{len(jan_list)}件**",
+            f"処理時間目安: 約{elapsed_est}分",
+        ]
+        if force or page_val:
+            desc_lines.append(f"理由: {reason}")
+        desc_lines.append("進捗は <#1496390706304909332> で通知されます")
+        desc_lines.append(f"PID: `{pid}`")
+
         embed = discord.Embed(
-            title="🔄 LP生成バッチ起動",
-            description=(
-                f"対象JAN: **{len(jan_list)}件**\n"
-                f"処理時間目安: 約{elapsed_est}分\n"
-                f"進捗は <#1496390706304909332> で通知されます\n"
-                f"PID: `{pid}`"
-            ),
+            title=title,
+            description="\n".join(desc_lines),
             color=COLOR_STARTED,
         )
         embed.add_field(
@@ -206,7 +255,7 @@ class ImageGenCommandCog(commands.Cog):
 
     @app_commands.command(
         name="manga",
-        description="漫画LP生成（SS-03 pending-manga 全件・n8n WFトリガ）",
+        description="漫画LP生成（SS-03 pending-manga 全件・Python完結）",
     )
     async def manga_command(
         self,
@@ -216,9 +265,9 @@ class ImageGenCommandCog(commands.Cog):
         try:
             pid = await _spawn_detached(*cmd)
         except Exception as e:
-            logger.exception("漫画LP生成トリガ失敗")
+            logger.exception("漫画LP生成バッチ起動失敗")
             embed = discord.Embed(
-                title="漫画LP生成トリガ失敗",
+                title="漫画LP生成 起動失敗",
                 description=f"```\n{e}\n```",
                 color=COLOR_ERROR,
             )
@@ -226,9 +275,10 @@ class ImageGenCommandCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🔄 漫画LP生成トリガ送信",
+            title="🔄 漫画LP生成 開始",
             description=(
-                "SS-03 K列 = `pending-manga` の全商品を A5a_漫画リーガル WF で処理\n"
+                "SS-03 K列 = `pending-manga` の全商品を脚本→リーガル→画像→SFTP の順で処理\n"
+                "（Python完結 / 動物判定はVision白抜き画像優先）\n"
                 f"進捗・完了通知は <#1496390706304909332> で\n"
                 f"PID: `{pid}`"
             ),
