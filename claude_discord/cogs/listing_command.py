@@ -240,9 +240,25 @@ class ListingCommandCog(commands.Cog):
                     has_images = product.get("has_images", False)
                     has_desc = product.get("has_description", False)
 
+                    # モール別カテゴリID有無
+                    cat_status = []
+                    for cat_key, cat_label in [
+                        ("qoo10_category", "Qoo10"),
+                        ("amazon_browse_node", "Amazon"),
+                        ("yahoo_category", "Yahoo"),
+                        ("aupay_category", "auPAY"),
+                    ]:
+                        val = product.get(cat_key, "")
+                        cat_status.append(f"{cat_label}:{'OK' if val else 'NG'}")
+
                     embed = discord.Embed(
                         title=f"{product_name}",
-                        description=f"**JAN:** `{jan}`\n**売価:** {price}円\n**画像:** {'あり' if has_images else '未設定'} / **説明文:** {'あり' if has_desc else '未設定'}",
+                        description=(
+                            f"**JAN:** `{jan}`\n"
+                            f"**売価:** {price}円\n"
+                            f"**画像:** {'あり' if has_images else '未設定'} / **説明文:** {'あり' if has_desc else '未設定'}\n"
+                            f"**カテゴリID:** {' / '.join(cat_status)}"
+                        ),
                         color=COLOR_PREVIEW,
                     )
                 except (json.JSONDecodeError, KeyError):
