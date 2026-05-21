@@ -204,7 +204,13 @@ class ApiServer:
             return web.json_response({"error": "Channel is not messageable"}, status=400)
 
         title = data.get("title")
-        embed = self._build_embed(message=message, title=title, color=data.get("color"))
+        embed = self._build_embed(
+            message=message,
+            title=title,
+            color=data.get("color"),
+            image_url=data.get("image_url"),
+            folder_url=data.get("folder_url"),
+        )
         await raw_channel.send(embed=embed)  # type: ignore[union-attr]
 
         return web.json_response({"status": "sent"})
@@ -1118,16 +1124,23 @@ class ApiServer:
         message: str,
         title: str | None = None,
         color: int | None = None,
+        image_url: str | None = None,
+        folder_url: str | None = None,
     ) -> discord.Embed:
         """Build a Discord embed for notification display."""
         import discord
 
-        return discord.Embed(
+        embed = discord.Embed(
             title=title or "Notification",
             description=message,
             color=color or 0x00BFFF,
             timestamp=datetime.now(),
         )
+        if image_url:
+            embed.set_image(url=image_url)
+        if folder_url:
+            embed.add_field(name="出力フォルダ", value=folder_url, inline=False)
+        return embed
 
     # ------------------------------------------------------------------
     # Project Board endpoints (/api/board)
