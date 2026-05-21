@@ -17,6 +17,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 from typing import TYPE_CHECKING
 
 import discord
@@ -45,17 +46,45 @@ def _parse_jans(text: str) -> list[str]:
 
 
 async def _spawn_detached(*cmd: str) -> int:
-    """bash コマンドを detach 起動。PIDのみ返して結果は待たない。
+    """bash コマンドを完全に分離して起動。PIDのみ返して結果は待たない。
 
-    nohup 相当の挙動: 親プロセスが終了しても継続実行。
-    stdout/stderr は捨てる（ログは bash ラッパー側のログファイルに残る）。
+    2層の分離で bot 再起動の影響を受けないようにする:
+      1. systemd-run --user --scope: 独立 cgroup に配置（pkill/systemctl stop 耐性）
+      2. start_new_session=True: 新セッション+プロセスグループ分離（SIGHUP 耐性）
+
+    systemd-run が使えない環境では層2のみでフォールバック。
+    bash ラッパー側でも trap '' HUP TERM を設定し、シグナル耐性を二重化。
     """
+    # 層1: systemd-run --user --scope で独立 cgroup に配置
+    try:
+        scope_name = f"ec-batch-{os.getpid()}-{int(time.time())}"
+        # ccdb bot は nohup 起動のため DBUS 環境変数が欠落しやすい → 明示補完
+        uid = os.getuid()
+        env = os.environ.copy()
+        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
+        env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
+        proc = await asyncio.create_subprocess_exec(
+            "systemd-run", "--user", "--scope", f"--unit={scope_name}", "--",
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+            env=env,
+            cwd=REPO_ROOT,
+        )
+        logger.info(f"バッチ起動(systemd scope={scope_name}): {' '.join(cmd[:3])}")
+        return proc.pid
+    except Exception as e:
+        logger.warning(f"systemd-run --scope 失敗、フォールバック: {e}")
+
+    # 層2: フォールバック（従来方式）
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
         stdin=asyncio.subprocess.DEVNULL,
-        start_new_session=True,  # 新セッションでプロセスグループ分離
+        start_new_session=True,
         cwd=REPO_ROOT,
     )
     return proc.pid
