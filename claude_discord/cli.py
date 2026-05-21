@@ -342,6 +342,11 @@ async def _run_start(env_path: Path) -> None:
         print("    Run 'ccdb setup' first to create it.", file=sys.stderr)
         sys.exit(1)
 
+    # --env で指定された env_path を環境変数に展開しておく
+    # （main.py の load_dotenv() は override=False なので、ここで先に読めば指定が優先される）
+    from dotenv import load_dotenv
+    load_dotenv(env_path)
+
     # Import and run the existing main() from claude_discord.main
     from claude_discord.main import main as bot_main
 
