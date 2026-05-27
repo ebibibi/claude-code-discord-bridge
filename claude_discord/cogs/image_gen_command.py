@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -35,6 +36,62 @@ REPO_ROOT = "/home/ubuntu/ec-automation-system"
 # Embed カラー
 COLOR_STARTED = 0x3498DB  # 青
 COLOR_ERROR = 0xE74C3C  # 赤
+COLOR_CONFIRM = 0xFFA500  # オレンジ（確認待ち）
+
+# 動物→絵文字マッピング
+_ANIMAL_EMOJI = {"犬": "🐕", "猫": "🐈", "鳥": "🐦", "魚": "🐠", "小動物": "🐹", "爬虫類": "🦎"}
+
+
+class MangaConfirmView(discord.ui.View):
+    """漫画LP生成の動物確認ダイアログ（ドロップダウン + ボタン）"""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+        self.result: str | None = None  # "confirm" | "cancel"
+        self.animal_override: str | None = None
+
+    @discord.ui.select(
+        placeholder="動物を修正（判定失敗分に適用）",
+        options=[
+            discord.SelectOption(label="自動判定のまま", value="auto", emoji="🤖"),
+            discord.SelectOption(label="犬", value="犬", emoji="🐕"),
+            discord.SelectOption(label="猫", value="猫", emoji="🐈"),
+            discord.SelectOption(label="鳥", value="鳥", emoji="🐦"),
+            discord.SelectOption(label="魚", value="魚", emoji="🐠"),
+            discord.SelectOption(label="小動物", value="小動物", emoji="🐹"),
+            discord.SelectOption(label="爬虫類", value="爬虫類", emoji="🦎"),
+        ],
+    )
+    async def select_animal(
+        self, interaction: discord.Interaction, select: discord.ui.Select,
+    ) -> None:
+        val = select.values[0]
+        self.animal_override = None if val == "auto" else val
+        label = "自動判定のまま" if val == "auto" else val
+        await interaction.response.send_message(
+            f"✅ 動物: **{label}** に設定", ephemeral=True,
+        )
+
+    @discord.ui.button(label="作成する", style=discord.ButtonStyle.success, row=1)
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        self.result = "confirm"
+        for child in self.children:
+            child.disabled = True  # type: ignore[union-attr]
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.danger, row=1)
+    async def cancel(
+        self, interaction: discord.Interaction, button: discord.ui.Button,
+    ) -> None:
+        self.result = "cancel"
+        for child in self.children:
+            child.disabled = True  # type: ignore[union-attr]
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
 
 # JAN13桁を抽出する正規表現
 _JAN_RE = re.compile(r"\d{13}")
@@ -56,27 +113,40 @@ async def _spawn_detached(*cmd: str) -> int:
     bash ラッパー側でも trap '' HUP TERM を設定し、シグナル耐性を二重化。
     """
     # 層1: systemd-run --user --scope で独立 cgroup に配置
-    try:
-        scope_name = f"ec-batch-{os.getpid()}-{int(time.time())}"
-        # ccdb bot は nohup 起動のため DBUS 環境変数が欠落しやすい → 明示補完
-        uid = os.getuid()
-        env = os.environ.copy()
-        env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{uid}")
-        env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path=/run/user/{uid}/bus")
-        proc = await asyncio.create_subprocess_exec(
-            "systemd-run", "--user", "--scope", f"--unit={scope_name}", "--",
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            stdin=asyncio.subprocess.DEVNULL,
-            start_new_session=True,
-            env=env,
-            cwd=REPO_ROOT,
-        )
-        logger.info(f"バッチ起動(systemd scope={scope_name}): {' '.join(cmd[:3])}")
-        return proc.pid
-    except Exception as e:
-        logger.warning(f"systemd-run --scope 失敗、フォールバック: {e}")
+    # 前提チェック: /run/user/<uid> が存在しないと systemd --user は動作しない
+    uid = os.getuid()
+    runtime_dir = f"/run/user/{uid}"
+    if os.path.isdir(runtime_dir):
+        try:
+            scope_name = f"ec-batch-{os.getpid()}-{int(time.time())}"
+            env = os.environ.copy()
+            env.setdefault("XDG_RUNTIME_DIR", runtime_dir)
+            env.setdefault("DBUS_SESSION_BUS_ADDRESS", f"unix:path={runtime_dir}/bus")
+            proc = await asyncio.create_subprocess_exec(
+                "systemd-run", "--user", "--scope", f"--unit={scope_name}", "--",
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                stdin=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+                env=env,
+                cwd=REPO_ROOT,
+            )
+            # systemd-run が即座に失敗するケースを検出（DBUS不通等）
+            # 0.5秒待って returncode が付いていたら失敗とみなしフォールバック
+            await asyncio.sleep(0.5)
+            if proc.returncode is not None and proc.returncode != 0:
+                logger.warning(
+                    "systemd-run scope=%s 即時失敗(rc=%d)、フォールバック",
+                    scope_name, proc.returncode,
+                )
+            else:
+                logger.info("バッチ起動(systemd scope=%s): %s", scope_name, " ".join(cmd[:3]))
+                return proc.pid
+        except Exception as e:
+            logger.warning("systemd-run --scope 失敗、フォールバック: %s", e)
+    else:
+        logger.info("systemd --user 利用不可(%s なし)、直接起動", runtime_dir)
 
     # 層2: フォールバック（従来方式）
     proc = await asyncio.create_subprocess_exec(
@@ -87,6 +157,7 @@ async def _spawn_detached(*cmd: str) -> int:
         start_new_session=True,
         cwd=REPO_ROOT,
     )
+    logger.info("バッチ起動(直接): %s (pid=%d)", " ".join(cmd[:3]), proc.pid)
     return proc.pid
 
 
@@ -286,11 +357,108 @@ class ImageGenCommandCog(commands.Cog):
         name="manga",
         description="漫画LP生成（SS-03 pending-manga 全件・Python完結）",
     )
+    @app_commands.describe(
+        jans="JANコード（スペース区切り、13桁・複数指定可）。省略時はpending-manga全件",
+    )
     async def manga_command(
         self,
         interaction: discord.Interaction,
+        jans: str = "",
     ) -> None:
+        jan_list = _parse_jans(jans) if jans else []
+
+        # Step 1: defer（事前チェックに時間がかかるため）
+        await interaction.response.defer()
+
+        # Step 2: 事前チェック（動物判定のみ）
+        pre_cmd = [
+            "python3", f"{REPO_ROOT}/scripts/manga_remake_batch.py",
+            "--pre-check",
+        ]
+        if jan_list:
+            pre_cmd.extend(["--jan"] + jan_list)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *pre_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=REPO_ROOT,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=180,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"pre-check exit {proc.returncode}: "
+                    + stderr.decode()[-500:]
+                )
+            animals = json.loads(stdout.decode())
+        except Exception as e:
+            logger.exception("漫画LP 事前チェック失敗")
+            embed = discord.Embed(
+                title="漫画LP 事前チェック失敗",
+                description=f"```\n{e}\n```"[:4000],
+                color=COLOR_ERROR,
+            )
+            await interaction.followup.send(embed=embed)
+            return
+
+        if not animals:
+            embed = discord.Embed(
+                title="漫画LP",
+                description="対象商品が0件です。",
+                color=COLOR_ERROR,
+            )
+            await interaction.followup.send(embed=embed)
+            return
+
+        # Step 3: 確認Embed作成
+        lines = []
+        has_unknown = False
+        for item in animals:
+            a = item.get("animal")
+            name = (item.get("name") or "")[:25]
+            if a:
+                emoji = _ANIMAL_EMOJI.get(a, "❓")
+                lines.append(f"{emoji} `{item['jan']}` {name} → **{a}**")
+            else:
+                lines.append(f"❓ `{item['jan']}` {name} → **不明**")
+                has_unknown = True
+
+        desc = "\n".join(lines)
+        if has_unknown:
+            desc += (
+                "\n\n⚠ **不明**な商品があります。"
+                "ドロップダウンで動物を指定してから「作成する」を押してください。"
+            )
+
+        embed = discord.Embed(
+            title=f"🎬 漫画LP 動物確認 ({len(animals)}件)",
+            description=desc[:4000],
+            color=COLOR_CONFIRM,
+        )
+
+        # Step 4: ボタン＋ドロップダウン表示
+        view = MangaConfirmView()
+        msg = await interaction.followup.send(embed=embed, view=view, wait=True)
+
+        # Step 5: ユーザーの応答を待つ（5分タイムアウト）
+        timed_out = await view.wait()
+        if timed_out or view.result != "confirm":
+            embed.title = "🎬 漫画LP キャンセル"
+            embed.color = COLOR_ERROR
+            try:
+                await msg.edit(embed=embed, view=None)
+            except Exception:
+                pass
+            return
+
+        # Step 6: バッチ起動
         cmd = ["bash", f"{REPO_ROOT}/scripts/manga_batch.sh"]
+        if jan_list:
+            cmd.extend(["--jan"] + jan_list)
+        if view.animal_override:
+            cmd.extend(["--animal", view.animal_override])
         try:
             pid = await _spawn_detached(*cmd)
         except Exception as e:
@@ -300,20 +468,25 @@ class ImageGenCommandCog(commands.Cog):
                 description=f"```\n{e}\n```",
                 color=COLOR_ERROR,
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed)
             return
+
+        animal_note = ""
+        if view.animal_override:
+            e = _ANIMAL_EMOJI.get(view.animal_override, "")
+            animal_note = f"\n動物指定: {e} **{view.animal_override}**"
 
         embed = discord.Embed(
             title="🔄 漫画LP生成 開始",
             description=(
-                "SS-03 K列 = `pending-manga` の全商品を脚本→リーガル→画像→SFTP の順で処理\n"
-                "（Python完結 / 動物判定はVision白抜き画像優先）\n"
+                f"対象: **{len(animals)}件**{animal_note}\n"
+                "脚本→画像→SFTP の順で処理\n"
                 f"進捗・完了通知は <#1496390706304909332> で\n"
                 f"PID: `{pid}`"
             ),
             color=COLOR_STARTED,
         )
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     # ─────────────────────────────────────────────
     # /whitebg — 白抜き画像バッチ生成
