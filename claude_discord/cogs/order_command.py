@@ -192,6 +192,81 @@ def _build_preview_embed(preview: dict, user_display_name: str = "") -> discord.
             inline=True,
         )
 
+    # 最低発注条件（仕入先+メーカー別に集約して表示）
+    if orders:
+        # 仕入先+メーカーごとのcs・金額を集計
+        sm_totals: dict[str, dict] = {}
+        for o in orders:
+            key = f"{o.get('supplier', '')}___{o.get('maker', '')}"
+            if key not in sm_totals:
+                sm_totals[key] = {
+                    "supplier": o.get("supplier", ""),
+                    "maker": o.get("maker", ""),
+                    "totalCs": 0,
+                    "totalAmount": 0,
+                    "minCs": o.get("minCs", 0),
+                    "minAmount": o.get("minAmount", 0),
+                }
+            sm_totals[key]["totalCs"] += o.get("orderCs", 0)
+            sm_totals[key]["totalAmount"] += o.get("amount", 0)
+
+        cond_lines = []
+        for info in sm_totals.values():
+            min_cs = info["minCs"]
+            min_amt = info["minAmount"]
+            if min_cs <= 0 and min_amt <= 0:
+                continue
+            label = info["supplier"]
+            if info["maker"]:
+                label += f"/{info['maker']}"
+            parts = []
+            if min_cs > 0:
+                ok = "\u2705" if info["totalCs"] >= min_cs else "\u274C"
+                parts.append(f"最小{min_cs}cs{ok}")
+            if min_amt > 0:
+                ok = "\u2705" if info["totalAmount"] >= min_amt else "\u274C"
+                parts.append(f"最低\\{min_amt:,.0f}{ok}")
+            cond_lines.append(f"**{label}**: {' / '.join(parts)}")
+
+        if cond_lines:
+            cond_text = "\n".join(cond_lines)
+            if len(cond_text) > 1024:
+                cond_text = cond_text[:1020] + "..."
+            embed.add_field(
+                name="最低発注条件",
+                value=cond_text,
+                inline=True,
+            )
+
+    # 追加発注候補（最低発注条件 未達メーカーの補充候補）
+    candidates = preview.get("candidates", {})
+    if candidates:
+        for key, cands in candidates.items():
+            if not cands:
+                continue
+            parts = key.split("___", 1)
+            label = f"{parts[0]}/{parts[1]}" if len(parts) > 1 and parts[1] else parts[0]
+            cand_lines = []
+            for c in cands[:10]:
+                name = c.get("productName", "")[:20]
+                stock = c.get("stock", 0)
+                rp = c.get("reorderPoint", 0)
+                diff = c.get("stockMinusRp", 0)
+                cand_lines.append(
+                    f"`{c['jan']}` {name}\n"
+                    f"  在庫{stock} / 発注点{rp} / 差{diff:+d}"
+                )
+            if len(cands) > 10:
+                cand_lines.append(f"... 他 {len(cands) - 10}件")
+            cand_text = "\n".join(cand_lines)
+            if len(cand_text) > 1024:
+                cand_text = cand_text[:1020] + "..."
+            embed.add_field(
+                name=f"追加発注候補 {label}",
+                value=cand_text,
+                inline=False,
+            )
+
     # フッター: 合計 + 理由
     footer_parts = [f"合計: {len(orders)}品  \\{total_amount:,.0f}"]
     if reason:
