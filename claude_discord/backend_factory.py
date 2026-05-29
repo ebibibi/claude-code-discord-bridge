@@ -40,6 +40,8 @@ class BackendFactory:
         allowed_tools: list[str] | None,
         append_system_prompt: str | None,
         effort: str | None,
+        api_port: int | None = None,
+        api_secret: str | None = None,
     ) -> None:
         self.claude_command = claude_command or DEFAULT_COMMAND["claude"]
         self.codex_command = codex_command or DEFAULT_COMMAND["codex"]
@@ -50,6 +52,8 @@ class BackendFactory:
         self.allowed_tools = allowed_tools
         self.append_system_prompt = append_system_prompt
         self.effort = effort
+        self.api_port = api_port
+        self.api_secret = api_secret
 
     def command_for(self, backend: str) -> str:
         if backend == "claude":
@@ -87,6 +91,10 @@ class BackendFactory:
             kwargs["append_system_prompt"] = self.append_system_prompt
         if self.effort is not None:
             kwargs["effort"] = self.effort
+        if self.api_port is not None:
+            kwargs["api_port"] = self.api_port
+        if self.api_secret is not None:
+            kwargs["api_secret"] = self.api_secret
         runner = create_backend(backend=backend, model=chosen_model, **kwargs)
         logger.debug("Built %s runner (model=%s, thread_id=%s)", backend, chosen_model, thread_id)
         return runner

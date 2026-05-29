@@ -288,6 +288,74 @@ async def test_setup_bridge_preserves_existing_runner_api_port(tmp_path: object)
 
 
 @pytest.mark.asyncio
+async def test_setup_bridge_sets_factory_api_port(tmp_path: object) -> None:
+    """setup_bridge(api_server=...) should also set backend_factory.api_port."""
+    from claude_discord.backend_factory import BackendFactory
+
+    bot = _make_bot()
+    runner = _make_runner()
+    runner.api_port = None
+    api_server = _make_api_server()
+    factory = BackendFactory(
+        claude_command="claude",
+        codex_command="codex",
+        permission_mode="acceptEdits",
+        working_dir=None,
+        timeout_seconds=300,
+        dangerously_skip_permissions=False,
+        allowed_tools=None,
+        append_system_prompt=None,
+        effort=None,
+    )
+
+    await setup_bridge(
+        bot,
+        runner,
+        api_server=api_server,
+        backend_factory=factory,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        enable_scheduler=False,
+    )
+
+    assert factory.api_port == api_server.port
+
+
+@pytest.mark.asyncio
+async def test_setup_bridge_preserves_existing_factory_api_port(tmp_path: object) -> None:
+    """setup_bridge should not overwrite factory.api_port if already set."""
+    from claude_discord.backend_factory import BackendFactory
+
+    bot = _make_bot()
+    runner = _make_runner()
+    runner.api_port = None
+    api_server = _make_api_server()
+    api_server.port = 8099
+    factory = BackendFactory(
+        claude_command="claude",
+        codex_command="codex",
+        permission_mode="acceptEdits",
+        working_dir=None,
+        timeout_seconds=300,
+        dangerously_skip_permissions=False,
+        allowed_tools=None,
+        append_system_prompt=None,
+        effort=None,
+        api_port=7777,
+    )
+
+    await setup_bridge(
+        bot,
+        runner,
+        api_server=api_server,
+        backend_factory=factory,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        enable_scheduler=False,
+    )
+
+    assert factory.api_port == 7777
+
+
+@pytest.mark.asyncio
 async def test_setup_bridge_passes_max_concurrent_to_chat_cog(tmp_path: object) -> None:
     """max_concurrent parameter should be forwarded to ClaudeChatCog."""
     from claude_discord.cogs.claude_chat import ClaudeChatCog

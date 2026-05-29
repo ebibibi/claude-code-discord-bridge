@@ -371,6 +371,8 @@ async def setup_bridge(
         components.apply_to_api_server(api_server)
         if runner.api_port is None:
             runner.api_port = api_server.port
+        if backend_factory is not None and backend_factory.api_port is None:
+            backend_factory.api_port = api_server.port
         logger.info("Auto-wired repos to ApiServer (port=%d)", api_server.port)
 
     return components
