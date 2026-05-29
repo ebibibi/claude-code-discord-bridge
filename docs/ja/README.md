@@ -172,7 +172,7 @@ ccdb 3.0 では、Bot を再起動せずにどの AI が次のセッションを
 
 内部の仕組み:
 
-- `BackendFactory` — 起動時に静的な設定（バックエンドごとのコマンドパス、パーミッションモード、作業ディレクトリ、許可ツール、タイムアウト、append-system-prompt、effort）を取り込み、必要に応じて `ClaudeRunner` または `CodexRunner` を新規生成。
+- `BackendFactory` — 起動時に静的な設定（バックエンドごとのコマンドパス、パーミッションモード、作業ディレクトリ、許可ツール、タイムアウト、append-system-prompt、effort、api_port、api_secret）を取り込み、必要に応じて `ClaudeRunner` または `CodexRunner` を新規生成。`api_port` は REST API サーバー起動後に `setup_bridge` が自動で設定するため、Factory 経由で生成されたランナーは常に `CCDB_API_URL` がサブプロセス環境に注入される。
 - `BackendSettings` — **スレッド > グローバル > 環境変数**の優先順位でアクティブなバックエンドを解決し、スラッシュコマンドからの書き込みを永続化する `SettingsRepository` の薄いラッパー。
 - `SessionBackend` プロトコル — 両方のランナーが満たす抽象インターフェース。内部配管（Cog、embed、ビュー、スケジューラー、Webhook トリガー）は `SessionBackend` を受け取り、具体的なランナークラスには依存しない。
 
