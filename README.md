@@ -169,7 +169,7 @@ Concrete example:
 
 Behind the scenes:
 
-- `BackendFactory` — captures the static configuration at boot (per-backend command path, permission mode, working dir, allowed tools, timeout, append-system-prompt, effort) and builds a fresh `ClaudeRunner` or `CodexRunner` on demand.
+- `BackendFactory` — captures the static configuration at boot (per-backend command path, permission mode, working dir, allowed tools, timeout, append-system-prompt, effort, api_port, api_secret) and builds a fresh `ClaudeRunner` or `CodexRunner` on demand. `api_port` is wired automatically by `setup_bridge` after the REST API server starts, so factory-built runners always have `CCDB_API_URL` injected into their subprocess environment.
 - `BackendSettings` — thin wrapper over `SettingsRepository` that resolves the active backend with **thread > global > env** precedence and persists writes from the slash commands.
 - `SessionBackend` Protocol — the abstract interface that both runners satisfy. Internal plumbing (cogs, embeds, views, scheduler, webhook trigger) takes a `SessionBackend`, never one concrete runner class.
 
