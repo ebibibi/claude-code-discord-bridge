@@ -24,7 +24,32 @@ from discord.ext import commands
 logger = logging.getLogger(__name__)
 
 SCRIPT = "/home/ubuntu/ec-automation-system/scripts/goq_inventory_sync.py"
+SCRIPT_CWD = "/home/ubuntu/ec-automation-system"
+ENV_FILE = "/home/ubuntu/ec-automation-system/scripts/.env"
+SP_API_CREDENTIALS = "/home/ubuntu/.config/sp-api-credentials.json"
 TIMEOUT = 600
+
+
+def _build_subprocess_env() -> dict[str, str]:
+    """サブプロセス用の環境変数を構築（SP-API / auPAY / Qoo10 / Yahoo 認証情報を確実に渡す）.
+
+    Bot のHOMEがどこにあっても、ec-automation-system/scripts/.env と
+    SP-API credentials JSON が読めるよう絶対パスを明示。これで Amazon が
+    認証エラーで取れないケースを防ぐ。
+    """
+    env = {**os.environ}
+    env.setdefault("SP_API_CREDENTIALS", SP_API_CREDENTIALS)
+    try:
+        with open(ENV_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                env.setdefault(k.strip(), v.strip())
+    except FileNotFoundError:
+        logger.warning("env file not found: %s", ENV_FILE)
+    return env
 
 COLOR_WORKING = 0xF39C12
 COLOR_SUCCESS = 0x2ECC71
@@ -115,7 +140,8 @@ class ZaikoCommandCog(commands.Cog):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd="/home/ubuntu/ec-automation-system",
+                cwd=SCRIPT_CWD,
+                env=_build_subprocess_env(),
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=TIMEOUT
