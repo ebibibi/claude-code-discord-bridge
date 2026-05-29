@@ -87,9 +87,19 @@ class AddJanModal(discord.ui.Modal, title="追加JAN入力"):
         max_length=500,
     )
 
-    def __init__(self):
+    candidates_display = discord.ui.TextInput(
+        label="追加発注候補（参考・編集不要）",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        default="候補なし",
+        max_length=4000,
+    )
+
+    def __init__(self, candidates_text: str = ""):
         super().__init__(timeout=120)
         self.added_jans: list[str] = []
+        if candidates_text:
+            self.candidates_display.default = candidates_text
 
     async def on_submit(self, interaction: discord.Interaction):
         raw = self.jans_input.value.strip()
@@ -130,22 +140,23 @@ class AddJanModal(discord.ui.Modal, title="追加JAN入力"):
 class OrderConfirmView(discord.ui.View):
     """発注確認ボタン（発注する / ドライラン / JAN追加 / キャンセル）"""
 
-    def __init__(self, user_id: int, preview_path: str, min_conditions_met: bool = True):
+    def __init__(self, user_id: int, preview_path: str, min_conditions_met: bool = True, candidates: dict | None = None):
         super().__init__(timeout=300)  # 5分でタイムアウト
         self.user_id = user_id
         self.preview_path = preview_path
         self.result: str | None = None
         self.added_jans: list[str] = []
+        self.candidates = candidates or {}
 
         if not min_conditions_met:
             # 「発注する」ボタンを無効化
             for item in self.children:
-                if isinstance(item, discord.ui.Button) and item.label == "\u767a\u6ce8\u3059\u308b":
+                if isinstance(item, discord.ui.Button) and item.label == "発注する":
                     item.disabled = True
                     break
             # 「JAN追加」ボタンを動的に追加
             add_btn = discord.ui.Button(
-                label="JAN\u8ffd\u52a0",
+                label="JAN追加",
                 style=discord.ButtonStyle.primary,
                 emoji="\u2795",
             )
@@ -191,7 +202,28 @@ class OrderConfirmView(discord.ui.View):
                 "このボタンは操作できません。", ephemeral=True
             )
             return
-        modal = AddJanModal()
+        # 候補テキスト生成（モーダルに表示）
+        cand_lines = []
+        for key, cands in self.candidates.items():
+            if not cands:
+                continue
+            parts = key.split("___", 1)
+            label = f"{parts[0]}/{parts[1]}" if len(parts) > 1 and parts[1] else parts[0]
+            cand_lines.append(f"【{label}】")
+            for c in cands[:8]:
+                name = c.get("productName", "")[:18]
+                stock = c.get("stock", 0)
+                rp = c.get("reorderPoint", 0)
+                diff = c.get("stockMinusRp", 0)
+                upc = c.get("unitPerCs", 1)
+                cand_lines.append(
+                    f"{c['jan']}:1 {name} "
+                    f"在庫{stock}/発注点{rp}/差{diff:+d} ({upc}個/cs)"
+                )
+            if len(cands) > 8:
+                cand_lines.append(f"... 他 {len(cands) - 8}件")
+        cand_text = "\n".join(cand_lines) if cand_lines else ""
+        modal = AddJanModal(candidates_text=cand_text)
         await interaction.response.send_modal(modal)
         timed_out = await modal.wait()
         if timed_out or not modal.added_jans:
@@ -341,9 +373,10 @@ def _build_preview_embed(preview: dict, user_display_name: str = "") -> discord.
                 stock = c.get("stock", 0)
                 rp = c.get("reorderPoint", 0)
                 diff = c.get("stockMinusRp", 0)
+                upc = c.get("unitPerCs", 1)
                 cand_lines.append(
                     f"`{c['jan']}` {name}\n"
-                    f"  \u5728\u5eab{stock} / \u767a\u6ce8\u70b9{rp} / \u5dee{diff:+d}"
+                    f"  在庫{stock} / 発注点{rp} / 差{diff:+d} ({upc}個/cs)"
                 )
             if len(cands) > 10:
                 cand_lines.append(f"... \u4ed6 {len(cands) - 10}\u4ef6")
@@ -702,8 +735,9 @@ class OrderCommandCog(commands.Cog):
 
             # プレビュー Embed + ボタン表示
             min_conditions_met = preview_data.get("minConditionsMet", True)
+            candidates = preview_data.get("candidates", {})
             preview_embed = _build_preview_embed(preview_data, user_display_name)
-            view = OrderConfirmView(user_id, preview_path, min_conditions_met=min_conditions_met)
+            view = OrderConfirmView(user_id, preview_path, min_conditions_met=min_conditions_met, candidates=candidates)
             await interaction.edit_original_response(embed=preview_embed, view=view)
 
             # ボタン待機
