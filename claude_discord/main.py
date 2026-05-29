@@ -214,6 +214,16 @@ async def main() -> None:
 
     order_cog = OrderCommandCog(bot)
 
+    # ZaikoCommandCog — /zaiko (GoQ在庫連携シート生成)
+    from .cogs.zaiko_command import ZaikoCommandCog
+
+    zaiko_cog = ZaikoCommandCog(bot)
+
+    # CategoryCommandCog — /category-search (全7モールカテゴリ一括検索)
+    from .cogs.category_command import CategoryCommandCog
+
+    category_cog = CategoryCommandCog(bot)
+
     async with bot:
         await bot.add_cog(cog)
         await bot.add_cog(repo_viewer_cog)
@@ -227,6 +237,8 @@ async def main() -> None:
         await bot.add_cog(order_cog)
         if listing_cog is not None:
             await bot.add_cog(listing_cog)
+        await bot.add_cog(zaiko_cog)
+        await bot.add_cog(category_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)
