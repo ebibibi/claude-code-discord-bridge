@@ -93,8 +93,14 @@ class ClaudeDiscordBot(commands.Bot):
 
             asyncio.create_task(self._cleanup_orphaned_worktrees())
 
-        # Sync slash commands — per-guild for instant availability
+        # Sync slash commands — per-guild only（グローバル登録は重複の原因になるため廃止）
         try:
+            # まず既存のグローバル登録をクリア（過去の重複を解消）
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
+            logger.info("Cleared global slash commands")
+
+            # ギルド単位でのみ登録（即時反映）
             synced_count = 0
             for guild in self.guilds:
                 self.tree.copy_global_to(guild=guild)
@@ -105,9 +111,7 @@ class ClaudeDiscordBot(commands.Bot):
                     len(synced),
                     guild.name,
                 )
-            # Also sync globally as fallback
-            await self.tree.sync()
-            logger.info("Total slash commands synced: %d", synced_count)
+            logger.info("Total slash commands synced: %d (guild-only)", synced_count)
         except Exception:
             logger.exception("Failed to sync slash commands")
 
