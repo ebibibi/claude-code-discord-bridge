@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 PIPELINE_SCRIPT = "/home/ubuntu/ec-automation-system/scripts/shuppin_pipeline.py"
 PREVIEW_TIMEOUT = 60
 SUBMIT_TIMEOUT = 600  # バリエーション一括出品は時間がかかる
+SUBMIT_TIMEOUT_ALL = 900  # 全モール一括出品時
 
 # Embed カラー
 COLOR_PREVIEW = 0x3498DB   # 青
@@ -131,6 +132,7 @@ class ListingCommandCog(commands.Cog):
         jan="JAN（任意: 未指定=未出品JAN全部、指定=バリエーション展開）",
     )
     @app_commands.choices(mall=[
+        app_commands.Choice(name="ALL SHOP（全モール）", value="all"),
         app_commands.Choice(name="Amazon", value="amazon"),
         app_commands.Choice(name="Yahoo", value="yahoo"),
         app_commands.Choice(name="Qoo10", value="qoo10"),
@@ -274,13 +276,25 @@ class ListingCommandCog(commands.Cog):
                     color=COLOR_PREVIEW,
                 )
         else:
-            embed = discord.Embed(
-                title=f"{mall.upper()} 一括出品",
-                description="SS-17「他モール出品」で未出品のJANを全て出品します。",
-                color=COLOR_PREVIEW,
-            )
+            if mall == "all":
+                embed = discord.Embed(
+                    title="ALL SHOP 全モール一括出品",
+                    description=(
+                        "**全6モール**に未出品のJANを一括出品します。\n"
+                        "Amazon / Yahoo / Qoo10 / auPAY / Temu / メルカリ\n\n"
+                        "データ不備のモールは自動スキップされます。"
+                    ),
+                    color=COLOR_PREVIEW,
+                )
+            else:
+                embed = discord.Embed(
+                    title=f"{mall.upper()} 一括出品",
+                    description="SS-17「他モール出品」で未出品のJANを全て出品します。",
+                    color=COLOR_PREVIEW,
+                )
 
-        embed.set_footer(text=f"出品先: {mall.upper()}")
+        mall_label = "全モール（Amazon/Yahoo/Qoo10/auPAY/Temu/メルカリ）" if mall == "all" else mall.upper()
+        embed.set_footer(text=f"出品先: {mall_label}")
 
         # Step 3: 確認ボタン
         view = ListingConfirmView(user_id, mall, jan)
@@ -310,9 +324,10 @@ class ListingCommandCog(commands.Cog):
         dry_run = view.result == "dry_run"
         mode_label = "ドライラン" if dry_run else "出品"
 
+        mall_display = "全モール" if mall == "all" else mall.upper()
         progress_embed = discord.Embed(
             title=f"{mode_label}実行中...",
-            description=f"モール: {mall.upper()}\nしばらくお待ちください。",
+            description=f"モール: {mall_display}\nしばらくお待ちください。",
             color=COLOR_WORKING,
         )
         await interaction.edit_original_response(embed=progress_embed, view=None)
@@ -332,8 +347,9 @@ class ListingCommandCog(commands.Cog):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            timeout = SUBMIT_TIMEOUT_ALL if mall == "all" else SUBMIT_TIMEOUT
             stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=SUBMIT_TIMEOUT
+                proc.communicate(), timeout=timeout
             )
         except asyncio.TimeoutError:
             embed = discord.Embed(
@@ -368,7 +384,7 @@ class ListingCommandCog(commands.Cog):
 
             result_embed = discord.Embed(
                 title=f"{mode_label}完了",
-                description=f"モール: **{mall.upper()}**",
+                description=f"モール: **{mall_display}**",
                 color=COLOR_SUCCESS,
             )
 
@@ -379,6 +395,27 @@ class ListingCommandCog(commands.Cog):
                     result_embed.add_field(
                         name="結果",
                         value=f"```\n{chr(10).join(summary_lines[-10:])}\n```",
+                        inline=False,
+                    )
+
+            # スキップされたモールがあれば表示（listing.pyのJSON出力から取得）
+            if result_data:
+                skip_list = []
+                try:
+                    inner_stdout = result_data.get("submit", {}).get("stdout", "")
+                    # listing.pyは最後の行にJSONを出力する
+                    for line in reversed(inner_stdout.strip().split("\n")):
+                        line = line.strip()
+                        if line.startswith("{"):
+                            inner = json.loads(line)
+                            skip_list = inner.get("skipped", [])
+                            break
+                except (json.JSONDecodeError, ValueError, AttributeError):
+                    pass
+                if skip_list:
+                    result_embed.add_field(
+                        name="スキップ（データ不備）",
+                        value=", ".join(skip_list),
                         inline=False,
                     )
 
