@@ -54,39 +54,23 @@ class ProfitCommandCog(commands.Cog):
 
     @app_commands.command(
         name="profit",
-        description="社内SKU/JAN+モール+売価から利益率を算出（売価−原価−手数料−送料、広告費除外）",
+        description="SKU を入れて利益率表示（同一JANの全店舗一覧、A3事前計算値を参照）",
     )
     @app_commands.describe(
-        mall="モール（手数料率計算用）",
-        sku="社内SKU（<JAN>-<配送番号>-<個数>形式）または JAN コード",
-        price="売価（円）",
-    )
-    @app_commands.choices(
-        mall=[
-            app_commands.Choice(name="楽天", value="楽天"),
-            app_commands.Choice(name="Amazon", value="Amazon"),
-            app_commands.Choice(name="Yahoo", value="Yahoo"),
-            app_commands.Choice(name="auPAY", value="auPAY"),
-            app_commands.Choice(name="Qoo10", value="Qoo10"),
-            app_commands.Choice(name="Temu", value="Temu"),
-            app_commands.Choice(name="メルカリ", value="メルカリ"),
-        ],
+        sku="社内SKU（<JAN>-<配送番号>-<個数>形式、例: 4972228232401-hk-1）または JAN",
+        shop="特定店舗のみ表示する場合に指定（省略時は全店舗一覧）",
     )
     async def profit(
         self,
         interaction: discord.Interaction,
-        mall: str,
         sku: str,
-        price: float,
+        shop: str = "",
     ) -> None:
         """利益率算出コマンド."""
-        if price <= 0:
-            await interaction.response.send_message(
-                "売価（price）は1以上を指定してください。", ephemeral=True
-            )
-            return
-        cmd = ["python3", SCRIPT, "jan", sku, "--mall", mall, "--price", str(price)]
-        title = f"利益率確認中... SKU: {sku} / {mall} / ¥{int(price):,}"
+        cmd = ["python3", SCRIPT, "sku", sku]
+        if shop:
+            cmd.extend(["--shop", shop])
+        title = f"利益率確認中... SKU: {sku}" + (f" / 店舗: {shop}" if shop else " (全店舗)")
 
         embed = discord.Embed(title=title, color=COLOR_WORKING)
         await interaction.response.send_message(embed=embed)
