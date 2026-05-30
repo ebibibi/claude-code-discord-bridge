@@ -54,23 +54,62 @@ class ProfitCommandCog(commands.Cog):
 
     @app_commands.command(
         name="profit",
-        description="SKU を入れて利益率表示（同一JANの全店舗一覧、A3事前計算値を参照）",
+        description="利益率算出（SKU）or マスタ表示（手数料/配送/FBA手数料）",
     )
     @app_commands.describe(
-        sku="社内SKU（<JAN>-<配送番号>-<個数>形式、例: 4972228232401-hk-1）または JAN",
-        shop="特定店舗のみ表示する場合に指定（省略時は全店舗一覧）",
+        sku="【利益率】社内SKU（例: 4972228232401-hk-1）または JAN",
+        shop="【利益率】特定店舗のみ表示する場合に指定",
+        master="【マスタ表示】表示するマスタ種別",
+        mall="【マスタ表示】手数料マスタのモール絞り込み",
+    )
+    @app_commands.choices(
+        master=[
+            app_commands.Choice(name="🏷️ 手数料マスタ", value="fee"),
+            app_commands.Choice(name="🚚 配送マスタ", value="shipping"),
+            app_commands.Choice(name="📦 FBA手数料マスタ", value="fba"),
+        ],
+        mall=[
+            app_commands.Choice(name="楽天", value="楽天"),
+            app_commands.Choice(name="Amazon", value="Amazon"),
+            app_commands.Choice(name="Yahoo", value="Yahoo"),
+            app_commands.Choice(name="auPAY", value="auPAY"),
+            app_commands.Choice(name="Qoo10", value="Qoo10"),
+            app_commands.Choice(name="Temu", value="Temu"),
+            app_commands.Choice(name="メルカリ", value="メルカリ"),
+        ],
     )
     async def profit(
         self,
         interaction: discord.Interaction,
-        sku: str,
+        sku: str = "",
         shop: str = "",
+        master: str = "",
+        mall: str = "",
     ) -> None:
-        """利益率算出コマンド."""
-        cmd = ["python3", SCRIPT, "sku", sku]
-        if shop:
-            cmd.extend(["--shop", shop])
-        title = f"利益率確認中... SKU: {sku}" + (f" / 店舗: {shop}" if shop else " (全店舗)")
+        """利益率算出 or マスタ表示."""
+        if master:
+            cmd = ["python3", SCRIPT, "master", master]
+            if mall:
+                cmd.extend(["--mall", mall])
+            mname = {
+                "fee": "🏷️ 手数料マスタ",
+                "shipping": "🚚 配送マスタ",
+                "fba": "📦 FBA手数料マスタ",
+            }.get(master, master)
+            title = f"{mname} 取得中..." + (f" ({mall})" if mall else "")
+        elif sku:
+            cmd = ["python3", SCRIPT, "sku", sku]
+            if shop:
+                cmd.extend(["--shop", shop])
+            title = f"利益率確認中... SKU: {sku}" + (
+                f" / 店舗: {shop}" if shop else " (全店舗)"
+            )
+        else:
+            await interaction.response.send_message(
+                "`sku`（利益率モード）または `master`（マスタ表示モード）のいずれかを指定してください。",
+                ephemeral=True,
+            )
+            return
 
         embed = discord.Embed(title=title, color=COLOR_WORKING)
         await interaction.response.send_message(embed=embed)
