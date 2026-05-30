@@ -145,7 +145,13 @@ class ProfitCommandCog(commands.Cog):
                     color=COLOR_SUCCESS,
                 )
             else:
-                detail = (err or out).strip() or "(出力なし)"
+                # stdout / stderr 両方表示（stderr に Warning だけ出る場合があるため）
+                parts: list[str] = []
+                if out.strip():
+                    parts.append(f"[stdout]\n{out.strip()}")
+                if err.strip():
+                    parts.append(f"[stderr]\n{err.strip()}")
+                detail = "\n\n".join(parts) or "(出力なし)"
                 result_embed = discord.Embed(
                     title=f"❌ エラー (exit={proc.returncode})",
                     description=f"```\n{detail[:1800]}\n```",
