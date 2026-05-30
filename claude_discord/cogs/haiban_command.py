@@ -92,8 +92,8 @@ class HaibanCommandCog(commands.Cog):
         jan: str = "",
         status: str = "廃盤(在庫限り)",
         note: str = "",
-        old_price: float = 0,
-        new_price: float = 0,
+        old_price: float = 0.0,
+        new_price: float = 0.0,
         condition: str = "通常変更",
     ) -> None:
         """廃盤管理コマンド."""
