@@ -229,6 +229,11 @@ async def main() -> None:
 
     haiban_cog = HaibanCommandCog(bot)
 
+    # ProfitCommandCog — /profit (モール固有SKU/JANから利益率算出)
+    from .cogs.profit_command import ProfitCommandCog
+
+    profit_cog = ProfitCommandCog(bot)
+
     async with bot:
         await bot.add_cog(cog)
         await bot.add_cog(repo_viewer_cog)
@@ -245,6 +250,7 @@ async def main() -> None:
         await bot.add_cog(zaiko_cog)
         await bot.add_cog(category_cog)
         await bot.add_cog(haiban_cog)
+        await bot.add_cog(profit_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)
