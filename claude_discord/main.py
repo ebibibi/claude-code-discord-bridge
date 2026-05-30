@@ -224,6 +224,11 @@ async def main() -> None:
 
     category_cog = CategoryCommandCog(bot)
 
+    # HaibanCommandCog — /haiban (廃盤管理・原価変更・在庫チェック)
+    from .cogs.haiban_command import HaibanCommandCog
+
+    haiban_cog = HaibanCommandCog(bot)
+
     async with bot:
         await bot.add_cog(cog)
         await bot.add_cog(repo_viewer_cog)
@@ -239,6 +244,7 @@ async def main() -> None:
             await bot.add_cog(listing_cog)
         await bot.add_cog(zaiko_cog)
         await bot.add_cog(category_cog)
+        await bot.add_cog(haiban_cog)
 
         # Cleanup old sessions on startup
         deleted = await repo.cleanup_old(days=30)
