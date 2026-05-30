@@ -1,9 +1,11 @@
-"""利益率確認コマンド Cog — /profit でモール固有SKU/JANから利益率を算出.
+"""利益率確認コマンド Cog — /profit で社内SKU/JAN+モール+売価から利益率を算出.
+
+社内SKUは全モール共通の <JAN>-<配送番号>-<個数> 形式（例: 4972228232401-hk-1）。
+SKU から JAN は自動抽出（先頭の "-" まで）。JAN直接入力も可。
 
 使い方:
-  /profit mall:楽天 sku:<管理番号> store:mofu
-  /profit mall:Amazon sku:<SKU> account:1
-  /profit mall:JAN sku:<JAN> price:1980
+  /profit mall:楽天 sku:4972228232401-hk-1 price:1980
+  /profit mall:Amazon sku:4972228232005 price:2480
 """
 
 from __future__ import annotations
@@ -52,37 +54,22 @@ class ProfitCommandCog(commands.Cog):
 
     @app_commands.command(
         name="profit",
-        description="モール固有SKU/JANから利益率を算出（売価−原価−手数料−送料、広告費は除外）",
+        description="社内SKU/JAN+モール+売価から利益率を算出（売価−原価−手数料−送料、広告費除外）",
     )
     @app_commands.describe(
-        mall="モール種別",
-        sku="モール固有SKU（楽天=管理番号 / Amazon=SKU / JAN モード=JANコード）",
-        store="楽天のみ：店舗",
-        account="Amazonのみ：アカウント",
-        price="JANモード時の売価（円）",
-        jan_mall="JANモード時のモール（手数料率計算用）",
+        mall="モール（手数料率計算用）",
+        sku="社内SKU（<JAN>-<配送番号>-<個数>形式）または JAN コード",
+        price="売価（円）",
     )
     @app_commands.choices(
         mall=[
-            app_commands.Choice(name="楽天", value="rakuten"),
-            app_commands.Choice(name="Amazon", value="amazon"),
-            app_commands.Choice(name="JAN直接指定（売価手入力）", value="jan"),
-        ],
-        store=[
-            app_commands.Choice(name="うちのmofu", value="mofu"),
-            app_commands.Choice(name="fanddmart", value="fanddmart"),
-        ],
-        account=[
-            app_commands.Choice(name="a1 (タカエンタープライズ)", value=1),
-            app_commands.Choice(name="a2 (日用品生活ショップ)", value=2),
-        ],
-        jan_mall=[
             app_commands.Choice(name="楽天", value="楽天"),
             app_commands.Choice(name="Amazon", value="Amazon"),
             app_commands.Choice(name="Yahoo", value="Yahoo"),
             app_commands.Choice(name="auPAY", value="auPAY"),
             app_commands.Choice(name="Qoo10", value="Qoo10"),
             app_commands.Choice(name="Temu", value="Temu"),
+            app_commands.Choice(name="メルカリ", value="メルカリ"),
         ],
     )
     async def profit(
@@ -90,34 +77,16 @@ class ProfitCommandCog(commands.Cog):
         interaction: discord.Interaction,
         mall: str,
         sku: str,
-        store: str = "mofu",
-        account: int = 1,
-        price: float = 0.0,
-        jan_mall: str = "楽天",
+        price: float,
     ) -> None:
         """利益率算出コマンド."""
-        cmd = ["python3", SCRIPT]
-
-        if mall == "rakuten":
-            cmd.extend(["rakuten", sku, "--store", store])
-            title = f"楽天 利益率確認中... SKU: {sku}"
-        elif mall == "amazon":
-            cmd.extend(["amazon", sku, "--account", str(account)])
-            title = f"Amazon 利益率確認中... SKU: {sku}"
-        elif mall == "jan":
-            if not price or price <= 0:
-                await interaction.response.send_message(
-                    "JANモードでは price（売価）を指定してください。",
-                    ephemeral=True,
-                )
-                return
-            cmd.extend(["jan", sku, "--mall", jan_mall, "--price", str(price)])
-            title = f"JAN 利益率確認中... JAN: {sku} / モール: {jan_mall}"
-        else:
+        if price <= 0:
             await interaction.response.send_message(
-                "不明なモールです。", ephemeral=True
+                "売価（price）は1以上を指定してください。", ephemeral=True
             )
             return
+        cmd = ["python3", SCRIPT, "jan", sku, "--mall", mall, "--price", str(price)]
+        title = f"利益率確認中... SKU: {sku} / {mall} / ¥{int(price):,}"
 
         embed = discord.Embed(title=title, color=COLOR_WORKING)
         await interaction.response.send_message(embed=embed)
