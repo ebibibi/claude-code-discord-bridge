@@ -176,6 +176,19 @@ class ToolUseEvent:
 
 
 @dataclass
+class HookEvent:
+    """Parsed hook lifecycle event from stream-json."""
+
+    hook_event_name: str  # "Stop", "PreToolUse", etc.
+    hook_name: str = ""
+    command: str = ""
+    status_message: str = ""
+    lifecycle: str = ""  # "start", "complete", or "" for progress
+    num_hooks: int = 0
+    duration_ms: int = 0
+
+
+@dataclass
 class StreamEvent:
     """A parsed event from the Claude Code stream-json output."""
 
@@ -207,3 +220,5 @@ class StreamEvent:
     context_window: int | None = None
     error: str | None = None
     rate_limit_info: RateLimitInfo | None = None
+    hook_event: HookEvent | None = None
+    stop_hook_has_output: bool = False

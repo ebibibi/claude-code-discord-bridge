@@ -15,6 +15,7 @@ from .types import (
     AskQuestion,
     ContentBlockType,
     ElicitationRequest,
+    HookEvent,
     MessageType,
     PermissionRequest,
     RateLimitInfo,
@@ -60,7 +61,7 @@ def parse_line(line: str) -> StreamEvent | None:
     elif msg_type == MessageType.RESULT:
         _parse_result(data, event)
     elif msg_type == MessageType.PROGRESS:
-        pass  # No additional parsing needed — the event itself resets stall timers
+        _parse_progress(data, event)
     elif msg_type == MessageType.RATE_LIMIT_EVENT:
         _parse_rate_limit_event(data, event)
 
@@ -100,6 +101,26 @@ def _parse_system(data: dict[str, Any], event: StreamEvent) -> None:
             schema=data.get("schema", {}),
         )
         logger.info("MCP elicitation: %s (%s)", data.get("server_name"), data.get("mode"))
+    elif subtype == "stop_hook_summary":
+        event.stop_hook_has_output = bool(data.get("hasOutput", False))
+        logger.info("Stop hook summary (hasOutput=%s)", event.stop_hook_has_output)
+    elif subtype in ("hook_execution_start", "hook_execution_complete"):
+        lifecycle = "start" if subtype == "hook_execution_start" else "complete"
+        num_hooks_str = data.get("num_hooks", "0")
+        duration_str = data.get("total_duration_ms", "0")
+        event.hook_event = HookEvent(
+            hook_event_name=data.get("hook_event", ""),
+            hook_name=data.get("hook_name", ""),
+            lifecycle=lifecycle,
+            num_hooks=int(num_hooks_str) if num_hooks_str.isdigit() else 0,
+            duration_ms=int(duration_str) if duration_str.isdigit() else 0,
+        )
+        logger.info(
+            "Hook %s: %s (%d hooks)",
+            lifecycle,
+            data.get("hook_event"),
+            event.hook_event.num_hooks,
+        )
 
 
 def _parse_assistant(data: dict[str, Any], event: StreamEvent) -> None:
@@ -229,6 +250,20 @@ def _parse_result(data: dict[str, Any], event: StreamEvent) -> None:
         # not a normal session-complete display.
         event.error = result_text
         event.text = ""  # suppress duplicate display via result text path
+
+
+def _parse_progress(data: dict[str, Any], event: StreamEvent) -> None:
+    """Parse progress message — extract hook_progress data if present."""
+    progress_data = data.get("data", {})
+    if not isinstance(progress_data, dict):
+        return
+    if progress_data.get("type") == "hook_progress":
+        event.hook_event = HookEvent(
+            hook_event_name=progress_data.get("hookEvent", ""),
+            hook_name=progress_data.get("hookName", ""),
+            command=progress_data.get("command", ""),
+            status_message=progress_data.get("statusMessage", ""),
+        )
 
 
 def _parse_rate_limit_event(data: dict[str, Any], event: StreamEvent) -> None:

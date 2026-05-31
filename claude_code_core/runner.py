@@ -292,6 +292,8 @@ class ClaudeRunner:
         if self.include_partial_messages:
             args.append("--include-partial-messages")
 
+        args.append("--include-hook-events")
+
         if self.dangerously_skip_permissions and self.permission_mode not in (
             "auto",
             "plan",

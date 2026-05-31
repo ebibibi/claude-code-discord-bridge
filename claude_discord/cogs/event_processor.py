@@ -266,6 +266,11 @@ class EventProcessor:
             await self._handle_elicitation(event)
             return
 
+        # Hook lifecycle events (--include-hook-events)
+        if event.hook_event is not None:
+            await self._handle_hook_lifecycle(event)
+            return
+
         if not event.session_id:
             return
 
@@ -397,7 +402,10 @@ class EventProcessor:
                 logger.warning("Failed to clear tool in-progress indicator", exc_info=True)
 
     async def _on_progress(self, event: StreamEvent) -> None:
-        """Handle PROGRESS events — reset stall timer (compact in progress)."""
+        """Handle PROGRESS events — reset stall timer, show hook status."""
+        if event.hook_event is not None and self._config.status:
+            await self._config.status.set_hook(event.hook_event.hook_event_name)
+            return
         if self._config.status:
             self._config.status._reset_stall_timer()
 
@@ -681,6 +689,33 @@ class EventProcessor:
             logger.warning(
                 "Failed to post todo embed; will retry on next TodoWrite call", exc_info=True
             )
+
+    async def _handle_hook_lifecycle(self, event: StreamEvent) -> None:
+        """Show hook execution start/complete as Discord subtext."""
+        assert event.hook_event is not None
+        he = event.hook_event
+
+        if self._chat_only:
+            if self._config.status and he.lifecycle == "start":
+                await self._config.status.set_hook(he.hook_event_name)
+            return
+
+        if he.lifecycle == "start":
+            label = f"\U0001fa9d {he.hook_event_name} hooks running ({he.num_hooks})"
+            if self._config.status:
+                await self._config.status.set_hook(he.hook_event_name)
+        elif he.lifecycle == "complete":
+            dur = he.duration_ms
+            label = f"\U0001fa9d {he.hook_event_name} hooks completed"
+            if dur:
+                label += f" ({dur}ms)"
+            if self._config.status:
+                await self._config.status.set_thinking()
+        else:
+            return
+
+        with contextlib.suppress(discord.HTTPException):
+            await self._config.thread.send(f"-# {label}")
 
     async def _bump_stop(self) -> None:
         """Move the Stop button to the bottom of the thread if configured."""
