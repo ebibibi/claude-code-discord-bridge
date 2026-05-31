@@ -351,6 +351,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `THREAD_INBOX_ENABLED` | 启用持久线程收件箱 | `false` |
 | `THREAD_AUTO_RENAME` | 使用 Claude 自动重命名线程 | `false` |
 | `CCDB_CLI_ENV_FILE` | 每次 CLI 调用时合并到环境的 `KEY=VALUE` 文件 | （可选） |
+| `CCDB_LOG_FILE` | 日志文件路径。设置后，将在默认 stdout 处理器旁边添加轮转文件处理器（10 MB × 5 个备份），方便监控和告警 | （可选） |
 | `API_HOST` | REST API 绑定地址 | `127.0.0.1` |
 | `API_PORT` | REST API 端口（设置后启用） | （可选） |
 

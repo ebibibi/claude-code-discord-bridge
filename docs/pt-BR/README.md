@@ -312,6 +312,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `THREAD_INBOX_ENABLED` | Habilitar caixa de entrada de thread persistente | `false` |
 | `THREAD_AUTO_RENAME` | Auto-renomear novas threads com título gerado pelo Claude | `false` |
 | `CCDB_CLI_ENV_FILE` | Caminho para arquivo `KEY=VALUE` mesclado no ambiente do subprocesso CLI | (opcional) |
+| `CCDB_LOG_FILE` | Caminho para arquivo de log. Quando definido, um manipulador de arquivo rotativo (10 MB × 5 backups) é adicionado ao stdout padrão. Útil para monitoramento e alertas | (opcional) |
 | `API_HOST` | Endereço de bind da REST API | `127.0.0.1` |
 | `API_PORT` | Porta da REST API (habilita REST API quando configurada) | (opcional) |
 
