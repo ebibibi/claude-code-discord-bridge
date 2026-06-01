@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **API provider indicator** — After each session, the statusline footer shows a `🔗 API: <provider>` line indicating which API endpoint the Claude Code CLI is actually using: `Anthropic API (direct)`, `AWS Bedrock`, `Google Vertex AI`, `Azure AI Foundry`, or a custom base URL. The label is derived from the final subprocess environment (`_build_env()`), so CLI env overlays (`CCDB_CLI_ENV_FILE`) and systemd-provided variables are reflected accurately. It is shown even when no `statusLine` is configured, so "which API am I using right now" stays visible after every turn. Adds the `detect_api_provider()` helper (exported from `claude_code_core`) and `SessionBackend.describe_api()` on both `ClaudeRunner` and `CodexRunner`.
+
 ## [3.0.0] - 2026-05-15
 
 ### Added

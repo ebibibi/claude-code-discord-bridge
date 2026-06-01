@@ -212,6 +212,7 @@ Behind the scenes:
 - **Hard stall notification** — Thread message after no activity (extended thinking or context compression); resets automatically when Claude resumes. Thresholds are model-aware: 30 s for standard models, 120 s for Opus (which has longer thinking pauses)
 - **Timeout notifications** — Embed with elapsed time and resume guidance on timeout
 - **StatusLine display** — When Claude configures a `statusLine` (via `/statusline-setup`), the current status is shown in Discord after each session as a concise, always-visible indicator
+- **API provider indicator** — After each session, a `🔗 API: <provider>` line shows which endpoint the CLI is actually using (`Anthropic API (direct)`, `AWS Bedrock`, `Google Vertex AI`, `Azure AI Foundry`, or a custom base URL), derived from the real subprocess environment so CLI env overlays are reflected. Always shown — even without a configured `statusLine`.
 - **Thread inbox** — When `THREAD_INBOX_ENABLED=true`, the dashboard shows a persistent 📬 inbox section: after each session ends, Claude classifies the final message (`waiting` / `done` / `ambiguous`) via a lightweight `claude -p` call; threads awaiting your reply survive bot restarts and are surfaced until you respond
 
 #### 🔌 Input & Skills

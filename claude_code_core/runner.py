@@ -20,6 +20,7 @@ import sys
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from .api_provider import detect_api_provider
 from .parser import parse_line
 from .types import ImageData, MessageType, StreamEvent
 
@@ -359,6 +360,14 @@ class ClaudeRunner:
             env["DISCORD_THREAD_ID"] = str(self.thread_id)
         env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
         return env
+
+    def describe_api(self) -> str:
+        """Return a short label for the API endpoint this runner targets.
+
+        Derived from the final subprocess environment so CLI env overlays
+        (e.g. an Azure Foundry switch) are reflected accurately.
+        """
+        return detect_api_provider(self._build_env())
 
     async def _read_stream(self) -> AsyncGenerator[StreamEvent, None]:
         """Read and parse stdout line by line."""

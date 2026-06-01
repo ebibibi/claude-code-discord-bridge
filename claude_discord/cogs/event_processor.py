@@ -504,6 +504,7 @@ class EventProcessor:
                             input_tokens=event.input_tokens,
                             cache_creation_tokens=event.cache_creation_tokens,
                             cache_read_tokens=event.cache_read_tokens,
+                            api_label=self._config.runner.describe_api(),
                         ),
                         name=f"statusline-{self._config.thread.id}",
                     )
@@ -761,13 +762,15 @@ async def _post_statusline_footer(
     input_tokens: int | None,
     cache_creation_tokens: int | None,
     cache_read_tokens: int | None,
+    api_label: str | None = None,
 ) -> None:
-    """Run the configured statusLine.command and post the result to *thread*.
+    """Post the current API provider line and the configured statusLine.
 
-    Reads ``statusLine.command`` from ``~/.claude/settings.json``.  Does
-    nothing (silently) when the setting is absent or the command fails.
-    The output is posted as Discord subtext (``-#`` prefix per line) so it
-    appears visually distinct from the main conversation.
+    ``api_label`` (e.g. ``"Anthropic API (direct)"``) is always shown when
+    provided, so "which API am I using right now" stays visible after every
+    session — even when no ``statusLine`` is configured. The statusLine output
+    (read from ``~/.claude/settings.json``) is appended below it when present.
+    Posts nothing when neither is available.
     """
     import os
 
@@ -777,32 +780,37 @@ async def _post_statusline_footer(
         render_statusline,
     )
 
+    statusline_text: str | None = None
     command = read_statusline_command()
-    if not command:
+    if command:
+        cwd = working_dir or os.path.expanduser("~")
+        json_input = build_statusline_json(
+            cwd=cwd,
+            model_id=model,
+            model_display_name=model,
+            context_size=context_window or 200000,
+            input_tokens=input_tokens or 0,
+            cache_creation_tokens=cache_creation_tokens or 0,
+            cache_read_tokens=cache_read_tokens or 0,
+        )
+        result = await render_statusline(command, json_input)
+        if result:
+            lines = [line for line in result.splitlines() if line.strip()]
+            if lines:
+                statusline_text = "\n".join(lines[:3])
+
+    parts: list[str] = []
+    if api_label:
+        parts.append(f"\U0001f517 API: {api_label}")
+    if statusline_text:
+        parts.append(statusline_text)
+
+    if not parts:
         return
 
-    cwd = working_dir or os.path.expanduser("~")
-    json_input = build_statusline_json(
-        cwd=cwd,
-        model_id=model,
-        model_display_name=model,
-        context_size=context_window or 200000,
-        input_tokens=input_tokens or 0,
-        cache_creation_tokens=cache_creation_tokens or 0,
-        cache_read_tokens=cache_read_tokens or 0,
-    )
-
-    result = await render_statusline(command, json_input)
-    if not result:
-        return
-
-    lines = [line for line in result.splitlines() if line.strip()]
-    if not lines:
-        return
-
-    text = "\n".join(lines[:3])
+    body = "\n".join(parts)
     with contextlib.suppress(Exception):
-        await thread.send(f"```\n{text}\n```")  # type: ignore[union-attr]
+        await thread.send(f"```\n{body}\n```")  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
