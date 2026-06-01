@@ -312,6 +312,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `THREAD_INBOX_ENABLED` | Activer la boîte de réception de fils persistante | `false` |
 | `THREAD_AUTO_RENAME` | Renommer automatiquement les nouveaux fils avec un titre généré par Claude | `false` |
 | `CCDB_CLI_ENV_FILE` | Chemin vers le fichier `KEY=VALUE` fusionné dans l'environnement du sous-processus CLI | (optionnel) |
+| `CCDB_LOG_FILE` | Chemin vers un fichier de log. Si défini, un gestionnaire de fichier rotatif (10 Mo par fichier, 5 sauvegardes) est ajouté en plus du gestionnaire stdout par défaut. Utile pour la surveillance et les alertes | (optionnel) |
 | `API_HOST` | Adresse de liaison de l'API REST | `127.0.0.1` |
 | `API_PORT` | Port de l'API REST (active l'API REST quand configuré) | (optionnel) |
 

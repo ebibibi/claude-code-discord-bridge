@@ -328,6 +328,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `THREAD_INBOX_ENABLED` | 지속적인 스레드 수신함 활성화 | `false` |
 | `THREAD_AUTO_RENAME` | Claude AI로 새 스레드 제목 자동 이름 변경 | `false` |
 | `CCDB_CLI_ENV_FILE` | CLI 서브프로세스에 매번 병합할 `KEY=VALUE` 파일 경로 | (선택) |
+| `CCDB_LOG_FILE` | 로그 파일 경로. 설정하면 기본 stdout 핸들러 외에 로테이팅 파일 핸들러(파일당 10 MB, 5개 백업)가 추가된다. 모니터링 및 알림에 유용 | (선택) |
 | `API_HOST` | REST API 바인드 주소 | `127.0.0.1` |
 | `API_PORT` | REST API 포트 (설정 시 활성화) | (선택) |
 

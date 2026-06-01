@@ -316,6 +316,7 @@ uv lock --upgrade-package claude-code-discord-bridge && uv sync
 | `THREAD_INBOX_ENABLED` | Habilitar bandeja de entrada persistente de hilos | `false` |
 | `THREAD_AUTO_RENAME` | Auto-renombrar hilos con título generado por Claude | `false` |
 | `CCDB_CLI_ENV_FILE` | Ruta a archivo `KEY=VALUE` fusionado en entorno del subproceso CLI | (opcional) |
+| `CCDB_LOG_FILE` | Ruta al archivo de log. Si se configura, se añade un manejador de archivo rotativo (10 MB por archivo, 5 copias) junto al handler stdout predeterminado. Útil para monitoreo y alertas | (opcional) |
 | `API_HOST` | Dirección de enlace de REST API | `127.0.0.1` |
 | `API_PORT` | Puerto de REST API (habilita REST API cuando se configura) | (opcional) |
 

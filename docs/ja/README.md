@@ -599,6 +599,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `THREAD_INBOX_ENABLED` | 永続スレッドインボックスを有効化（`claude -p` でセッションを `waiting`/`done`/`ambiguous` に分類し、スレッドダッシュボードに表示） | `false` |
 | `THREAD_AUTO_RENAME` | 新しいスレッドのタイトルを Claude AI で自動リネーム — 最初のユーザーメッセージをもとにバックグラウンドの `claude -p` 呼び出しで短く分かりやすいタイトルを生成（セッション開始を遅延させない） | `false` |
 | `CCDB_CLI_ENV_FILE` | CLI サブプロセス起動時に毎回環境変数へマージする `KEY=VALUE` ファイルのパス。Bot を再起動せずに即座に反映される。一時的な API ルーティング（Azure Foundry への切り替えなど）に便利 | （オプション） |
+| `CCDB_LOG_FILE` | ログファイルのパス。設定すると、デフォルトの stdout ハンドラーに加えてローテーティングファイルハンドラー（1ファイル 10 MB、5 世代保持）が追加される。監視・アラートに便利 | （オプション） |
 | `API_HOST` | REST API バインドアドレス | `127.0.0.1` |
 | `API_PORT` | REST API ポート（設定すると REST API が有効になる） | （オプション） |
 
