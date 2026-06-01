@@ -104,6 +104,27 @@ def _parse_system(data: dict[str, Any], event: StreamEvent) -> None:
     elif subtype == "stop_hook_summary":
         event.stop_hook_has_output = bool(data.get("hasOutput", False))
         logger.info("Stop hook summary (hasOutput=%s)", event.stop_hook_has_output)
+    elif subtype == "hook_started":
+        event.hook_event = HookEvent(
+            hook_event_name=data.get("hook_event", ""),
+            hook_name=data.get("hook_name", ""),
+            lifecycle="started",
+        )
+    elif subtype == "hook_response":
+        event.hook_event = HookEvent(
+            hook_event_name=data.get("hook_event", ""),
+            hook_name=data.get("hook_name", ""),
+            lifecycle="response",
+            stderr=data.get("stderr", ""),
+            outcome=data.get("outcome", ""),
+            exit_code=data.get("exit_code"),
+        )
+    elif subtype == "hook_progress":
+        event.hook_event = HookEvent(
+            hook_event_name=data.get("hook_event", ""),
+            hook_name=data.get("hook_name", ""),
+            lifecycle="progress",
+        )
     elif subtype in ("hook_execution_start", "hook_execution_complete"):
         lifecycle = "start" if subtype == "hook_execution_start" else "complete"
         num_hooks_str = data.get("num_hooks", "0")
@@ -114,12 +135,6 @@ def _parse_system(data: dict[str, Any], event: StreamEvent) -> None:
             lifecycle=lifecycle,
             num_hooks=int(num_hooks_str) if num_hooks_str.isdigit() else 0,
             duration_ms=int(duration_str) if duration_str.isdigit() else 0,
-        )
-        logger.info(
-            "Hook %s: %s (%d hooks)",
-            lifecycle,
-            data.get("hook_event"),
-            event.hook_event.num_hooks,
         )
 
 

@@ -177,15 +177,26 @@ class ToolUseEvent:
 
 @dataclass
 class HookEvent:
-    """Parsed hook lifecycle event from stream-json."""
+    """Parsed hook lifecycle event from stream-json.
 
-    hook_event_name: str  # "Stop", "PreToolUse", etc.
+    Represents three event shapes emitted with --include-hook-events:
+      hook_started  — a single hook begins execution
+      hook_response — a single hook completes (carries output/stderr)
+      hook_progress — async hook progress notification
+
+    Legacy batch events (hook_execution_start/complete) are also accepted.
+    """
+
+    hook_event_name: str  # "Stop", "SessionStart", "PreToolUse", etc.
     hook_name: str = ""
     command: str = ""
     status_message: str = ""
-    lifecycle: str = ""  # "start", "complete", or "" for progress
+    lifecycle: str = ""  # "started", "response", "progress", or legacy "start"/"complete"
     num_hooks: int = 0
     duration_ms: int = 0
+    stderr: str = ""
+    outcome: str = ""  # "success", "error", "cancelled"
+    exit_code: int | None = None
 
 
 @dataclass

@@ -691,10 +691,35 @@ class EventProcessor:
             )
 
     async def _handle_hook_lifecycle(self, event: StreamEvent) -> None:
-        """Show hook execution start/complete as Discord subtext."""
+        """Show hook events as Discord subtext or status updates.
+
+        Event shapes (from --include-hook-events):
+          hook_started  — set 🪝 status
+          hook_response — show stderr output if non-empty
+          hook_progress — set 🪝 status (async hooks)
+          hook_execution_start/complete — legacy batch events
+        """
         assert event.hook_event is not None
         he = event.hook_event
 
+        if he.lifecycle in ("started", "progress"):
+            if self._config.status:
+                await self._config.status.set_hook(he.hook_event_name)
+            return
+
+        if he.lifecycle == "response":
+            stderr = he.stderr.strip()
+            if stderr and not self._chat_only:
+                lines = stderr.splitlines()
+                truncated = lines[:6]
+                text = "\n".join(truncated)
+                if len(lines) > 6:
+                    text += f"\n... (+{len(lines) - 6} lines)"
+                with contextlib.suppress(discord.HTTPException):
+                    await self._config.thread.send(f"```\n{text}\n```")
+            return
+
+        # Legacy batch events
         if self._chat_only:
             if self._config.status and he.lifecycle == "start":
                 await self._config.status.set_hook(he.hook_event_name)
