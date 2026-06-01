@@ -24,6 +24,9 @@ Usage::
 
 from __future__ import annotations
 
+# API provider detection
+from .api_provider import detect_api_provider
+
 # Backend
 from .backend import SessionBackend, create_backend
 from .codex_runner import CodexRunner, parse_codex_line
@@ -76,6 +79,8 @@ __all__ = [
     "ToolUseEvent",
     # Parser
     "parse_line",
+    # API provider
+    "detect_api_provider",
     # Backend
     "CodexRunner",
     "SessionBackend",

@@ -13,6 +13,7 @@ import os
 import re
 import signal
 from collections.abc import AsyncGenerator
+from urllib.parse import urlparse
 
 from .types import (
     ImageData,
@@ -292,6 +293,15 @@ class CodexRunner:
         if self.thread_id is not None:
             env["DISCORD_THREAD_ID"] = str(self.thread_id)
         return env
+
+    def describe_api(self) -> str:
+        """Return a short label for the API endpoint this runner targets."""
+        env = self._build_env()
+        base_url = (env.get("OPENAI_BASE_URL") or "").strip()
+        if base_url:
+            host = urlparse(base_url).hostname or base_url
+            return f"Custom endpoint ({host})"
+        return "OpenAI API (direct)"
 
     async def _read_stream(self) -> AsyncGenerator[StreamEvent, None]:
         """Read and parse stdout line by line."""

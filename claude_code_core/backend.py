@@ -43,6 +43,8 @@ class SessionBackend(Protocol):
 
     def _build_env(self) -> dict[str, str]: ...
 
+    def describe_api(self) -> str: ...
+
 
 def create_backend(
     *,
