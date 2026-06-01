@@ -259,14 +259,25 @@ class ListingCommandCog(commands.Cog):
                     preview_data.append((j, None))
 
             if is_multi:
-                # 複数JAN: 一覧プレビュー
+                # 複数JAN: 一覧プレビュー（カテゴリOK/NG付き）
                 preview_lines = []
                 for j, product in preview_data:
                     if product:
                         name = product.get("name") or "不明"
                         price = product.get("price", "?")
                         has_img = "画像OK" if product.get("has_images") else "画像NG"
-                        preview_lines.append(f"`{j}` {name[:25]} / {price}円 / {has_img}")
+                        cat_parts = []
+                        for cat_key, cat_label in [
+                            ("amazon_browse_node", "Amz"),
+                            ("yahoo_category", "Ya"),
+                            ("qoo10_category", "Q10"),
+                            ("aupay_category", "au"),
+                            ("temu_cat_id", "Temu"),
+                        ]:
+                            val = product.get(cat_key, "")
+                            cat_parts.append(f"{cat_label}:\u2705" if val else f"{cat_label}:\u274c")
+                        cat_str = " ".join(cat_parts)
+                        preview_lines.append(f"`{j}` {name[:20]} / {price}円 / {has_img}\n　{cat_str}")
                     else:
                         preview_lines.append(f"`{j}` プレビュー取得失敗")
                 embed = discord.Embed(
@@ -284,13 +295,14 @@ class ListingCommandCog(commands.Cog):
                     has_desc = product.get("has_description", False)
                     cat_status = []
                     for cat_key, cat_label in [
-                        ("qoo10_category", "Qoo10"),
                         ("amazon_browse_node", "Amazon"),
                         ("yahoo_category", "Yahoo"),
+                        ("qoo10_category", "Qoo10"),
                         ("aupay_category", "auPAY"),
+                        ("temu_cat_id", "Temu"),
                     ]:
                         val = product.get(cat_key, "")
-                        cat_status.append(f"{cat_label}:{'OK' if val else 'NG'}")
+                        cat_status.append(f"{cat_label}:\u2705" if val else f"{cat_label}:\u274c")
                     embed = discord.Embed(
                         title=f"{product_name}",
                         description=(
