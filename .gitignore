@@ -34,3 +34,6 @@ Thumbs.db
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Logs (bot-generated, e.g. the optional rotating file log handler)
+logs/

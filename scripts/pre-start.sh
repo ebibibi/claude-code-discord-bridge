@@ -38,8 +38,11 @@ send_webhook() {
 
 # ── Step 1: Pull latest code (skip in local dev mode) ──
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-# Ignore uv.lock changes — uv sync regenerates it on every run.
-LOCAL_CHANGES=$(git status --porcelain 2>/dev/null | grep -v '^ M uv.lock$' | grep -v '^M  uv.lock$' || true)
+# Only *tracked* changes signal local dev mode. Untracked files (e.g. the
+# bot-generated logs/ directory) must never block the pull, otherwise a stale
+# checkout silently persists across every restart. uv.lock is a derived file
+# that uv sync regenerates, so it is filtered out too.
+LOCAL_CHANGES=$(git status --porcelain --untracked-files=no 2>/dev/null | grep -v '^ M uv.lock$' | grep -v '^M  uv.lock$' || true)
 
 if [ "$CURRENT_BRANCH" != "main" ] || [ -n "$LOCAL_CHANGES" ]; then
     echo "[pre-start] Local dev mode (branch: $CURRENT_BRANCH) — skipping git pull" >&2

@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **API provider indicator** — After each session, the statusline footer shows a `🔗 API: <provider>` line indicating which API endpoint the Claude Code CLI is actually using: `Anthropic API (direct)`, `AWS Bedrock`, `Google Vertex AI`, `Azure AI Foundry`, or a custom base URL. The label is derived from the final subprocess environment (`_build_env()`), so CLI env overlays (`CCDB_CLI_ENV_FILE`) and systemd-provided variables are reflected accurately. It is shown even when no `statusLine` is configured, so "which API am I using right now" stays visible after every turn. Adds the `detect_api_provider()` helper (exported from `claude_code_core`) and `SessionBackend.describe_api()` on both `ClaudeRunner` and `CodexRunner`.
 
+### Fixed
+- **`pre-start.sh` skipped `git pull` when untracked files were present** — the local-dev-mode guard treated *any* `git status --porcelain` output as a signal to skip the pull. The bot-generated `logs/` directory (from the optional rotating file log handler) showed up as an untracked entry, so the guard silently skipped every pull and a stale checkout persisted across restarts. The guard now considers only *tracked* changes (`--untracked-files=no`), and `logs/` is gitignored.
+
 ## [3.0.0] - 2026-05-15
 
 ### Added
