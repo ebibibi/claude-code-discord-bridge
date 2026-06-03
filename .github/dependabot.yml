@@ -1,0 +1,40 @@
+# Dependabot configuration — keeps dependencies patched automatically.
+#
+# Security alerts (Dependabot security updates) are enabled separately in the
+# repository settings and fire whenever a vulnerability is published. This file
+# adds *version updates*: a scheduled sweep that proposes upgrades even when no
+# CVE exists yet, so we stay close to upstream instead of drifting.
+#
+# Patch/minor PRs raised here are auto-merged once CI passes — see the
+# `auto-merge-dependabot` job in .github/workflows/auto-approve.yml. Major bumps
+# are left open for a human (or Claude) to review.
+version: 2
+updates:
+  # Python dependencies (resolved via uv.lock + pyproject.toml).
+  # uv is a first-class Dependabot ecosystem.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    groups:
+      # Bundle all Python updates into a single grouped PR to avoid PR noise.
+      python-deps:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "build(deps)"
+
+  # GitHub Actions pinned in the CI/CD workflows (actions/checkout, setup-uv, ...).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci(deps)"
