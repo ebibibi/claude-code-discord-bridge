@@ -22,15 +22,15 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -86,7 +86,7 @@ jobs:
     if: failure() && github.event_name == 'schedule'
     runs-on: [self-hosted, linux, x64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Create auto-fix label if missing
         env:
