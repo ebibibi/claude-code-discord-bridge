@@ -144,10 +144,10 @@ curl -X POST "$CCDB_API_URL/api/spawn" \
 - **线程仪表板** — 实时固定 embed 显示活跃/等待线程状态
 
 #### 🤝 人机协作
-- **交互式问题** — `AskUserQuestion` 渲染为 Discord 按钮或下拉菜单
-- **计划模式** — `ExitPlanMode` 触发带批准/取消按钮的 Discord embed；5 分钟超时
-- **工具权限请求** — 允许/拒绝按钮；2 分钟无响应自动拒绝
-- **MCP Elicitation** — MCP 服务器通过 Discord 请求用户输入；5 分钟超时
+- **交互式问题** — `AskUserQuestion` 渲染为 Discord 按钮或下拉菜单；需要输入时 @mention 请求者
+- **计划模式** — `ExitPlanMode` 触发带批准/取消按钮的 Discord embed；提示时 @mention 请求者；5 分钟超时
+- **工具权限请求** — 允许/拒绝按钮；@mention 请求者；2 分钟无响应自动拒绝
+- **MCP Elicitation** — MCP 服务器通过 Discord 请求用户输入；@mention 请求者；5 分钟超时
 - **TodoWrite 实时进度** — 单个 Discord embed 原地更新；显示 ✅ 已完成、🔄 进行中、⬜ 待处理
 
 #### 📊 可观测性

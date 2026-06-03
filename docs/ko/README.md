@@ -122,10 +122,10 @@ curl -X POST "$CCDB_API_URL/api/spawn" \
 - **스레드 대시보드** — 활성 vs. 대기 스레드 표시하는 라이브 고정 embed
 
 #### 🤝 Human-in-the-Loop
-- **인터랙티브 질문** — `AskUserQuestion`을 Discord 버튼 또는 선택 메뉴로 렌더링; 봇 재시작 후에도 버튼 유효
-- **계획 모드** — `ExitPlanMode` 호출 시 Discord embed에 전체 계획과 승인/취소 버튼 표시; 5분 타임아웃
-- **도구 권한 요청** — 허용/거부 버튼; 2분 무응답 시 자동 거부
-- **MCP Elicitation** — MCP 서버가 Discord를 통해 사용자 입력 요청; 5분 타임아웃
+- **인터랙티브 질문** — `AskUserQuestion`을 Discord 버튼 또는 선택 메뉴로 렌더링; 봇 재시작 후에도 버튼 유효; 입력이 필요할 때 요청자를 @mention
+- **계획 모드** — `ExitPlanMode` 호출 시 Discord embed에 전체 계획과 승인/취소 버튼 표시; 승인 요청 시 요청자를 @mention; 5분 타임아웃
+- **도구 권한 요청** — 허용/거부 버튼; 요청자를 @mention; 2분 무응답 시 자동 거부
+- **MCP Elicitation** — MCP 서버가 Discord를 통해 사용자 입력 요청; 요청자를 @mention; 5분 타임아웃
 - **TodoWrite 실시간 진행** — 단일 Discord embed 인플레이스 업데이트; ✅ 완료, 🔄 진행 중, ⬜ 대기 표시
 
 #### 📊 관찰 가능성

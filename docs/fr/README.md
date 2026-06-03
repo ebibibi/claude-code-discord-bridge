@@ -106,10 +106,10 @@ Vous utilisez déjà Claude Code CLI directement ? Synchronisez vos sessions de 
 - **Tableau de bord des fils** — Embed épinglé en direct montrant les fils actifs vs. en attente
 
 #### 🤝 Human-in-the-Loop
-- **Questions interactives** — `AskUserQuestion` rendu comme boutons ou menu de sélection Discord
-- **Mode Plan** — `ExitPlanMode` affiche un embed Discord avec boutons Approuver/Annuler ; timeout 5 minutes
-- **Demandes de permission d'outil** — Boutons Autoriser/Refuser ; refus automatique après 2 minutes
-- **MCP Elicitation** — Les serveurs MCP peuvent demander des saisies utilisateur via Discord ; timeout 5 minutes
+- **Questions interactives** — `AskUserQuestion` rendu comme boutons ou menu de sélection Discord ; le demandeur est @mentionné quand une saisie est nécessaire
+- **Mode Plan** — `ExitPlanMode` affiche un embed Discord avec boutons Approuver/Annuler ; le demandeur est @mentionné à la demande d'approbation ; timeout 5 minutes
+- **Demandes de permission d'outil** — Boutons Autoriser/Refuser ; le demandeur est @mentionné ; refus automatique après 2 minutes
+- **MCP Elicitation** — Les serveurs MCP peuvent demander des saisies utilisateur via Discord ; le demandeur est @mentionné ; timeout 5 minutes
 - **Progression TodoWrite en direct** — Embed Discord unique édité sur place
 
 #### 📊 Observabilité

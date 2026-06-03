@@ -110,10 +110,10 @@ Un canal compartido "sala de descanso" donde todas las sesiones concurrentes se 
 - **Panel de hilos** — Embed fijado en vivo mostrando qué hilos están activos vs. esperando
 
 #### 🤝 Human-in-the-Loop
-- **Preguntas interactivas** — `AskUserQuestion` se renderiza como botones o menú de selección de Discord
-- **Modo Plan** — `ExitPlanMode` muestra embed de Discord con botones Aprobar/Cancelar; 5 minutos de timeout
-- **Solicitudes de permisos de herramientas** — Botones Permitir/Denegar; auto-rechazo después de 2 minutos
-- **MCP Elicitation** — Los servidores MCP pueden solicitar entrada del usuario a través de Discord; 5 minutos de timeout
+- **Preguntas interactivas** — `AskUserQuestion` se renderiza como botones o menú de selección de Discord; se @menciona al solicitante cuando se necesita entrada
+- **Modo Plan** — `ExitPlanMode` muestra embed de Discord con botones Aprobar/Cancelar; se @menciona al solicitante en el prompt; 5 minutos de timeout
+- **Solicitudes de permisos de herramientas** — Botones Permitir/Denegar; se @menciona al solicitante; auto-rechazo después de 2 minutos
+- **MCP Elicitation** — Los servidores MCP pueden solicitar entrada del usuario a través de Discord; se @menciona al solicitante; 5 minutos de timeout
 - **Progreso TodoWrite en vivo** — Embed único de Discord actualizado en su lugar
 
 #### 📊 Observabilidad

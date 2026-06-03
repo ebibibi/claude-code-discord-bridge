@@ -202,10 +202,10 @@ ccdb 3.0 では、Bot を再起動せずにどの AI が次のセッションを
 - **スレッドダッシュボード** — アクティブ/待機スレッドを表示するライブピン embed。入力が必要なときはオーナーを @mention
 
 #### 🤝 ヒューマンインザループ
-- **インタラクティブな質問** — `AskUserQuestion` を Discord ボタンまたは Select Menu でレンダリング。回答でセッション再開。ボタンは Bot 再起動後も有効
-- **Plan Mode** — Claude が `ExitPlanMode` を呼び出すと、プラン全文と Approve/Cancel ボタンを含む Discord embed を表示；承認後にのみ実行を開始；5 分でタイムアウト（自動キャンセル）
-- **ツール実行許可リクエスト** — Claude がツールを実行するために許可が必要な場合、ツール名と入力内容を示した Allow/Deny ボタンを Discord に表示；2 分間応答なしで自動拒否
-- **MCP Elicitation** — MCP サーバーが Discord 経由でユーザー入力を要求（form-mode: JSON スキーマから最大 5 フィールドの Modal；url-mode: URL ボタン + Done 確認）；5 分でタイムアウト
+- **インタラクティブな質問** — `AskUserQuestion` を Discord ボタンまたは Select Menu でレンダリング。回答でセッション再開。ボタンは Bot 再起動後も有効；入力が必要なときはリクエスターを @mention
+- **Plan Mode** — Claude が `ExitPlanMode` を呼び出すと、プラン全文と Approve/Cancel ボタンを含む Discord embed を表示；承認後にのみ実行を開始；承認を求める際はリクエスターを @mention；5 分でタイムアウト（自動キャンセル）
+- **ツール実行許可リクエスト** — Claude がツールを実行するために許可が必要な場合、ツール名と入力内容を示した Allow/Deny ボタンを Discord に表示；リクエスターを @mention；2 分間応答なしで自動拒否
+- **MCP Elicitation** — MCP サーバーが Discord 経由でユーザー入力を要求（form-mode: JSON スキーマから最大 5 フィールドの Modal；url-mode: URL ボタン + Done 確認）；リクエスターを @mention；5 分でタイムアウト
 - **TodoWrite ライブ進捗** — Claude が `TodoWrite` を呼び出すと Discord embed を一度投稿し、以降の更新はその embed をインプレースで編集；✅ 完了、🔄 実行中（`activeForm` ラベル付き）、⬜ 保留中の各状態を表示
 
 #### 📊 オブザーバビリティ
@@ -924,6 +924,7 @@ claude_discord/
     chunker.py             # フェンス・テーブル対応メッセージ分割
     embeds.py              # Discord embed ビルダー
     views.py               # 停止ボタンと共有 UI コンポーネント
+    mentions.py            # user_mention_kwargs() — Claude が入力待ちのときリクエスターに通知
     ask_bus.py             # AskUserQuestion 通信用イベントバス
     ask_view.py            # AskUserQuestion 用 Discord ボタン / Select Menu
     ask_handler.py         # collect_ask_answers() — AskUserQuestion UI + DB ライフサイクル

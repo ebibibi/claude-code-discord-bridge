@@ -199,10 +199,10 @@ Behind the scenes:
 - **Thread dashboard** — Live pinned embed showing which threads are active vs. waiting; owner @-mentioned when input is needed
 
 #### 🤝 Human-in-the-Loop
-- **Interactive questions** — `AskUserQuestion` renders as Discord Buttons or Select Menu; session resumes with your answer; buttons survive bot restarts
-- **Plan Mode** — When Claude calls `ExitPlanMode`, a Discord embed shows the full plan with Approve/Cancel buttons; Claude proceeds only after approval; auto-cancel on 5-minute timeout
-- **Tool permission requests** — When Claude needs permission to execute a tool, Discord shows Allow/Deny buttons with the tool name and input; auto-deny after 2 minutes
-- **MCP Elicitation** — MCP servers can request user input via Discord (form-mode: up to 5 Modal fields from JSON schema; url-mode: URL button + Done confirmation); 5-minute timeout
+- **Interactive questions** — `AskUserQuestion` renders as Discord Buttons or Select Menu; session resumes with your answer; buttons survive bot restarts; requester is @mentioned when input is needed
+- **Plan Mode** — When Claude calls `ExitPlanMode`, a Discord embed shows the full plan with Approve/Cancel buttons; Claude proceeds only after approval; requester @mentioned on prompt; auto-cancel on 5-minute timeout
+- **Tool permission requests** — When Claude needs permission to execute a tool, Discord shows Allow/Deny buttons with the tool name and input; requester @mentioned; auto-deny after 2 minutes
+- **MCP Elicitation** — MCP servers can request user input via Discord (form-mode: up to 5 Modal fields from JSON schema; url-mode: URL button + Done confirmation); requester @mentioned; 5-minute timeout
 - **Live TodoWrite progress** — When Claude calls `TodoWrite`, a single Discord embed is posted and edited in-place on each update; shows ✅ completed, 🔄 active (with `activeForm` label), ⬜ pending items
 
 #### 📊 Observability
@@ -922,6 +922,7 @@ claude_discord/
     chunker.py             # Fence- and table-aware message splitting
     embeds.py              # Discord embed builders
     views.py               # Stop button and shared UI components
+    mentions.py            # user_mention_kwargs() — notify requester when Claude pauses for input
     ask_bus.py             # Event bus for AskUserQuestion communication
     ask_view.py            # Buttons/Select Menus for AskUserQuestion
     ask_handler.py         # collect_ask_answers() — AskUserQuestion UI + DB lifecycle

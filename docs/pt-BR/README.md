@@ -106,10 +106,10 @@ Já usa Claude Code CLI diretamente? Sincronize suas sessões de terminal existe
 - **Dashboard de thread** — Embed fixado ao vivo mostrando quais threads estão ativas vs. aguardando
 
 #### 🤝 Human-in-the-Loop
-- **Perguntas interativas** — `AskUserQuestion` renderizado como Botões ou Menu de Seleção do Discord
-- **Modo Plan** — `ExitPlanMode` mostra embed com botões Aprovar/Cancelar; 5 minutos de timeout
-- **Solicitações de permissão de ferramenta** — Botões Permitir/Negar; auto-negação após 2 minutos
-- **MCP Elicitation** — Servidores MCP podem solicitar entrada do usuário via Discord; 5 minutos de timeout
+- **Perguntas interativas** — `AskUserQuestion` renderizado como Botões ou Menu de Seleção do Discord; solicitante @mencionado quando input é necessário
+- **Modo Plan** — `ExitPlanMode` mostra embed com botões Aprovar/Cancelar; solicitante @mencionado no prompt; 5 minutos de timeout
+- **Solicitações de permissão de ferramenta** — Botões Permitir/Negar; solicitante @mencionado; auto-negação após 2 minutos
+- **MCP Elicitation** — Servidores MCP podem solicitar entrada do usuário via Discord; solicitante @mencionado; 5 minutos de timeout
 - **Progresso TodoWrite ao vivo** — Embed único do Discord editado no lugar; mostra ✅ concluído, 🔄 ativo, ⬜ pendente
 
 #### 📊 Observabilidade
