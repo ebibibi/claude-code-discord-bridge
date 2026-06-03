@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - **Cleared all open Dependabot alerts (9)** — bumped `pillow` 12.1.1 → 12.2.0 (2 high-severity advisories), `pytest` 9.0.2 → 9.0.3, `python-dotenv` 1.2.1 → 1.2.2, `idna` 3.11 → 3.18, and `Pygments` 2.19.2 → 2.20.0 in `uv.lock`. Minimum-version floors in `pyproject.toml` were raised (`pillow>=12.2.0`, `python-dotenv>=1.2.2`, `pytest>=9.0.3`) so the vulnerable ranges stay out of future dependency resolutions.
+- **aiohttp 3.13.4 → 3.14.0** (`aiohttp>=3.14.0`) — cleared two follow-up moderate advisories (Dependabot #21/#22) that surfaced after the initial sweep.
 
 ## [3.0.0] - 2026-05-15
 
