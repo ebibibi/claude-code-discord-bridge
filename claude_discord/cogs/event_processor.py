@@ -32,6 +32,7 @@ from ..discord_ui.embeds import (
     tool_use_embed,
 )
 from ..discord_ui.file_sender import send_files
+from ..discord_ui.mentions import user_mention_kwargs
 from ..discord_ui.permission_view import PermissionView
 from ..discord_ui.plan_view import PlanApprovalView
 from ..discord_ui.streaming_manager import StreamingMessageManager
@@ -611,7 +612,11 @@ class EventProcessor:
         # we use the session_id as a stable identifier for the inject payload.
         request_id = self._state.session_id or "plan"
         view = PlanApprovalView(self._config.runner, request_id)
-        await self._config.thread.send(embed=embed, view=view)
+        await self._config.thread.send(
+            embed=embed,
+            view=view,
+            **user_mention_kwargs(self._config.notify_user_id),
+        )
         logger.info("Plan approval prompt posted (session=%s)", request_id)
 
     async def _handle_permission_request(self, event: StreamEvent) -> None:
@@ -641,7 +646,11 @@ class EventProcessor:
 
         embed = permission_embed(event.permission_request)
         view = PermissionView(self._config.runner, event.permission_request)
-        await self._config.thread.send(embed=embed, view=view)
+        await self._config.thread.send(
+            embed=embed,
+            view=view,
+            **user_mention_kwargs(self._config.notify_user_id),
+        )
         logger.info(
             "Permission request posted: %s (request_id=%s)",
             event.permission_request.tool_name,
@@ -657,7 +666,11 @@ class EventProcessor:
             view = ElicitationUrlView(self._config.runner, req)
         else:
             view = ElicitationFormView(self._config.runner, req)
-        await self._config.thread.send(embed=embed, view=view)
+        await self._config.thread.send(
+            embed=embed,
+            view=view,
+            **user_mention_kwargs(self._config.notify_user_id),
+        )
         logger.info(
             "Elicitation posted: %s (%s, request_id=%s)",
             req.server_name,

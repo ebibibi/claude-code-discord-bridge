@@ -320,6 +320,38 @@ class TestCollectAskAnswersTimeout:
         assert result is None  # timeout → no answer → returns None
 
 
+class TestCollectAskAnswersMention:
+    """AskUserQuestion messages mention the requester when configured."""
+
+    @pytest.mark.asyncio
+    async def test_collect_ask_answers_mentions_notify_user(self) -> None:
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from claude_discord.claude.types import AskOption, AskQuestion
+        from claude_discord.discord_ui.ask_bus import ask_bus
+        from claude_discord.discord_ui.ask_handler import collect_ask_answers
+
+        q = AskQuestion(
+            question="Which option?",
+            options=[AskOption(label="A"), AskOption(label="B")],
+        )
+        thread = MagicMock()
+        thread.id = 12345
+        thread.send = AsyncMock(return_value=MagicMock())
+
+        async def answer() -> None:
+            await asyncio.sleep(0)
+            ask_bus.post_answer(thread.id, ["A"])
+
+        answer_task = asyncio.create_task(answer())
+        await collect_ask_answers(thread, [q], session_id="abc123", notify_user_id=42)
+        await answer_task
+
+        thread.send.assert_called_once()
+        assert thread.send.call_args.kwargs["content"] == "<@42>"
+
+
 # ---------------------------------------------------------------------------
 # AskView._other_callback — visual feedback after modal submission
 # ---------------------------------------------------------------------------

@@ -273,6 +273,7 @@ class SkillCommandCog(commands.Cog):
                     session_id=session_id,
                     registry=self._registry,
                     worktree_manager=getattr(self.bot, "worktree_manager", None),
+                    notify_user_id=interaction.user.id,
                 )
             )
             return
@@ -308,5 +309,6 @@ class SkillCommandCog(commands.Cog):
                 session_id=None,
                 registry=self._registry,
                 worktree_manager=getattr(self.bot, "worktree_manager", None),
+                notify_user_id=interaction.user.id,
             )
         )

@@ -86,6 +86,8 @@ class RunConfig:
     # blocks, session start/complete embeds, and other technical details are hidden.
     # Useful for public channels where non-technical users are watching.
     chat_only: bool = False
+    # Discord user to mention when Claude pauses for an explicit button/form action.
+    notify_user_id: int | None = None
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

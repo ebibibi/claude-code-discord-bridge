@@ -1454,3 +1454,72 @@ class TestPermissionAutoApprove:
         runner.inject_tool_result.assert_not_called()
         # Discord embed + view posted
         thread.send.assert_called_once()
+
+
+class TestUserActionMentions:
+    """Messages that pause Claude for button input mention the requester."""
+
+    @pytest.mark.asyncio
+    async def test_plan_approval_mentions_notify_user(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        config = _make_config(thread, runner, notify_user_id=42)
+        p = EventProcessor(config)
+
+        await p.process(
+            StreamEvent(
+                message_type=MessageType.ASSISTANT,
+                text="Implementation plan",
+                is_plan_approval=True,
+            )
+        )
+
+        assert thread.send.call_args.kwargs["content"] == "<@42>"
+
+    @pytest.mark.asyncio
+    async def test_permission_request_mentions_notify_user(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        from claude_discord.claude.types import PermissionRequest
+
+        runner.dangerously_skip_permissions = False
+        config = _make_config(thread, runner, notify_user_id=42)
+        p = EventProcessor(config)
+
+        await p.process(
+            StreamEvent(
+                message_type=MessageType.SYSTEM,
+                permission_request=PermissionRequest(
+                    request_id="req-normal-1",
+                    tool_name="Edit",
+                    tool_input={"file_path": "/home/user/.bashrc"},
+                ),
+            )
+        )
+
+        thread.send.assert_called_once()
+        assert thread.send.call_args.kwargs["content"] == "<@42>"
+
+    @pytest.mark.asyncio
+    async def test_elicitation_mentions_notify_user(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        from claude_discord.claude.types import ElicitationRequest
+
+        config = _make_config(thread, runner, notify_user_id=42)
+        p = EventProcessor(config)
+
+        await p.process(
+            StreamEvent(
+                message_type=MessageType.SYSTEM,
+                elicitation=ElicitationRequest(
+                    request_id="elicit-1",
+                    server_name="example",
+                    mode="form-mode",
+                    message="Need input",
+                ),
+            )
+        )
+
+        thread.send.assert_called_once()
+        assert thread.send.call_args.kwargs["content"] == "<@42>"
