@@ -20,6 +20,7 @@ from ..database.ask_repo import PendingAskRepository
 from .ask_bus import ask_bus as _ask_bus
 from .ask_view import AskView
 from .embeds import ask_embed
+from .mentions import user_mention_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ async def collect_ask_answers(
     questions: list[AskQuestion],
     session_id: str,
     ask_repo: PendingAskRepository | None = None,
+    notify_user_id: int | None = None,
 ) -> str | None:
     """Show Discord UI for each question and return the formatted answer string.
 
@@ -72,7 +74,11 @@ async def collect_ask_answers(
         answer_queue = _ask_bus.register(thread.id)
 
         view = AskView(q, thread_id=thread.id, q_idx=q_idx, ask_repo=ask_repo)
-        msg = await thread.send(embed=ask_embed(q.question, q.header), view=view)
+        msg = await thread.send(
+            embed=ask_embed(q.question, q.header),
+            view=view,
+            **user_mention_kwargs(notify_user_id),
+        )
 
         try:
             selected = await asyncio.wait_for(answer_queue.get(), timeout=ASK_ANSWER_TIMEOUT)

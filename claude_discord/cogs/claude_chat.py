@@ -1073,6 +1073,7 @@ class ClaudeChatCog(commands.Cog):
                     inbox_dashboard=dashboard,
                     claude_command=runner.command,
                     chat_only=chat_only,
+                    notify_user_id=user_message.author.id,
                 )
             )
         finally:
