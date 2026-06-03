@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Automated dependency maintenance** — added `.github/dependabot.yml` (weekly grouped version updates for the `uv` Python ecosystem and GitHub Actions) plus an `auto-merge-dependabot` job in `auto-approve.yml`. The job auto-approves and enables auto-merge for patch/minor Dependabot PRs once CI passes, and flags major bumps for manual review. Dependabot merges intentionally skip the EbiBot-restart webhook (the lock change reaches the running bot on its next natural restart via `pre-start.sh`), so routine dependency upkeep never disrupts active sessions.
 - **API provider indicator** — After each session, the statusline footer shows a `🔗 API: <provider>` line indicating which API endpoint the Claude Code CLI is actually using: `Anthropic API (direct)`, `AWS Bedrock`, `Google Vertex AI`, `Azure AI Foundry`, or a custom base URL. The label is derived from the final subprocess environment (`_build_env()`), so CLI env overlays (`CCDB_CLI_ENV_FILE`) and systemd-provided variables are reflected accurately. It is shown even when no `statusLine` is configured, so "which API am I using right now" stays visible after every turn. Adds the `detect_api_provider()` helper (exported from `claude_code_core`) and `SessionBackend.describe_api()` on both `ClaudeRunner` and `CodexRunner`.
 
 ### Fixed
@@ -20,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silent. Mentions use a restricted `allowed_mentions` payload so only the target user
   can be notified (#419).
 - **`pre-start.sh` skipped `git pull` when untracked files were present** — the local-dev-mode guard treated *any* `git status --porcelain` output as a signal to skip the pull. The bot-generated `logs/` directory (from the optional rotating file log handler) showed up as an untracked entry, so the guard silently skipped every pull and a stale checkout persisted across restarts. The guard now considers only *tracked* changes (`--untracked-files=no`), and `logs/` is gitignored.
+
+### Security
+- **Cleared all open Dependabot alerts (9)** — bumped `pillow` 12.1.1 → 12.2.0 (2 high-severity advisories), `pytest` 9.0.2 → 9.0.3, `python-dotenv` 1.2.1 → 1.2.2, `idna` 3.11 → 3.18, and `Pygments` 2.19.2 → 2.20.0 in `uv.lock`. Minimum-version floors in `pyproject.toml` were raised (`pillow>=12.2.0`, `python-dotenv>=1.2.2`, `pytest>=9.0.3`) so the vulnerable ranges stay out of future dependency resolutions.
 
 ## [3.0.0] - 2026-05-15
 
