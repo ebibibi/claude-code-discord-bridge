@@ -151,6 +151,16 @@ class TestStopViewDisable:
         await view.disable(msg)  # should not raise
 
     @pytest.mark.asyncio
+    async def test_disable_suppresses_runtime_error_session_closed(self) -> None:
+        """disable() swallows RuntimeError('Session is closed') during bot shutdown."""
+        runner = _make_runner()
+        view = StopView(runner)
+        msg = _make_message()
+        msg.edit = AsyncMock(side_effect=RuntimeError("Session is closed"))
+
+        await view.disable(msg)  # should not raise
+
+    @pytest.mark.asyncio
     async def test_disable_uses_stored_message(self) -> None:
         """disable() without args uses the message stored via set_message()."""
         runner = _make_runner()

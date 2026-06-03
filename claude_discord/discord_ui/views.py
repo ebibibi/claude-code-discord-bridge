@@ -110,7 +110,7 @@ class StopView(discord.ui.View):
         self.stop()
 
         if target:
-            with contextlib.suppress(discord.HTTPException):
+            with contextlib.suppress(discord.HTTPException, RuntimeError):
                 await target.edit(view=self)
 
 
