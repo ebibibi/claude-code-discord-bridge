@@ -217,6 +217,40 @@ class TestRemove:
 
 
 # ---------------------------------------------------------------------------
+# Shutdown resilience
+# ---------------------------------------------------------------------------
+
+
+class TestShutdownResilience:
+    @pytest.mark.asyncio
+    async def test_refresh_survives_session_closed_runtime_error(self) -> None:
+        """RuntimeError('Session is closed') during bot shutdown must not propagate.
+
+        When aiohttp closes its HTTP session during shutdown, message.edit() raises
+        RuntimeError instead of discord.HTTPException. The dashboard must swallow it.
+        """
+        dashboard, channel = _make_dashboard()
+        await dashboard.initialize()
+        msg = channel.send.return_value
+        msg.edit.side_effect = RuntimeError("Session is closed")
+
+        # Should not raise
+        await dashboard.set_state(1, ThreadState.PROCESSING, "work", thread=_make_thread(1))
+
+    @pytest.mark.asyncio
+    async def test_remove_survives_session_closed_runtime_error(self) -> None:
+        """remove() must also survive RuntimeError during shutdown."""
+        dashboard, channel = _make_dashboard()
+        await dashboard.initialize()
+        msg = channel.send.return_value
+        msg.edit.side_effect = RuntimeError("Session is closed")
+        await dashboard.set_state(1, ThreadState.PROCESSING, "work")
+
+        # Should not raise
+        await dashboard.remove(1)
+
+
+# ---------------------------------------------------------------------------
 # Embed building
 # ---------------------------------------------------------------------------
 
