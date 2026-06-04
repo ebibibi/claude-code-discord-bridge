@@ -708,6 +708,7 @@ class ClaudeChatCog(commands.Cog):
         session_id: str | None = None,
         fork: bool = False,
         auto_start: bool = True,
+        working_dir: str | None = None,
     ) -> discord.Thread:
         """Create a new thread and optionally start a Claude Code session.
 
@@ -746,7 +747,11 @@ class ClaudeChatCog(commands.Cog):
             # Run Claude in the background so /api/spawn returns immediately.
             # The caller gets the thread reference without waiting for Claude to finish.
             asyncio.create_task(
-                self._run_claude(seed_message, thread, prompt, session_id=session_id, fork=fork)
+                self._run_claude(
+                    seed_message, thread, prompt,
+                    session_id=session_id, fork=fork,
+                    working_dir_override=working_dir,
+                )
             )
         return thread
 

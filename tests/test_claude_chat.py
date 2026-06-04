@@ -463,6 +463,53 @@ class TestSpawnSession:
         thread.send.assert_called_once_with("Hello")
         mock_run.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_spawn_passes_working_dir_to_run_claude(self) -> None:
+        """spawn_session passes working_dir through to _run_claude as working_dir_override."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        seed_msg = MagicMock()
+        thread.send = AsyncMock(return_value=seed_msg)
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        mock_run = AsyncMock()
+        with patch.object(cog, "_run_claude", new=mock_run):
+            await cog.spawn_session(channel, "Do work", working_dir="/Users/jeb/jebos/shopify/fumetsu")
+
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs.get("working_dir_override") == "/Users/jeb/jebos/shopify/fumetsu"
+
+    @pytest.mark.asyncio
+    async def test_spawn_working_dir_none_by_default(self) -> None:
+        """spawn_session passes working_dir_override=None when working_dir not given."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        mock_run = AsyncMock()
+        with patch.object(cog, "_run_claude", new=mock_run):
+            await cog.spawn_session(channel, "Do work")
+
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs.get("working_dir_override") is None
+
 
 class TestFetchSeedContext:
     """Tests for ClaudeChatCog._fetch_seed_context()."""
