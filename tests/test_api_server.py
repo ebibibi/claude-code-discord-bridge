@@ -638,6 +638,25 @@ class TestSpawn:
         )
         assert resp.status == 400
 
+    @pytest.mark.asyncio
+    async def test_spawn_passes_working_dir_to_cog(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post(
+            "/api/spawn",
+            json={"prompt": "Audit SEO", "working_dir": "/Users/jeb/jebos/shopify/fumetsu"},
+        )
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("working_dir") == "/Users/jeb/jebos/shopify/fumetsu"
+
+    @pytest.mark.asyncio
+    async def test_spawn_working_dir_defaults_to_none(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post("/api/spawn", json={"prompt": "Do something"})
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("working_dir") is None
+
 
 class TestMarkResume:
     """Tests for POST /api/mark-resume endpoint."""

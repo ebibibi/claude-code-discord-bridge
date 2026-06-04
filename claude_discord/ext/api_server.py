@@ -633,6 +633,7 @@ class ApiServer:
 
         thread_name: str | None = data.get("thread_name") or None
         auto_start: bool = data.get("auto_start", True)
+        working_dir: str | None = data.get("working_dir") or None
 
         try:
             thread = await cog.spawn_session(
@@ -640,6 +641,7 @@ class ApiServer:
                 prompt,
                 thread_name=thread_name,
                 auto_start=auto_start,
+                working_dir=working_dir,
             )
         except Exception as exc:
             logger.error("spawn_session failed: %s", exc, exc_info=True)
