@@ -152,6 +152,34 @@ def test_apply_to_api_server_wires_task_and_lounge_repos(tmp_path: object) -> No
     assert api_server.lounge_repo is lounge_repo
 
 
+def test_apply_to_api_server_wires_run_feature() -> None:
+    """apply_to_api_server should wire run_repo, backend_factory, backend_settings."""
+    from claude_discord.database.repository import SessionRepository
+    from claude_discord.database.run_repo import RunRepository
+
+    session_repo = MagicMock(spec=SessionRepository)
+    run_repo = MagicMock(spec=RunRepository)
+    backend_factory = MagicMock()
+    backend_settings = MagicMock()
+
+    components = BridgeComponents(
+        session_repo=session_repo,
+        run_repo=run_repo,
+        backend_factory=backend_factory,
+        backend_settings=backend_settings,
+    )
+    api_server = _make_api_server()
+    api_server.run_repo = None
+    api_server.backend_factory = None
+    api_server.backend_settings = None
+
+    components.apply_to_api_server(api_server)
+
+    assert api_server.run_repo is run_repo
+    assert api_server.backend_factory is backend_factory
+    assert api_server.backend_settings is backend_settings
+
+
 def test_apply_to_api_server_skips_none_repos() -> None:
     """apply_to_api_server should not overwrite existing repos with None."""
     from claude_discord.database.repository import SessionRepository

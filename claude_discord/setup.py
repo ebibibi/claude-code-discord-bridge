@@ -17,9 +17,11 @@ if TYPE_CHECKING:
     from claude_code_core.backend import SessionBackend
 
     from .backend_factory import BackendFactory
+    from .backend_settings import BackendSettings
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
     from .database.resume_repo import PendingResumeRepository
+    from .database.run_repo import RunRepository
     from .database.task_repo import TaskRepository
     from .ext.api_server import ApiServer
 
@@ -45,6 +47,9 @@ class BridgeComponents:
     task_repo: TaskRepository | None = None
     lounge_repo: LoungeRepository | None = None
     resume_repo: PendingResumeRepository | None = None
+    run_repo: RunRepository | None = None
+    backend_factory: BackendFactory | None = None
+    backend_settings: BackendSettings | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -61,6 +66,12 @@ class BridgeComponents:
             api_server.lounge_repo = self.lounge_repo
         if self.resume_repo is not None:
             api_server.resume_repo = self.resume_repo
+        if self.run_repo is not None:
+            api_server.run_repo = self.run_repo
+        if self.backend_factory is not None:
+            api_server.backend_factory = self.backend_factory
+        if self.backend_settings is not None:
+            api_server.backend_settings = self.backend_settings
         api_server.session_repo = self.session_repo
 
 
@@ -155,6 +166,7 @@ async def setup_bridge(
     from .database.models import init_db
     from .database.repository import SessionRepository, UsageStatsRepository
     from .database.resume_repo import PendingResumeRepository
+    from .database.run_repo import RunRepository
     from .database.settings_repo import SettingsRepository
     from .database.task_repo import TaskRepository
     from .worktree import WorktreeManager
@@ -240,6 +252,8 @@ async def setup_bridge(
     lounge_repo = LoungeRepository(session_db_path)
     resume_repo = PendingResumeRepository(session_db_path)
     usage_repo = UsageStatsRepository(session_db_path)
+    run_repo = RunRepository(session_db_path)
+    await run_repo.init_db()
     logger.info("Session DB initialized: %s", session_db_path)
 
     # Attach repos to bot so generic cogs (e.g. AutoUpgradeCog) can discover them
@@ -364,6 +378,9 @@ async def setup_bridge(
         task_repo=task_repo,
         lounge_repo=lounge_repo,
         resume_repo=resume_repo,
+        run_repo=run_repo,
+        backend_factory=backend_factory,
+        backend_settings=_backend_settings_for_chat,
     )
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided
