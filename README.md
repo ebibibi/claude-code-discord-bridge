@@ -133,6 +133,37 @@ This is useful for notification-style workflows (e.g. daily briefings, CI alerts
 
 Claude subprocesses receive `DISCORD_THREAD_ID` as an environment variable, so a running session can spawn child sessions to parallelize work.
 
+### Headless One-Shot Runs (`/api/run`)
+
+`POST /api/run` runs an AI engine **once** and returns the result via polling — the non-interactive, no-Discord sibling of `/api/spawn`. Use it from a browser extension, a script, or any external system that wants "send a prompt, get the generated text back" without a Discord thread.
+
+It is **engine-neutral**: pick `claude`, `codex`, or whatever the bot's current backend is. The endpoint has no engine-specific branches — `create_backend` resolves the runner behind the shared `SessionBackend` protocol, so new backends work without touching `/api/run`.
+
+```bash
+# Dispatch a run (returns immediately with a run_id)
+curl -X POST "$CCDB_API_URL/api/run" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Summarize the latest release notes", "backend": "claude"}'
+# → {"run_id": "ab12…", "status": "running", "backend": "claude", "model": "sonnet"}
+
+# Poll for the result
+curl "$CCDB_API_URL/api/run/ab12…"
+# → {"status": "done", "result": "…", "backend": "claude", "model": "sonnet", "error": null}
+```
+
+Request body fields:
+
+| Field | Required | Default | Notes |
+|-------|----------|---------|-------|
+| `prompt` | ✅ | — | Instruction for the AI (≤ 64 KB). |
+| `backend` | | bot's current backend | `claude` \| `codex` \| … (validated against the known backends). |
+| `model` | | backend default | e.g. `sonnet`, `gpt-5.4`. |
+| `skill` | | — | Skill to apply (`^[\w-]+$`); woven into the prompt so it stays engine-neutral. |
+| `cwd` | | configured working dir | Working directory for the run. |
+| `system_prompt` | | — | Extra system prompt appended for the run. |
+
+Runs are dispatched as background jobs (long skill-backed runs can take minutes), so the POST never blocks. Results are stored in SQLite under `run_id`; the prompt itself is **not** persisted. Like every non-health endpoint, `/api/run` requires the Bearer token when `api_secret` is set.
+
 ### Startup Resume
 
 If the bot restarts mid-session, interrupted Claude sessions are automatically resumed when the bot comes back online. Sessions are marked for resume in three ways:

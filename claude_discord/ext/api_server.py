@@ -13,26 +13,38 @@ Security:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
 import os
 import re
+import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from ..backend_settings import ALL_BACKENDS
+
 if TYPE_CHECKING:
     import discord
     from discord.ext.commands import Bot
 
+    from ..backend_factory import BackendFactory
+    from ..backend_settings import BackendSettings
     from ..database.lounge_repo import LoungeRepository
     from ..database.notification_repo import NotificationRepository
     from ..database.repository import SessionRepository
     from ..database.resume_repo import PendingResumeRepository
+    from ..database.run_repo import RunRepository
     from ..database.task_repo import TaskRepository
+
+# Maximum accepted prompt size (bytes) for /api/run — guards against abuse.
+_MAX_RUN_PROMPT_BYTES = 64 * 1024
+# Skill names are passed toward the CLI; restrict to a safe charset.
+_SKILL_NAME_RE = re.compile(r"^[\w-]+$")
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +87,9 @@ class ApiServer:
         lounge_channel_id: int | None = None,
         resume_repo: PendingResumeRepository | None = None,
         session_repo: SessionRepository | None = None,
+        run_repo: RunRepository | None = None,
+        backend_factory: BackendFactory | None = None,
+        backend_settings: BackendSettings | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -86,6 +101,11 @@ class ApiServer:
         self.lounge_repo = lounge_repo
         self.resume_repo = resume_repo
         self.session_repo = session_repo
+        self.run_repo = run_repo
+        self.backend_factory = backend_factory
+        self.backend_settings = backend_settings
+        # Strong refs to in-flight background run jobs (prevent GC mid-run).
+        self._run_tasks: set[asyncio.Task] = set()
         # Fall back to COORDINATION_CHANNEL_ID so lounge shares the same channel
         if lounge_channel_id is None:
             ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
@@ -115,6 +135,9 @@ class ApiServer:
         self.app.router.add_post("/api/lounge", self.post_lounge)
         # Session spawn route
         self.app.router.add_post("/api/spawn", self.spawn)
+        # Async one-shot AI run routes (requires run_repo + backend_factory)
+        self.app.router.add_post("/api/run", self.create_run)
+        self.app.router.add_get("/api/run/{run_id}", self.get_run)
         # Startup resume routes
         self.app.router.add_post("/api/mark-resume", self.mark_resume)
 
@@ -653,6 +676,171 @@ class ApiServer:
                 "thread_name": thread.name,
             },
             status=201,
+        )
+
+    # ------------------------------------------------------------------
+    # Async one-shot AI run endpoint (/api/run)
+    # ------------------------------------------------------------------
+
+    def _require_run(self) -> web.Response | None:
+        """Return a 503 response if the run feature is not configured."""
+        if self.run_repo is None or self.backend_factory is None:
+            return web.json_response(
+                {"error": "Run feature not configured (run_repo/backend_factory is None)"},
+                status=503,
+            )
+        return None
+
+    async def _resolve_engine(
+        self, requested_backend: str | None
+    ) -> tuple[str, str] | web.Response:
+        """Resolve (backend, default_model), or a 400 response if invalid.
+
+        The model returned here is only the engine default; an explicit
+        ``model`` from the request body takes precedence in the caller.
+        """
+        backend = requested_backend
+        if backend is None:
+            if self.backend_settings is not None:
+                backend = await self.backend_settings.current_backend()
+            else:
+                backend = "claude"
+        if backend not in ALL_BACKENDS:
+            return web.json_response(
+                {"error": f"Unknown backend {backend!r}. Valid: {', '.join(ALL_BACKENDS)}"},
+                status=400,
+            )
+        default_model = self.backend_factory.default_model_for(backend)  # type: ignore[union-attr]
+        return backend, default_model
+
+    async def create_run(self, request: web.Request) -> web.Response:
+        """POST /api/run — run an AI engine once and store the result.
+
+        Engine-neutral: the request only chooses *what* to run (prompt) and
+        optionally *which* engine (backend/model). All claude/codex
+        differences are absorbed by ``create_backend`` behind the
+        ``SessionBackend`` protocol — this handler has no engine branches.
+
+        Body (JSON):
+            prompt: Instruction for the AI (required).
+            backend: "claude" | "codex" | … (optional; defaults to the
+                bot's current global backend).
+            model: Model identifier (optional; defaults to the backend's
+                built-in default).
+            skill: Skill name to apply (optional; ``^[\\w-]+$``).
+            cwd: Working directory for the run (optional).
+            system_prompt: Extra system prompt to append (optional).
+
+        Returns (201):
+            ``{"run_id": "...", "status": "running", "backend": "...",
+               "model": "..."}``
+        """
+        if err := self._require_run():
+            return err
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        prompt = (data.get("prompt") or "").strip()
+        if not prompt:
+            return web.json_response({"error": "prompt is required"}, status=400)
+        if len(prompt.encode("utf-8")) > _MAX_RUN_PROMPT_BYTES:
+            return web.json_response(
+                {"error": f"prompt exceeds {_MAX_RUN_PROMPT_BYTES} bytes"}, status=400
+            )
+
+        resolved = await self._resolve_engine(data.get("backend"))
+        if isinstance(resolved, web.Response):
+            return resolved
+        backend, default_model = resolved
+        model = (data.get("model") or "").strip() or default_model
+
+        skill = data.get("skill")
+        if skill is not None:
+            skill = str(skill).strip()
+            if skill and not _SKILL_NAME_RE.match(skill):
+                return web.json_response({"error": "invalid skill name"}, status=400)
+
+        cwd = (data.get("cwd") or "").strip() or None
+        system_prompt = data.get("system_prompt") or None
+
+        # Skills are applied by weaving an instruction into the prompt, which
+        # keeps the endpoint engine-neutral (works for any backend).
+        effective_prompt = prompt
+        if skill:
+            effective_prompt = f"Use the {skill} skill for the following task.\n\n{prompt}"
+
+        run_id = uuid.uuid4().hex
+        await self.run_repo.create(run_id=run_id, backend=backend, model=model)  # type: ignore[union-attr]
+
+        task = asyncio.create_task(
+            self._execute_run(
+                run_id=run_id,
+                prompt=effective_prompt,
+                backend=backend,
+                model=model,
+                cwd=cwd,
+                system_prompt=system_prompt,
+            )
+        )
+        self._run_tasks.add(task)
+        task.add_done_callback(self._run_tasks.discard)
+
+        logger.info("Run accepted: run_id=%s backend=%s model=%s", run_id, backend, model)
+        return web.json_response(
+            {"run_id": run_id, "status": "running", "backend": backend, "model": model},
+            status=201,
+        )
+
+    async def _execute_run(
+        self,
+        *,
+        run_id: str,
+        prompt: str,
+        backend: str,
+        model: str,
+        cwd: str | None,
+        system_prompt: str | None,
+    ) -> None:
+        """Background worker: build a backend, run once, persist the outcome."""
+        from ..run_job import collect_oneshot
+
+        try:
+            runner = self.backend_factory.build(backend=backend, model=model)  # type: ignore[union-attr]
+            clone_kwargs: dict[str, object] = {}
+            if cwd:
+                clone_kwargs["working_dir"] = cwd
+            if system_prompt:
+                clone_kwargs["append_system_prompt"] = system_prompt
+            if clone_kwargs and hasattr(runner, "clone"):
+                runner = runner.clone(**clone_kwargs)
+            text = await collect_oneshot(runner, prompt)
+            await self.run_repo.set_result(run_id, text)  # type: ignore[union-attr]
+        except Exception as exc:
+            logger.error("Run %s failed: %s", _sanitize_log(run_id), exc, exc_info=True)
+            await self.run_repo.set_error(run_id, str(exc))  # type: ignore[union-attr]
+
+    async def get_run(self, request: web.Request) -> web.Response:
+        """GET /api/run/{run_id} — fetch the status/result of a run."""
+        if err := self._require_run():
+            return err
+
+        run_id = request.match_info["run_id"]
+        record = await self.run_repo.get(run_id)  # type: ignore[union-attr]
+        if record is None:
+            return web.json_response({"error": "run not found"}, status=404)
+
+        return web.json_response(
+            {
+                "run_id": record["run_id"],
+                "status": record["status"],
+                "backend": record["backend"],
+                "model": record["model"],
+                "result": record["result"],
+                "error": record["error"],
+            }
         )
 
     # ------------------------------------------------------------------
