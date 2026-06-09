@@ -206,8 +206,9 @@ class SessionManageCog(commands.Cog):
         if factory is not None:
             return factory.command_for(backend)
         runner = self._get_runner()
-        if runner is not None and getattr(runner, "command", None) and backend == "claude":
-            return runner.command
+        command = getattr(runner, "command", None)
+        if isinstance(command, str) and backend == "claude":
+            return command
         return DEFAULT_COMMAND.get(backend, backend)
 
     # ── Model commands ────────────────────────────────────────────────────────
