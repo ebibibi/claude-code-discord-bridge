@@ -8,6 +8,7 @@ Quick start::
 
 """
 
+from .claude.base_runner import BaseRunner
 from .claude.parser import parse_line
 from .claude.runner import ClaudeRunner
 from .claude.types import MessageType, StreamEvent, ToolCategory, ToolUseEvent
@@ -38,6 +39,7 @@ from .setup import BridgeComponents, setup_bridge
 
 __all__ = [
     # Core
+    "BaseRunner",
     "ClaudeRunner",
     "ClaudeChatCog",
     "RunConfig",

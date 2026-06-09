@@ -20,6 +20,7 @@ import sys
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from .base_runner import BaseRunner
 from .parser import parse_line
 from .types import MessageType, StreamEvent
 
@@ -68,7 +69,7 @@ def _resolve_windows_cmd(cmd_path: Path) -> list[str] | None:
     return None
 
 
-class ClaudeRunner:
+class ClaudeRunner(BaseRunner):
     """Manages Claude Code CLI subprocess execution."""
 
     def __init__(

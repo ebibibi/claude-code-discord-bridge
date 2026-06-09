@@ -12,6 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .bot import ClaudeDiscordBot
+from .claude.base_runner import BaseRunner
 from .claude.runner import ClaudeRunner
 from .cogs.claude_chat import ClaudeChatCog
 from .database.ask_repo import PendingAskRepository
@@ -40,6 +41,7 @@ def load_config() -> dict[str, str]:
     return {
         "token": token,
         "channel_id": channel_id,
+        "runner_backend": os.getenv("RUNNER_BACKEND", "claude"),
         "claude_command": os.getenv("CLAUDE_COMMAND", "claude"),
         "claude_model": os.getenv("CLAUDE_MODEL", "sonnet"),
         "claude_permission_mode": os.getenv("CLAUDE_PERMISSION_MODE", "acceptEdits"),
@@ -52,6 +54,32 @@ def load_config() -> dict[str, str]:
         "coordination_channel_id": os.getenv("COORDINATION_CHANNEL_ID", ""),
         "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
     }
+
+
+def create_runner(config: dict[str, str]) -> BaseRunner:
+    """Create a runner instance based on RUNNER_BACKEND env var.
+
+    Supported backends:
+      - "claude" (default): Claude Code CLI (claude -p --output-format stream-json)
+      - Future: "codex", "api", etc.
+    """
+    backend = config.get("runner_backend", "claude")
+
+    if backend == "claude":
+        return ClaudeRunner(
+            command=config["claude_command"],
+            model=config["claude_model"],
+            permission_mode=config["claude_permission_mode"],
+            working_dir=config["claude_working_dir"] or None,
+            timeout_seconds=int(config["timeout"]),
+            append_system_prompt=config["append_system_prompt"] or None,
+        )
+
+    raise ValueError(
+        f"Unknown RUNNER_BACKEND: {backend!r}. "
+        f"Supported: 'claude'. "
+        f"Future: 'codex', 'api'."
+    )
 
 
 async def main() -> None:
@@ -69,14 +97,7 @@ async def main() -> None:
     repo = SessionRepository(db_path)
     ask_repo = PendingAskRepository(db_path)
     lounge_repo = LoungeRepository(db_path)
-    runner = ClaudeRunner(
-        command=config["claude_command"],
-        model=config["claude_model"],
-        permission_mode=config["claude_permission_mode"],
-        working_dir=config["claude_working_dir"] or None,
-        timeout_seconds=int(config["timeout"]),
-        append_system_prompt=config["append_system_prompt"] or None,
-    )
+    runner = create_runner(config)
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None
     coordination_channel_id = (
