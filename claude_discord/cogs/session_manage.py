@@ -9,6 +9,7 @@ Provides slash commands for viewing and managing Claude Code sessions:
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -17,8 +18,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from ..backend_factory import DEFAULT_COMMAND
 from ..database.repository import SessionRepository, UsageStatsRepository
 from ..database.settings_repo import SettingsRepository
+from ..discord_ui.codex_usage import build_codex_usage_lines, fetch_codex_rate_limits
 from ..discord_ui.embeds import COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
 from ..discord_ui.views import ResumeSelectView, ToolSelectView
 from ..worktree import WorktreeManager
@@ -178,6 +181,34 @@ class SessionManageCog(commands.Cog):
         if runner is not None and hasattr(runner, "model"):
             return runner.model  # type: ignore[return-value]
         return "sonnet"
+
+    async def _get_current_backend(self, interaction: discord.Interaction) -> str:
+        """Return the effective backend for the current thread/channel."""
+        chat_cog = self.bot.get_cog("ClaudeChatCog")
+        backend_settings = getattr(chat_cog, "_backend_settings", None)
+        if backend_settings is None:
+            return "claude"
+        thread_id = None
+        if isinstance(interaction.channel, discord.Thread):
+            thread_id = interaction.channel.id
+        getter = getattr(backend_settings, "current_backend", None)
+        if getter is None:
+            return "claude"
+        value = getter(thread_id)
+        if inspect.isawaitable(value):
+            value = await value
+        return value if value in {"claude", "codex"} else "claude"
+
+    def _get_command_for_backend(self, backend: str) -> str:
+        """Resolve the configured CLI command for a backend."""
+        chat_cog = self.bot.get_cog("ClaudeChatCog")
+        factory = getattr(chat_cog, "_factory", None)
+        if factory is not None:
+            return factory.command_for(backend)
+        runner = self._get_runner()
+        if runner is not None and getattr(runner, "command", None) and backend == "claude":
+            return runner.command
+        return DEFAULT_COMMAND.get(backend, backend)
 
     # ── Model commands ────────────────────────────────────────────────────────
 
@@ -948,10 +979,28 @@ class SessionManageCog(commands.Cog):
 
     @app_commands.command(
         name="usage",
-        description="Show Claude Code rate limit usage and weekly activity",
+        description="Show current backend rate limit usage and weekly activity",
     )
     async def usage_show(self, interaction: discord.Interaction) -> None:
         """Display rate limit utilization (5-hour / 7-day) with reset countdown."""
+        backend = await self._get_current_backend(interaction)
+        if backend == "codex":
+            payload = await fetch_codex_rate_limits(self._get_command_for_backend("codex"))
+            if not payload:
+                await interaction.response.send_message(
+                    "ℹ️ No Codex usage data yet — try again after starting a Codex session.",
+                    ephemeral=True,
+                )
+                return
+
+            embed = discord.Embed(
+                title="📊 Codex Usage",
+                description="\n".join(build_codex_usage_lines(payload)),
+                color=COLOR_INFO,
+            )
+            await interaction.response.send_message(embed=embed)
+            return
+
         if self.usage_repo is None:
             await interaction.response.send_message(
                 "ℹ️ Usage tracking is not enabled for this bot instance.", ephemeral=True

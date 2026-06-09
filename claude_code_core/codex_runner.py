@@ -248,12 +248,15 @@ class CodexRunner:
             codex exec [OPTIONS] [PROMPT]
             codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
 
-        Both subcommands accept --json and --model. The resume positional
-        args come AFTER any flags, with SESSION_ID before PROMPT.
+        Both subcommands accept --json and --model. Resume supports a smaller
+        flag surface than fresh exec runs: notably, it does not accept
+        --ask-for-approval or --cd. The resume positional args come AFTER any
+        supported flags, with SESSION_ID before PROMPT.
         """
         # Always under the `exec` subcommand. `resume` is its sub-subcommand.
         args = [self.command, "exec"]
-        if session_id:
+        is_resume = session_id is not None
+        if is_resume:
             if not re.match(r"^[a-f0-9\-]+$", session_id):
                 raise ValueError(f"Invalid session_id format: {session_id!r}")
             args.append("resume")
@@ -262,10 +265,10 @@ class CodexRunner:
 
         if self.dangerously_skip_permissions:
             args.append("--dangerously-bypass-approvals-and-sandbox")
-        elif self.permission_mode in _APPROVAL_MODE_MAP:
+        elif not is_resume and self.permission_mode in _APPROVAL_MODE_MAP:
             args.extend(["--ask-for-approval", _APPROVAL_MODE_MAP[self.permission_mode]])
 
-        if self.working_dir:
+        if not is_resume and self.working_dir:
             args.extend(["--cd", self.working_dir])
 
         # Positional args come last. For resume: SESSION_ID then PROMPT.

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 from claude_discord.cogs.event_processor import _post_statusline_footer
 
 _STATUSLINE_MOD = "claude_discord.discord_ui.statusline"
+_CODEX_USAGE_MOD = "claude_discord.discord_ui.codex_usage"
 
 
 async def test_posts_api_line_when_no_statusline_configured() -> None:
@@ -72,3 +73,44 @@ async def test_combines_api_line_and_statusline_output() -> None:
     assert "Ctx 45%" in body
     # The API line should appear above the statusline output.
     assert body.index("API:") < body.index("Ctx 45%")
+
+
+async def test_posts_codex_usage_footer() -> None:
+    thread = AsyncMock()
+    with (
+        patch(
+            f"{_CODEX_USAGE_MOD}.fetch_codex_rate_limits",
+            new=AsyncMock(
+                return_value={
+                    "rateLimits": {
+                        "primary": {
+                            "usedPercent": 24,
+                            "windowDurationMins": 300,
+                            "resetsAt": 4_102_444_800,
+                        },
+                        "secondary": {
+                            "usedPercent": 11,
+                            "windowDurationMins": 10080,
+                            "resetsAt": 4_102_531_200,
+                        },
+                    }
+                }
+            ),
+        ),
+    ):
+        await _post_statusline_footer(
+            thread=thread,
+            working_dir=None,
+            model="gpt-5.5",
+            context_window=None,
+            input_tokens=None,
+            cache_creation_tokens=None,
+            cache_read_tokens=None,
+            api_label="OpenAI API (direct)",
+            backend="codex",
+            command="codex",
+        )
+    body = thread.send.await_args.args[0]
+    assert "API: OpenAI API (direct)" in body
+    assert "5h" in body
+    assert "7d" in body
