@@ -158,8 +158,9 @@ class ApiServer:
 
         token = auth_header[7:]
         # 定数時間比較でタイミング攻撃を防ぐ（`==` は一致長で実行時間が変わる）。
-        # api_secret が設定されているときのみこの middleware は登録される（None は来ない）。
-        if not hmac.compare_digest(token, self.api_secret):
+        # この middleware は api_secret 設定時のみ登録される（secret は str 確定）。
+        secret = self.api_secret or ""
+        if not hmac.compare_digest(token, secret):
             return web.json_response({"error": "Invalid token"}, status=401)
 
         return await handler(request)
