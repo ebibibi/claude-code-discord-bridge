@@ -195,7 +195,7 @@ class TestModelSet:
         call_args = interaction.response.send_message.call_args
         assert call_args.kwargs.get("ephemeral") is True
 
-    @pytest.mark.parametrize("model", ["haiku", "sonnet", "opus"])
+    @pytest.mark.parametrize("model", ["haiku", "sonnet", "opus", "fable"])
     async def test_all_valid_models_accepted(self, model: str):
         """All documented model names should be accepted."""
         cog = _make_cog()

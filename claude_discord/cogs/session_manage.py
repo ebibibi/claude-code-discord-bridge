@@ -57,11 +57,12 @@ _DEFAULT_MIN_RESULTS = 10
 
 # Model management
 SETTING_CLAUDE_MODEL = "claude_model"
-_VALID_MODELS = {"haiku", "sonnet", "opus"}
+_VALID_MODELS = {"haiku", "sonnet", "opus", "fable"}
 _MODEL_CHOICES = [
     app_commands.Choice(name="Haiku 4.5 (fast, cost-effective)", value="haiku"),
     app_commands.Choice(name="Sonnet 4.6 (balanced, default)", value="sonnet"),
-    app_commands.Choice(name="Opus 4.6 (powerful, deep reasoning)", value="opus"),
+    app_commands.Choice(name="Opus 4.8 (powerful, deep reasoning)", value="opus"),
+    app_commands.Choice(name="Fable 5 (state-of-the-art, token-efficient)", value="fable"),
 ]
 
 # Effort level management

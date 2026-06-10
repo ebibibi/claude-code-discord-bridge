@@ -45,7 +45,7 @@ STALL_HARD_SECONDS = 30
 
 # Models known to have extended thinking pauses (thinking, context compression).
 # These get higher stall thresholds to avoid false warnings.
-_SLOW_MODEL_KEYWORDS = ("opus",)
+_SLOW_MODEL_KEYWORDS = ("opus", "fable")
 _SLOW_STALL_SOFT_SECONDS = 30
 _SLOW_STALL_HARD_SECONDS = 120
 

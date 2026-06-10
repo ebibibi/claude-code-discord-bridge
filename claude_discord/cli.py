@@ -291,7 +291,7 @@ async def _run_setup(env_path: Path) -> None:
     _print("Step 6 — Claude Model")
     model = _prompt_choice(
         "  Model",
-        ["sonnet", "opus", "haiku"],
+        ["sonnet", "opus", "haiku", "fable"],
         default="sonnet",
     )
 
