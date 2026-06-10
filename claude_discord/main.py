@@ -235,10 +235,15 @@ async def main() -> None:
 
     order_cog = OrderCommandCog(bot)
 
-    # ZaikoCommandCog — /zaiko (GoQ在庫連携シート生成)
+    # ZaikoCommandCog — /pro-kakidasi (GoQ在庫連携シート生成)
     from .cogs.zaiko_command import ZaikoCommandCog
 
     zaiko_cog = ZaikoCommandCog(bot)
+
+    # GoqUploadCommandCog — /goq-upload (SS-08シート5〜11→GoQ一括CSVアップロード)
+    from .cogs.goq_upload_command import GoqUploadCommandCog
+
+    goq_upload_cog = GoqUploadCommandCog(bot)
 
     # CategoryCommandCog — /category-search (全7モールカテゴリ一括検索)
     from .cogs.category_command import CategoryCommandCog
@@ -269,6 +274,7 @@ async def main() -> None:
         if listing_cog is not None:
             await bot.add_cog(listing_cog)
         await bot.add_cog(zaiko_cog)
+        await bot.add_cog(goq_upload_cog)
         await bot.add_cog(category_cog)
         await bot.add_cog(haiban_cog)
         await bot.add_cog(profit_cog)

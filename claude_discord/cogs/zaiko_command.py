@@ -1,14 +1,14 @@
-"""在庫連携コマンド Cog — /zaiko でGoQ在庫連携シート生成.
+"""商品書き出しコマンド Cog — /pro-kakidasi でGoQ在庫連携シート生成.
 
 JANを起点に各モールAPIから商品データを取得し、SS-08のシート5〜11に書き込む。
 JAN複数指定はカンマ・スペース・読点区切り対応。
 
 使い方:
-  /zaiko action:fetch                                      → 全モール取得（SS-17由来）
-  /zaiko action:fetch mall:amazon1                         → 特定モールのみ
-  /zaiko action:write jan:4972228224055                    → 単一JANで追記
-  /zaiko action:write jan:4972228224055,4972228263122      → 複数JAN追記
-  /zaiko action:write jan:"4972228224055 4972228263122"    → スペース区切りも可
+  /pro-kakidasi action:fetch                                      → 全モール取得（SS-17由来）
+  /pro-kakidasi action:fetch mall:amazon1                         → 特定モールのみ
+  /pro-kakidasi action:write jan:4972228224055                    → 単一JANで追記
+  /pro-kakidasi action:write jan:4972228224055,4972228263122      → 複数JAN追記
+  /pro-kakidasi action:write jan:"4972228224055 4972228263122"    → スペース区切りも可
 """
 
 from __future__ import annotations
@@ -74,7 +74,7 @@ class ZaikoCommandCog(commands.Cog):
         self.bot = bot
 
     @app_commands.command(
-        name="zaiko",
+        name="pro-kakidasi",
         description="GoQ在庫連携シート生成（SS-08シート5〜11）",
     )
     @app_commands.describe(
@@ -89,7 +89,7 @@ class ZaikoCommandCog(commands.Cog):
         ],
         mall=MALL_CHOICES,
     )
-    async def zaiko(
+    async def pro_kakidasi(
         self,
         interaction: discord.Interaction,
         action: str = "fetch",
@@ -208,6 +208,6 @@ class ZaikoCommandCog(commands.Cog):
         await interaction.edit_original_response(embed=embed)
 
         logger.info(
-            "/zaiko by %s: action=%s, mall=%s, jan_count=%d, rc=%s",
+            "/pro-kakidasi by %s: action=%s, mall=%s, jan_count=%d, rc=%s",
             interaction.user.name, action, mall, len(jan_list), proc.returncode,
         )
