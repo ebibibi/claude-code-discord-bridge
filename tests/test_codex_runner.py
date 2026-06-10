@@ -53,6 +53,26 @@ class TestCodexRunnerBuildArgs:
         assert "--cd" in args or "-C" in args
         assert "/tmp/work" in args
 
+    def test_resume_omits_working_dir_flag(self) -> None:
+        runner = CodexRunner(
+            command="codex",
+            model="o4-mini",
+            working_dir="/tmp/work",
+        )
+        args = runner._build_args("hello", session_id="0199a213-81c0-7800-8aa1-bbab2a035a53")
+        assert "--cd" not in args
+        assert "-C" not in args
+
+    def test_resume_omits_approval_flag(self) -> None:
+        runner = CodexRunner(
+            command="codex",
+            model="o4-mini",
+            permission_mode="acceptEdits",
+        )
+        args = runner._build_args("hello", session_id="0199a213-81c0-7800-8aa1-bbab2a035a53")
+        assert "--ask-for-approval" not in args
+        assert "-a" not in args
+
     def test_prompt_is_last_arg(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini")
         args = runner._build_args("hello world", session_id=None)
@@ -215,9 +235,10 @@ class TestCodexRunnerArgvStructure:
         codex exec [OPTIONS] [PROMPT]
         codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
 
-    Both subcommands accept ``--json``, ``--model``, ``--ask-for-approval``,
-    ``--dangerously-bypass-approvals-and-sandbox``, ``--cd``. The resume
-    positional args come AFTER all flags, with SESSION_ID before PROMPT.
+    Both subcommands accept ``--json`` and ``--model``. Resume also accepts
+    ``--dangerously-bypass-approvals-and-sandbox``, but does NOT accept
+    ``--ask-for-approval`` or ``--cd``. The resume positional args come
+    AFTER all supported flags, with SESSION_ID before PROMPT.
 
     These tests guard against regressions like the one that shipped briefly
     in 3.0.0 where resume was invoked as ``codex resume <id> --json …`` —
@@ -253,12 +274,26 @@ class TestCodexRunnerArgvStructure:
         )
         args = runner._build_args("hello", session_id=sid)
         sid_idx = args.index(sid)
-        # --json, --model, --ask-for-approval, --cd must all come before SESSION_ID.
-        for flag in ("--json", "--model", "--ask-for-approval", "--cd"):
+        # Supported resume flags must come before SESSION_ID.
+        for flag in ("--json", "--model"):
             assert flag in args, f"{flag} missing from resume args"
             assert args.index(flag) < sid_idx, (
                 f"{flag} should appear before SESSION_ID in codex exec resume"
             )
+
+    def test_resume_does_not_include_unsupported_flags(self) -> None:
+        sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
+        runner = CodexRunner(
+            command="codex",
+            model="gpt-5.4",
+            permission_mode="acceptEdits",
+            working_dir="/work",
+        )
+        args = runner._build_args("hello", session_id=sid)
+        assert "--json" in args
+        assert "--model" in args
+        assert "--ask-for-approval" not in args
+        assert "--cd" not in args
 
     def test_resume_session_id_before_prompt(self) -> None:
         sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"

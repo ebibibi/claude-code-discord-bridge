@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
@@ -232,3 +232,47 @@ class TestUsageCommand:
         assert embed is not None
         # Should show utilization percentage
         assert "61" in embed.description
+
+    async def test_usage_shows_codex_stats_for_codex_thread(self):
+        from claude_discord.cogs.session_manage import SessionManageCog
+
+        bot = MagicMock()
+        repo = MagicMock()
+        cog = SessionManageCog(bot=bot, repo=repo)
+
+        interaction = _make_thread_interaction()
+
+        backend_settings = MagicMock()
+        backend_settings.current_backend = AsyncMock(return_value="codex")
+        factory = MagicMock()
+        factory.command_for.return_value = "codex"
+        chat_cog = MagicMock()
+        chat_cog._backend_settings = backend_settings
+        chat_cog._factory = factory
+        bot.get_cog.return_value = chat_cog
+
+        with patch(
+            "claude_discord.cogs.session_manage.fetch_codex_rate_limits",
+            new=AsyncMock(
+                return_value={
+                    "rateLimits": {
+                        "primary": {
+                            "usedPercent": 24,
+                            "windowDurationMins": 300,
+                            "resetsAt": 4_102_444_800,
+                        },
+                        "secondary": {
+                            "usedPercent": 11,
+                            "windowDurationMins": 10080,
+                            "resetsAt": 4_102_531_200,
+                        },
+                    }
+                }
+            ),
+        ):
+            await cog.usage_show.callback(cog, interaction)
+
+        embed = interaction.response.send_message.call_args.kwargs.get("embed")
+        assert embed is not None
+        assert "Codex Usage" in embed.title
+        assert "24" in embed.description
