@@ -202,9 +202,9 @@ class ThreadStatusDashboard:
             logger.debug("Dashboard message was deleted; re-posting")
             try:
                 self._dashboard_message = await self._channel.send(embed=embed)
-            except discord.HTTPException:
+            except (discord.HTTPException, RuntimeError):
                 logger.warning("Failed to re-post dashboard message", exc_info=True)
-        except discord.HTTPException:
+        except (discord.HTTPException, RuntimeError):
             logger.debug("Failed to edit dashboard message", exc_info=True)
 
     def _prune_stale(self) -> None:

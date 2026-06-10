@@ -486,6 +486,29 @@ class TestAuthentication:
         )
         assert resp.status == 200
 
+    @pytest.mark.asyncio
+    async def test_token_prefix_is_rejected(self, auth_client: TestClient) -> None:
+        """正しいトークンの前方一致（短い部分文字列）でも 401 になること。
+
+        素朴な `==` 比較ではなく `hmac.compare_digest` を使う前提のテスト。
+        長さの異なる文字列でも安全に拒否されることを確認する。
+        """
+        resp = await auth_client.post(
+            "/api/notify",
+            json={"message": "test"},
+            headers={"Authorization": "Bearer test-secret-12"},
+        )
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_token_longer_is_rejected(self, auth_client: TestClient) -> None:
+        resp = await auth_client.post(
+            "/api/notify",
+            json={"message": "test"},
+            headers={"Authorization": "Bearer test-secret-123-extra"},
+        )
+        assert resp.status == 401
+
 
 class TestSpawn:
     """Tests for POST /api/spawn — programmatic Claude session creation."""

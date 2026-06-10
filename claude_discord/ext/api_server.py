@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import json
 import logging
 import os
@@ -156,7 +157,10 @@ class ApiServer:
             return web.json_response({"error": "Missing Authorization header"}, status=401)
 
         token = auth_header[7:]
-        if token != self.api_secret:
+        # 定数時間比較でタイミング攻撃を防ぐ（`==` は一致長で実行時間が変わる）。
+        # この middleware は api_secret 設定時のみ登録される（secret は str 確定）。
+        secret = self.api_secret or ""
+        if not hmac.compare_digest(token, secret):
             return web.json_response({"error": "Invalid token"}, status=401)
 
         return await handler(request)
