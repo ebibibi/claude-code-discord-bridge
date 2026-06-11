@@ -161,7 +161,7 @@ class ThreadStatusDashboard:
                 await thread.send(
                     f"🟡 <@{self._owner_id}> Claude has finished — your reply is needed here."
                 )
-            except discord.HTTPException:
+            except (discord.HTTPException, RuntimeError):
                 logger.debug("Failed to send owner mention in thread %d", thread_id, exc_info=True)
 
     async def remove(self, thread_id: int) -> None:
