@@ -437,7 +437,7 @@ class EventProcessor:
         # Finalize any in-progress streaming message.
         # Capture the URL before sending session_complete_embed (which would
         # become last_message_id and hide Claude's actual reply).
-        last_assistant_url: str | None = None
+        last_assistant_url: str | None = self._state.last_assistant_url
         last_assistant_text: str = self._state.accumulated_text
 
         if self._streamer.has_content:
@@ -568,9 +568,13 @@ class EventProcessor:
                 await self._streamer.finalize(transform=_wrap_tables_in_fences)
                 self._streamer = StreamingMessageManager(self._config.thread)
             else:
-                # No partial events arrived — post the full text directly.
+                # No streamer content — post the full text block directly.
+                # (Current CLI delivers each text block complete, so this is the
+                # normal path; capture the last message URL for inbox linking.)
                 for chunk in chunk_message(event.text):
-                    await self._config.thread.send(chunk)
+                    sent = await self._config.thread.send(chunk)
+                    if sent is not None:
+                        self._state.last_assistant_url = sent.jump_url
             self._state.partial_text = ""
             self._state.accumulated_text = event.text
             self._assistant_text_sent = True

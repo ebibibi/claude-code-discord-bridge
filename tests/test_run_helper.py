@@ -272,15 +272,24 @@ class TestPartialMessageStreaming:
 
     @pytest.mark.asyncio
     async def test_is_partial_detection_in_parser(self) -> None:
-        """Parser must set is_partial based on stop_reason."""
+        """Assistant messages are treated as complete content blocks.
+
+        The current Claude Code CLI emits one fully-assembled block per
+        ``assistant`` message and delivers token-level partials as separate
+        ``stream_event`` messages (which ccdb ignores). ``stop_reason`` is no
+        longer populated on the ``assistant`` message — so a ``null`` value must
+        NOT be interpreted as "still streaming", otherwise ``not is_partial``
+        gated handlers (plan approval, thinking display) never fire.
+        """
         from claude_discord.claude.parser import parse_line
 
-        partial = parse_line(
+        # stop_reason: null — current CLI shape — must be COMPLETE, not partial.
+        null_stop = parse_line(
             '{"type": "assistant", "message": {"stop_reason": null, "content": '
             '[{"type": "text", "text": "hello"}]}}'
         )
-        assert partial is not None
-        assert partial.is_partial is True
+        assert null_stop is not None
+        assert null_stop.is_partial is False
 
         complete = parse_line(
             '{"type": "assistant", "message": {"stop_reason": "end_turn", "content": '
@@ -295,6 +304,26 @@ class TestPartialMessageStreaming:
         )
         assert tool_stop is not None
         assert tool_stop.is_partial is False
+
+    @pytest.mark.asyncio
+    async def test_exit_plan_mode_block_is_actionable(self) -> None:
+        """An ExitPlanMode block with stop_reason: null must fire plan approval.
+
+        Regression test for the "session stuck running" hang: the CLI presents
+        a plan via ExitPlanMode (stop_reason null on the assistant message);
+        if the parser marks it partial, the ``not is_partial`` gate suppresses
+        the approval UI and the CLI blocks forever waiting for an answer.
+        """
+        from claude_discord.claude.parser import parse_line
+
+        event = parse_line(
+            '{"type": "assistant", "message": {"stop_reason": null, "content": '
+            '[{"type": "tool_use", "id": "t1", "name": "ExitPlanMode", '
+            '"input": {"plan": "do the thing"}}]}}'
+        )
+        assert event is not None
+        assert event.is_plan_approval is True
+        assert event.is_partial is False  # gate must allow the approval UI to show
 
 
 class TestRunClaudeInThread:

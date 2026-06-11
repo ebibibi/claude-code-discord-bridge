@@ -309,8 +309,13 @@ class TestAssistantUsage:
         assert event.input_tokens is None
         assert event.cache_read_tokens is None
 
-    def test_assistant_partial_message_extracts_usage(self):
-        """Partial assistant messages also carry per-turn usage."""
+    def test_assistant_null_stop_reason_extracts_usage(self):
+        """Assistant messages carry per-turn usage regardless of stop_reason.
+
+        The current CLI emits ``stop_reason: null`` on every ``assistant``
+        message (the real stop_reason lives in the trailing ``message_delta``
+        stream_event), so the message is treated as a complete block.
+        """
         line = json.dumps(
             {
                 "type": "assistant",
@@ -328,7 +333,9 @@ class TestAssistantUsage:
         )
         event = parse_line(line)
         assert event is not None
-        assert event.is_partial is True
+        # stop_reason: null no longer means "partial" — the CLI moved the
+        # completion signal to message_delta, so assistant blocks are complete.
+        assert event.is_partial is False
         assert event.input_tokens == 500
         assert event.cache_creation_tokens == 30000
         assert event.cache_read_tokens == 10000

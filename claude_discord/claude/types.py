@@ -67,6 +67,8 @@ class SessionState:
     thread_id: int = 0
     accumulated_text: str = ""
     partial_text: str = ""
+    # jump_url of the last directly-posted assistant text message (inbox linking)
+    last_assistant_url: str | None = None
     active_tools: dict[str, discord.Message] = field(default_factory=dict)
     active_timers: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     # TodoWrite: reference to the live todo embed message (edited in-place on each update)

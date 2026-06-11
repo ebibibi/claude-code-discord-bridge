@@ -141,13 +141,27 @@ def _parse_system(data: dict[str, Any], event: StreamEvent) -> None:
 def _parse_assistant(data: dict[str, Any], event: StreamEvent) -> None:
     """Parse assistant message (text blocks, tool_use blocks, and thinking blocks).
 
-    Sets is_partial=True when stop_reason is null/missing, meaning Claude is still
-    generating content. With --include-partial-messages, many partial events arrive
-    before the final complete event (stop_reason="end_turn" or "tool_use").
+    Each ``assistant``-type message the CLI emits is a fully-assembled single
+    content block (one thinking, text, or tool_use block with complete input).
+    Token-level partials are delivered separately as ``stream_event`` messages,
+    which ccdb intentionally ignores. We therefore treat every ``assistant``
+    message we receive as a complete, actionable block.
+
+    Historically ``is_partial`` was derived from ``stop_reason`` (null ⇒ still
+    generating). Current Claude Code CLI versions no longer populate
+    ``stop_reason`` on the ``assistant`` message — it moved to the trailing
+    ``message_delta`` stream_event — so it is ``None`` here even for finished
+    blocks. Keeping the old heuristic mis-flagged *every* block as partial,
+    which silently disabled all ``not is_partial``-gated handlers in the event
+    processor: extended-thinking display and — critically — plan-approval
+    (ExitPlanMode). With the approval UI suppressed, the CLI blocked forever
+    waiting for an answer that could never be given, so the session appeared
+    stuck "running". An explicit ``stop_reason`` (e.g. "end_turn"/"tool_use"),
+    when present, is still respected as a completion signal.
     """
     message = data.get("message", {})
     content = message.get("content", [])
-    event.is_partial = message.get("stop_reason") is None
+    event.is_partial = False
 
     text_parts: list[str] = []
     thinking_parts: list[str] = []
