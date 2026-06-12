@@ -249,6 +249,13 @@ class TaskRepository:
             )
             await db.commit()
 
+    async def delete_by_name(self, name: str) -> bool:
+        """Delete a task by its unique name. Returns True if a row was deleted."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM scheduled_tasks WHERE name = ?", (name,))
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def delete(self, task_id: int) -> bool:
         """Delete a task. Returns True if a row was deleted."""
         async with aiosqlite.connect(self.db_path) as db:

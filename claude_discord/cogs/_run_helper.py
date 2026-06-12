@@ -50,6 +50,37 @@ def configure_session_limit(max_concurrent: int) -> None:
     _global_semaphore = asyncio.Semaphore(max_concurrent)
 
 
+# ---------------------------------------------------------------------------
+# ScheduleWakeup → one-shot scheduled task bridge
+# ---------------------------------------------------------------------------
+# Harness-driven models (e.g. /loop dynamic pacing) call a ScheduleWakeup tool
+# expecting to be re-invoked after a delay.  In claude -p mode no harness
+# exists, so ccdb honours the request by registering a one-shot task in the
+# SQLite scheduler that resumes the session in the same thread.
+_wakeup_task_repo = None
+
+# Bounds mirror the harness runtime clamp for ScheduleWakeup.delaySeconds.
+_WAKEUP_MIN_DELAY_SECONDS = 60
+_WAKEUP_MAX_DELAY_SECONDS = 3600
+
+# Sentinel emitted for autonomous loops; meaningless outside the harness.
+_AUTONOMOUS_LOOP_SENTINEL = "<<autonomous-loop-dynamic>>"
+_AUTONOMOUS_LOOP_PROMPT = (
+    "Continue your autonomous /loop iteration based on the previous context. "
+    "If the loop's goal is complete, summarize and stop scheduling wakeups."
+)
+
+
+def configure_wakeup_scheduler(task_repo) -> None:
+    """Set the process-wide TaskRepository used to honour ScheduleWakeup calls.
+
+    Called once from ``setup_bridge()`` when the scheduler is enabled.  When
+    unset, ScheduleWakeup tool calls are logged and ignored.
+    """
+    global _wakeup_task_repo  # noqa: PLW0603
+    _wakeup_task_repo = task_repo
+
+
 # Max characters for tool result display (re-exported for backward compat).
 TOOL_RESULT_MAX_CHARS = 3000
 
@@ -190,6 +221,62 @@ async def _cleanup_session_worktree(config: RunConfig) -> None:
         logger.exception("Unexpected error during worktree cleanup for thread %d", config.thread.id)
 
 
+async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
+    """Register a one-shot scheduled task for a ScheduleWakeup request.
+
+    The task resumes the session in the same thread after the requested delay
+    (clamped to the harness range).  Failures are logged and reported to the
+    thread but never break the just-finished session.
+    """
+    repo = _wakeup_task_repo
+    if repo is None:
+        logger.warning(
+            "ScheduleWakeup requested in thread %d but scheduler is disabled — ignoring",
+            config.thread.id,
+        )
+        return
+
+    try:
+        delay = int(wakeup.get("delaySeconds", 0))
+    except (TypeError, ValueError):
+        delay = 0
+    delay = max(_WAKEUP_MIN_DELAY_SECONDS, min(_WAKEUP_MAX_DELAY_SECONDS, delay))
+
+    prompt = str(wakeup.get("prompt") or "").strip()
+    if not prompt or prompt == _AUTONOMOUS_LOOP_SENTINEL:
+        prompt = _AUTONOMOUS_LOOP_PROMPT
+    reason = str(wakeup.get("reason") or "").strip()
+
+    name = f"wakeup-thread-{config.thread.id}"
+    channel_id = getattr(config.thread, "parent_id", None) or config.thread.id
+
+    try:
+        # Replace any previous wakeup for this thread — last call wins.
+        await repo.delete_by_name(name)
+        await repo.create(
+            name=name,
+            prompt=prompt,
+            interval_seconds=delay,
+            channel_id=channel_id,
+            working_dir=getattr(config.runner, "working_dir", None),
+            run_immediately=False,
+            thread_id=config.thread.id,
+            one_shot=True,
+        )
+    except Exception:
+        logger.exception("Failed to schedule wakeup task for thread %d", config.thread.id)
+        with contextlib.suppress(discord.HTTPException):
+            await config.thread.send("-# ⚠️ Wakeup could not be scheduled (scheduler error)")
+        return
+
+    label = f"⏰ Wakeup scheduled in {delay}s"
+    if reason:
+        label += f" — {reason}"
+    logger.info("Wakeup scheduled for thread %d in %ds", config.thread.id, delay)
+    with contextlib.suppress(discord.HTTPException):
+        await config.thread.send(f"-# {label}")
+
+
 async def run_claude_with_config(config: RunConfig) -> str | None:
     """Execute Claude Code CLI and stream results to a Discord thread.
 
@@ -272,6 +359,13 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
         )
         guardrail_config = replace(config, session_id=session_id, post_compact_rerun=True)
         return await run_claude_with_config(guardrail_config)
+
+    # Honour a ScheduleWakeup tool call by registering a one-shot scheduled
+    # task that resumes this session after the requested delay.  Done before
+    # the AskUserQuestion flow — a wakeup and a pending ask are mutually
+    # exclusive in practice (the ask interrupts the turn).
+    if processor.pending_wakeup is not None:
+        await _schedule_wakeup(config, processor.pending_wakeup)
 
     # After the stream ends, handle pending AskUserQuestion by showing Discord
     # UI and resuming the session with the user's answer.

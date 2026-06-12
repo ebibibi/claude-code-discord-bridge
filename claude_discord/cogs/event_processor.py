@@ -157,6 +157,11 @@ class EventProcessor:
         # (skip events) then handle the ask after the stream ends.
         self._pending_ask: list[AskQuestion] | None = None
 
+        # Set when a ScheduleWakeup tool call is detected (harness-style /loop
+        # self-pacing). The caller registers a one-shot scheduled task after
+        # the session ends so the loop survives in claude -p mode.
+        self._pending_wakeup: dict | None = None
+
         # Set when compact_boundary fires (and post_compact_rerun is False).
         # Triggers interrupt → rerun-with-guardrail in _run_helper.
         self._compact_occurred: bool = False
@@ -183,6 +188,11 @@ class EventProcessor:
     def pending_ask(self) -> list[AskQuestion] | None:
         """Set when AskUserQuestion was detected. None otherwise."""
         return self._pending_ask
+
+    @property
+    def pending_wakeup(self) -> dict | None:
+        """ScheduleWakeup tool input ({delaySeconds, prompt, reason}) if called."""
+        return self._pending_wakeup
 
     @property
     def compact_occurred(self) -> bool:
@@ -321,6 +331,11 @@ class EventProcessor:
         # Always shown — this IS the chat content.
         if event.text:
             await self._handle_text(event)
+
+        # ScheduleWakeup — capture the request so the caller can register a
+        # one-shot scheduled task after the session ends (last call wins).
+        if event.tool_use and event.tool_use.tool_name == "ScheduleWakeup":
+            self._pending_wakeup = dict(event.tool_use.tool_input)
 
         # Tool use — post embed and start live timer. Skip in chat_only mode.
         if event.tool_use:
