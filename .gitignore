@@ -11,8 +11,9 @@ build/
 # Virtual environment (uv manages this)
 .venv/
 
-# Environment variables
-.env
+# Environment variables（秘密情報。.env / .env.bot2 / .envecho 等 .env で始まる派生を全て除外。.env.example のみ追跡）
+.env*
+!.env.example
 
 # Database
 data/
