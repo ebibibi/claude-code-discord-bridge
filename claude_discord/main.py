@@ -260,11 +260,29 @@ async def main() -> None:
 
     profit_cog = ProfitCommandCog(bot)
 
+    # Claude Code（claude -p）課金対策（2026-06-15〜）:
+    # フリーチャット(ClaudeChatCog)と /skill(SkillCommandCog) は claude -p を呼ぶため
+    # 従量課金対象。デフォルト無効。再開する場合のみ .env で 1/true/yes を設定。
+    claude_chat_enabled = os.getenv("CLAUDE_CHAT_ENABLED", "").strip() in (
+        "1", "true", "yes"
+    )
+    skill_enabled = os.getenv("SKILL_ENABLED", "").strip() in ("1", "true", "yes")
+    if claude_chat_enabled:
+        logger.info("ClaudeChatCog enabled (CLAUDE_CHAT_ENABLED=1) — claude -p 課金対象")
+    else:
+        logger.info("ClaudeChatCog disabled (set CLAUDE_CHAT_ENABLED=1 to enable)")
+    if skill_enabled:
+        logger.info("SkillCommandCog enabled (SKILL_ENABLED=1) — claude -p 課金対象")
+    else:
+        logger.info("SkillCommandCog disabled (set SKILL_ENABLED=1 to enable)")
+
     async with bot:
-        await bot.add_cog(cog)
+        if claude_chat_enabled:
+            await bot.add_cog(cog)
         await bot.add_cog(repo_viewer_cog)
         await bot.add_cog(channel_manage_cog)
-        await bot.add_cog(skill_cog)
+        if skill_enabled:
+            await bot.add_cog(skill_cog)
         await bot.add_cog(session_manage_cog)
         await bot.add_cog(shell_exec_cog)
         await bot.add_cog(shohin_cog)
