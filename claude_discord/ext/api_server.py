@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
     from ..backend_factory import BackendFactory
     from ..backend_settings import BackendSettings
+    from ..database.ingest_repo import IngestResultRepository
     from ..database.lounge_repo import LoungeRepository
     from ..database.notification_repo import NotificationRepository
     from ..database.repository import SessionRepository
@@ -115,6 +116,7 @@ class ApiServer:
         resume_repo: PendingResumeRepository | None = None,
         session_repo: SessionRepository | None = None,
         run_repo: RunRepository | None = None,
+        ingest_repo: IngestResultRepository | None = None,
         backend_factory: BackendFactory | None = None,
         backend_settings: BackendSettings | None = None,
     ) -> None:
@@ -131,6 +133,7 @@ class ApiServer:
         self.resume_repo = resume_repo
         self.session_repo = session_repo
         self.run_repo = run_repo
+        self.ingest_repo = ingest_repo
         self.backend_factory = backend_factory
         self.backend_settings = backend_settings
         # Strong refs to in-flight background run jobs (prevent GC mid-run).
@@ -166,6 +169,8 @@ class ApiServer:
         self.app.router.add_post("/api/spawn", self.spawn)
         # Authenticated external ingest route (browser extension / webhooks)
         self.app.router.add_post("/api/ingest", self.ingest)
+        # Poll an ingest session's final result (requires ingest_repo)
+        self.app.router.add_get("/api/ingest/{result_id}", self.get_ingest_result)
         # Async one-shot AI run routes (requires run_repo + backend_factory)
         self.app.router.add_post("/api/run", self.create_run)
         self.app.router.add_get("/api/run/{run_id}", self.get_run)
@@ -868,16 +873,43 @@ class ApiServer:
         thread_name: str | None = data.get("thread_name") or None
         auto_start: bool = data.get("auto_start", True)
 
+        # When result retrieval is available, register a result row up front and
+        # wire a sink that captures the session's final reply. Only meaningful
+        # when the session actually starts (auto_start); otherwise no result is
+        # ever produced. The row is created before spawn so the sink (which only
+        # fires after the whole Claude run completes) can never race ahead of it.
+        result_id: str | None = None
+        result_sink = None
+        if self.ingest_repo is not None and auto_start:
+            result_id = uuid.uuid4().hex
+            await self.ingest_repo.create(result_id=result_id)
+            captured_id = result_id
+
+            async def result_sink(text: str | None, error: str | None) -> None:
+                if error is not None:
+                    await self.ingest_repo.set_error(captured_id, error)  # type: ignore[union-attr]
+                else:
+                    await self.ingest_repo.set_result(captured_id, text or "")  # type: ignore[union-attr]
+
         try:
             thread = await cog.spawn_session(
                 raw,
                 prompt,
                 thread_name=thread_name,
                 auto_start=auto_start,
+                result_sink=result_sink,
             )
         except Exception as exc:
             logger.error("ingest spawn_session failed: %s", exc, exc_info=True)
+            if result_id is not None and self.ingest_repo is not None:
+                await self.ingest_repo.set_error(result_id, str(exc))
             return web.json_response({"error": str(exc)}, status=500)
+
+        # Attach thread info for traceability. Safe from races: spawn_session
+        # returns immediately after scheduling the background run, long before
+        # the session could complete and trigger the sink.
+        if result_id is not None and self.ingest_repo is not None:
+            await self.ingest_repo.set_thread(result_id, str(thread.id), thread.name)
 
         logger.info(
             "Ingested external session in thread %s (%s), %d attachment(s)",
@@ -885,14 +917,58 @@ class ApiServer:
             _sanitize_log(thread.name),
             len(saved_paths),
         )
+        response: dict[str, object] = {
+            "status": "spawned",
+            "thread_id": str(thread.id),
+            "thread_name": thread.name,
+            "attachments_saved": len(saved_paths),
+        }
+        if result_id is not None:
+            # Poll GET /api/ingest/{result_id} to retrieve the final reply.
+            response["result_id"] = result_id
+        return web.json_response(response, status=201)
+
+    def _require_ingest_repo(self) -> web.Response | None:
+        """Return a 503 response if ingest result retrieval is not configured."""
+        if self.ingest_repo is None:
+            return web.json_response(
+                {"error": "Ingest result retrieval not configured (ingest_repo is None)"},
+                status=503,
+            )
+        return None
+
+    async def get_ingest_result(self, request: web.Request) -> web.Response:
+        """GET /api/ingest/{result_id} — poll the final result of an ingest run.
+
+        Shares the ingest authentication model (dedicated ``ingest_token``,
+        independent of the global ``api_secret`` middleware) so the same
+        external client that posted the work can retrieve its answer.
+        """
+        if not self.ingest_token:
+            return web.json_response({"error": "Ingest endpoint is disabled"}, status=503)
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return web.json_response({"error": "Missing Authorization header"}, status=401)
+        if not hmac.compare_digest(auth_header[7:], self.ingest_token):
+            return web.json_response({"error": "Invalid token"}, status=401)
+
+        if err := self._require_ingest_repo():
+            return err
+
+        result_id = request.match_info["result_id"]
+        record = await self.ingest_repo.get(result_id)  # type: ignore[union-attr]
+        if record is None:
+            return web.json_response({"error": "ingest result not found"}, status=404)
+
         return web.json_response(
             {
-                "status": "spawned",
-                "thread_id": str(thread.id),
-                "thread_name": thread.name,
-                "attachments_saved": len(saved_paths),
-            },
-            status=201,
+                "result_id": record["result_id"],
+                "status": record["status"],
+                "result": record["result"],
+                "error": record["error"],
+                "thread_id": record["thread_id"],
+                "thread_name": record["thread_name"],
+            }
         )
 
     # ------------------------------------------------------------------

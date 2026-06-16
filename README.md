@@ -164,6 +164,28 @@ Request body fields:
 
 Runs are dispatched as background jobs (long skill-backed runs can take minutes), so the POST never blocks. Results are stored in SQLite under `run_id`; the prompt itself is **not** persisted. Like every non-health endpoint, `/api/run` requires the Bearer token when `api_secret` is set.
 
+### Authenticated External Ingest with Result Retrieval (`/api/ingest`)
+
+`POST /api/ingest` is the **authenticated, attachment-aware spawn** for untrusted external clients (browser extensions, mobile shortcuts, webhooks). Unlike `/api/spawn` (trusted, localhost), it requires a dedicated `ingest_token` (set `CCDB_INGEST_TOKEN`; independent of `api_secret`) and can carry base64 file attachments that are written to disk so the spawned session can read them. It creates a real Discord thread, so the full interaction stays observable.
+
+Unlike `/api/run`, the session is **interactive** — but you can still get its final answer back. When result retrieval is configured (auto-wired via `setup_bridge()`), the response includes a `result_id`, and `GET /api/ingest/{result_id}` polls for the session's final reply. This is the round-trip pattern: post a thread + attachments → wait → read the answer → write it back to your own system (e.g. a Teams thread), while Discord keeps the history.
+
+```bash
+# Post work (optionally with attachments); returns immediately
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Summarize this thread and draft a reply",
+       "attachments": [{"filename": "thread.txt", "data": "<base64>"}]}'
+# → {"status": "spawned", "thread_id": "…", "result_id": "ab12…", "attachments_saved": 1}
+
+# Poll for the final reply
+curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_TOKEN"
+# → {"status": "done", "result": "…", "error": null, "thread_id": "…", "thread_name": "…"}
+```
+
+The endpoint is opt-in: with no `ingest_token` configured, `POST` responds `503`. When result retrieval is unavailable, `POST` simply omits `result_id` and `GET /api/ingest/{id}` returns `503` — the spawn behaviour is otherwise unchanged. The request body and attachments are **not** persisted in the result store (only status, the final text, and the thread id); results are capped at 200 rows.
+
 ### Startup Resume
 
 If the bot restarts mid-session, interrupted Claude sessions are automatically resumed when the bot comes back online. Sessions are marked for resume in three ways:
@@ -858,6 +880,10 @@ uv add "claude-code-discord-bridge[api]"
 | DELETE | `/api/tasks/{id}` | Remove a task |
 | PATCH | `/api/tasks/{id}` | Update a task (enable/disable, change schedule) |
 | POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply |
+| POST | `/api/ingest` | Authenticated external spawn (browser extension / webhook) with base64 attachments; returns a `result_id` when result retrieval is configured |
+| GET | `/api/ingest/{result_id}` | Poll the spawned session's final reply (`status`/`result`/`error`/`thread_id`) |
+| POST | `/api/run` | Headless one-shot AI run; returns a `run_id` |
+| GET | `/api/run/{run_id}` | Poll a one-shot run's status/result |
 | POST | `/api/mark-resume` | Mark a thread for automatic resume on next bot startup |
 | GET | `/api/lounge` | Read recent AI Lounge messages |
 | POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |

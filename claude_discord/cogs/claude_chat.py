@@ -15,6 +15,7 @@ import contextlib
 import logging
 import os
 import tempfile
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 import discord
@@ -708,6 +709,7 @@ class ClaudeChatCog(commands.Cog):
         session_id: str | None = None,
         fork: bool = False,
         auto_start: bool = True,
+        result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None,
     ) -> discord.Thread:
         """Create a new thread and optionally start a Claude Code session.
 
@@ -730,6 +732,12 @@ class ClaudeChatCog(commands.Cog):
                         When ``False``, only the thread and seed message are
                         created — a Claude session will start when a user
                         replies in the thread.  Defaults to ``True``.
+            result_sink: Optional callback invoked once with
+                        ``(final_assistant_text, error)`` when the spawned
+                        session reaches its terminal state. Lets an external
+                        caller (e.g. /api/ingest) retrieve the final reply.
+                        Only wired when ``auto_start`` is True (otherwise no
+                        session runs and no result would ever be produced).
 
         Returns:
             The newly created :class:`discord.Thread`.
@@ -746,7 +754,14 @@ class ClaudeChatCog(commands.Cog):
             # Run Claude in the background so /api/spawn returns immediately.
             # The caller gets the thread reference without waiting for Claude to finish.
             asyncio.create_task(
-                self._run_claude(seed_message, thread, prompt, session_id=session_id, fork=fork)
+                self._run_claude(
+                    seed_message,
+                    thread,
+                    prompt,
+                    session_id=session_id,
+                    fork=fork,
+                    result_sink=result_sink,
+                )
             )
         return thread
 
@@ -996,6 +1011,7 @@ class ClaudeChatCog(commands.Cog):
         fork: bool = False,
         working_dir_override: str | None = None,
         chat_only: bool = False,
+        result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None,
     ) -> None:
         """Execute Claude Code CLI and stream results to the thread."""
         dashboard = self._get_dashboard()
@@ -1074,6 +1090,7 @@ class ClaudeChatCog(commands.Cog):
                     claude_command=runner.command,
                     chat_only=chat_only,
                     notify_user_id=user_message.author.id,
+                    result_sink=result_sink,
                 )
             )
         finally:

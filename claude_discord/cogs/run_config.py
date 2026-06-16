@@ -8,6 +8,7 @@ added without changing every caller).
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -88,6 +89,13 @@ class RunConfig:
     chat_only: bool = False
     # Discord user to mention when Claude pauses for an explicit button/form action.
     notify_user_id: int | None = None
+    # Optional callback invoked once when the session reaches its terminal state,
+    # with (final_assistant_text, error). Lets an external caller (e.g. the
+    # /api/ingest endpoint) retrieve the session's final reply for write-back to
+    # its own system. None for normal interactive sessions. Propagates across the
+    # internal compact/AskUserQuestion reruns via dataclasses.replace, and fires
+    # exactly once at the true terminal return in run_claude_with_config.
+    result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.
