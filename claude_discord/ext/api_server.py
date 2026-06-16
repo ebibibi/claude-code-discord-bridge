@@ -858,6 +858,10 @@ class ApiServer:
         # fires after the whole Claude run completes) can never race ahead of it.
         result_id: str | None = None
         result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None
+        # One-element holder for the spawned thread, so the completion sink (which
+        # fires minutes later, after the session ends) can ping the owner in it.
+        # Populated right after spawn_session returns — long before the sink runs.
+        spawned_thread: list[discord.Thread] = []
         if self.ingest_repo is not None and auto_start:
             result_id = uuid.uuid4().hex
             await self.ingest_repo.create(result_id=result_id)
@@ -867,8 +871,14 @@ class ApiServer:
             async def _capture_result(text: str | None, error: str | None) -> None:
                 if error is not None:
                     await ingest_repo.set_error(captured_id, error)
+                    body = "⚠️ セッションがエラーで終了しました。"
                 else:
                     await ingest_repo.set_result(captured_id, text or "")
+                    body = "✅ 回答ができました（このスレッドの最新メッセージ）。"
+                # Ping the owner so a long-running result is delivered over
+                # Discord without anyone watching a foreground poller.
+                if spawned_thread:
+                    await self._ingest_notify_owner(spawned_thread[0], body)
 
             result_sink = _capture_result
 
@@ -892,6 +902,17 @@ class ApiServer:
         if result_id is not None and self.ingest_repo is not None:
             await self.ingest_repo.set_thread(result_id, str(thread.id), thread.name)
 
+        # Pull the owner into the thread and ping them on start, so the
+        # unattended session is visible and they're notified again on completion
+        # (via the result sink). Only when a session actually started.
+        if result_sink is not None:
+            spawned_thread.append(thread)
+            await self._ingest_add_owner(thread)
+            await self._ingest_notify_owner(
+                thread,
+                "🧵 Teams ingest セッションを開始しました。完了したらここで通知します。",
+            )
+
         logger.info(
             "Ingested external session in thread %s (%s), %d attachment(s)",
             thread.id,
@@ -908,6 +929,40 @@ class ApiServer:
             # Poll GET /api/ingest/{result_id} to retrieve the final reply.
             response["result_id"] = result_id
         return web.json_response(response, status=201)
+
+    async def _ingest_add_owner(self, thread: discord.Thread) -> None:
+        """Add the configured bot owner to an ingest thread (no-op if unset).
+
+        An ingested session runs unattended and may take many minutes; adding
+        the owner as a thread member makes the thread show up in their joined
+        list instead of having to be searched for. Errors are suppressed — this
+        is best-effort visibility, never a hard failure.
+        """
+        owner_id = getattr(self.bot, "owner_id", None)
+        if not owner_id:
+            return
+        with contextlib.suppress(Exception):
+            import discord as _discord
+
+            await thread.add_user(_discord.Object(id=int(owner_id)))
+
+    async def _ingest_notify_owner(self, thread: discord.Thread, body: str) -> None:
+        """Post a message in *thread* that @mentions the bot owner (no-op if unset).
+
+        Used to ping the owner when an ingest session starts and again when it
+        finishes, so a long-running result is delivered asynchronously over
+        Discord without anyone watching a foreground poller. Mentioning a user
+        also adds them to the thread. Errors are suppressed.
+        """
+        owner_id = getattr(self.bot, "owner_id", None)
+        if not owner_id:
+            return
+        with contextlib.suppress(Exception):
+            from ..discord_ui.mentions import user_mention_kwargs
+
+            kwargs = user_mention_kwargs(int(owner_id))
+            kwargs["content"] = f"{kwargs.get('content', '')} {body}".strip()
+            await thread.send(**kwargs)
 
     def _require_ingest_repo(self) -> web.Response | None:
         """Return a 503 response if ingest result retrieval is not configured."""
