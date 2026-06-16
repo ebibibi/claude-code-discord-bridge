@@ -14,6 +14,8 @@ Security:
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import hmac
 import json
@@ -23,6 +25,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -46,6 +49,27 @@ if TYPE_CHECKING:
 _MAX_RUN_PROMPT_BYTES = 64 * 1024
 # Skill names are passed toward the CLI; restrict to a safe charset.
 _SKILL_NAME_RE = re.compile(r"^[\w-]+$")
+
+# /api/ingest — authenticated spawn for untrusted external clients (browser
+# extensions, mobile shortcuts, webhooks) that may carry file attachments.
+_MAX_INGEST_ATTACHMENTS = 20
+_MAX_INGEST_TOTAL_BYTES = 50 * 1024 * 1024
+# Characters allowed in a saved attachment filename; everything else → "_".
+_UNSAFE_FILENAME_RE = re.compile(r"[^\w.\-]+")
+
+
+def _safe_attachment_name(raw: object, index: int) -> str:
+    """Reduce a client-supplied filename to a safe basename.
+
+    Strips any directory component (path-traversal guard), replaces unsafe
+    characters, and drops leading dots so attachments can't masquerade as
+    hidden/dotfiles. Falls back to ``attachment_{index}`` when nothing usable
+    remains.
+    """
+    name = os.path.basename(str(raw or "")).strip()
+    name = _UNSAFE_FILENAME_RE.sub("_", name).lstrip(".")
+    return name or f"attachment_{index}"
+
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +107,8 @@ class ApiServer:
         host: str = "127.0.0.1",
         port: int = 8080,
         api_secret: str | None = None,
+        ingest_token: str | None = None,
+        working_dir: str | None = None,
         task_repo: TaskRepository | None = None,
         lounge_repo: LoungeRepository | None = None,
         lounge_channel_id: int | None = None,
@@ -98,6 +124,8 @@ class ApiServer:
         self.host = host
         self.port = port
         self.api_secret = api_secret
+        self.ingest_token = ingest_token
+        self.working_dir = working_dir
         self.task_repo = task_repo
         self.lounge_repo = lounge_repo
         self.resume_repo = resume_repo
@@ -136,6 +164,8 @@ class ApiServer:
         self.app.router.add_post("/api/lounge", self.post_lounge)
         # Session spawn route
         self.app.router.add_post("/api/spawn", self.spawn)
+        # Authenticated external ingest route (browser extension / webhooks)
+        self.app.router.add_post("/api/ingest", self.ingest)
         # Async one-shot AI run routes (requires run_repo + backend_factory)
         self.app.router.add_post("/api/run", self.create_run)
         self.app.router.add_get("/api/run/{run_id}", self.get_run)
@@ -678,6 +708,189 @@ class ApiServer:
                 "status": "spawned",
                 "thread_id": str(thread.id),
                 "thread_name": thread.name,
+            },
+            status=201,
+        )
+
+    # ------------------------------------------------------------------
+    # Authenticated external ingest endpoint (/api/ingest)
+    # ------------------------------------------------------------------
+
+    def _ingest_root(self) -> Path:
+        """Directory under which ingested attachments are saved."""
+        return Path(self.working_dir or os.getcwd()) / "ingest"
+
+    def _save_ingest_attachments(
+        self, attachments: list[dict], thread_id: str
+    ) -> tuple[list[Path], web.Response | None]:
+        """Decode base64 attachments to disk under a per-request directory.
+
+        Returns ``(saved_paths, error_response)``. On any validation failure the
+        second element is a ready-to-return :class:`web.Response` and the first
+        is empty.
+        """
+        if len(attachments) > _MAX_INGEST_ATTACHMENTS:
+            return [], web.json_response(
+                {"error": f"Too many attachments (max {_MAX_INGEST_ATTACHMENTS})"},
+                status=400,
+            )
+
+        dest_dir = self._ingest_root() / thread_id
+        saved: list[Path] = []
+        total = 0
+        for i, att in enumerate(attachments):
+            if not isinstance(att, dict):
+                return [], web.json_response(
+                    {"error": f"Attachment {i} must be an object"}, status=400
+                )
+            data_b64 = att.get("data")
+            if not data_b64:
+                return [], web.json_response(
+                    {"error": f"Attachment {i} missing 'data'"}, status=400
+                )
+            try:
+                blob = base64.b64decode(str(data_b64), validate=True)
+            except (binascii.Error, ValueError):
+                return [], web.json_response(
+                    {"error": f"Attachment {i} has invalid base64 'data'"}, status=400
+                )
+            total += len(blob)
+            if total > _MAX_INGEST_TOTAL_BYTES:
+                return [], web.json_response(
+                    {"error": "Attachments exceed total size limit"}, status=413
+                )
+            filename = _safe_attachment_name(att.get("filename"), i)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            path = dest_dir / filename
+            try:
+                path.write_bytes(blob)
+            except OSError as exc:
+                logger.error("Failed to write ingest attachment: %s", exc)
+                return [], web.json_response({"error": "Failed to persist attachment"}, status=500)
+            saved.append(path)
+            logger.info("Saved ingest attachment %s (%d bytes)", _sanitize_log(path), len(blob))
+        return saved, None
+
+    async def ingest(self, request: web.Request) -> web.Response:
+        """POST /api/ingest — authenticated spawn for untrusted external clients.
+
+        Unlike ``/api/spawn`` (trusted, unauthenticated localhost callers), this
+        endpoint is meant for clients such as a browser extension. It requires a
+        dedicated bearer token (``ingest_token``) and can carry base64 file
+        attachments that are written to ``{working_dir}/ingest/{thread_id}/`` so
+        the spawned Claude session can read them.
+
+        The endpoint is opt-in: when no ``ingest_token`` is configured it
+        responds ``503`` so it can never run unauthenticated by accident. It is
+        independent of the global ``api_secret`` middleware, so enabling it does
+        not change the auth requirements of any other route.
+
+        Body (JSON):
+            content: The message body / instruction (required). ``prompt`` is
+                accepted as an alias.
+            thread_name: Custom thread title (optional).
+            channel_id: Parent channel ID (optional; defaults to startup value).
+            auto_start: Start a Claude session immediately (optional, default true).
+            attachments: Optional list of ``{filename, mimetype?, data}`` where
+                ``data`` is base64-encoded file bytes.
+
+        Returns (201):
+            ``{"status": "spawned", "thread_id": "...", "thread_name": "...",
+               "attachments_saved": N}``
+        """
+        # --- Opt-in + auth (independent of the global api_secret middleware) ---
+        if not self.ingest_token:
+            return web.json_response({"error": "Ingest endpoint is disabled"}, status=503)
+
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return web.json_response({"error": "Missing Authorization header"}, status=401)
+        if not hmac.compare_digest(auth_header[7:], self.ingest_token):
+            return web.json_response({"error": "Invalid token"}, status=401)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        content = (data.get("content") or data.get("prompt") or "").strip()
+        if not content:
+            return web.json_response({"error": "content is required"}, status=400)
+
+        raw_channel_id = data.get("channel_id") or self.default_channel_id
+        if not raw_channel_id:
+            return web.json_response({"error": "No channel specified"}, status=400)
+
+        attachments = data.get("attachments") or []
+        if not isinstance(attachments, list):
+            return web.json_response({"error": "attachments must be a list"}, status=400)
+
+        from ..cogs.claude_chat import ClaudeChatCog  # avoid circular import
+
+        cog: ClaudeChatCog | None = self.bot.cogs.get("ClaudeChatCog")  # type: ignore[assignment]
+        if cog is None:
+            return web.json_response({"error": "ClaudeChatCog is not loaded"}, status=503)
+
+        try:
+            channel_id = int(raw_channel_id)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "channel_id must be an integer"}, status=400)
+
+        import discord as _discord
+
+        raw = self.bot.get_channel(channel_id)
+        if raw is None:
+            try:
+                raw = await self.bot.fetch_channel(channel_id)
+            except Exception as exc:
+                return web.json_response({"error": str(exc)}, status=500)
+
+        if not isinstance(raw, _discord.TextChannel):
+            return web.json_response(
+                {"error": "Channel must be a text channel that supports threads"},
+                status=400,
+            )
+
+        # Save attachments under a stable per-request id reused for the dir name.
+        request_id = uuid.uuid4().hex
+        saved_paths, err = self._save_ingest_attachments(attachments, request_id)
+        if err is not None:
+            return err
+
+        prompt = content
+        if saved_paths:
+            listing = "\n".join(f"- {p}" for p in saved_paths)
+            prompt = (
+                f"{content}\n\n"
+                f"添付ファイル（ローカルに保存済み。Read ツール等で参照できます）:\n{listing}"
+            )
+
+        thread_name: str | None = data.get("thread_name") or None
+        auto_start: bool = data.get("auto_start", True)
+
+        try:
+            thread = await cog.spawn_session(
+                raw,
+                prompt,
+                thread_name=thread_name,
+                auto_start=auto_start,
+            )
+        except Exception as exc:
+            logger.error("ingest spawn_session failed: %s", exc, exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        logger.info(
+            "Ingested external session in thread %s (%s), %d attachment(s)",
+            thread.id,
+            _sanitize_log(thread.name),
+            len(saved_paths),
+        )
+        return web.json_response(
+            {
+                "status": "spawned",
+                "thread_id": str(thread.id),
+                "thread_name": thread.name,
+                "attachments_saved": len(saved_paths),
             },
             status=201,
         )

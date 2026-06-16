@@ -745,3 +745,165 @@ class TestMarkResume:
             headers={"Content-Type": "application/json"},
         )
         assert resp.status == 400
+
+
+class TestIngest:
+    """Tests for POST /api/ingest — authenticated external spawn with attachments."""
+
+    INGEST_TOKEN = "ingest-secret-xyz"
+    AUTH = {"Authorization": f"Bearer {INGEST_TOKEN}"}
+
+    @pytest.fixture
+    def mock_cog(self) -> MagicMock:
+        thread = MagicMock()
+        thread.id = 111222333
+        thread.name = "Ingested thread"
+        cog = MagicMock()
+        cog.spawn_session = AsyncMock(return_value=thread)
+        return cog
+
+    @pytest.fixture
+    def bot_with_text_channel(self, mock_cog: MagicMock) -> MagicMock:
+        import discord
+
+        b = MagicMock()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        b.get_channel.return_value = channel
+        b.cogs = {"ClaudeChatCog": mock_cog}
+        return b
+
+    @pytest.fixture
+    async def ingest_client(
+        self,
+        repo: NotificationRepository,
+        bot_with_text_channel: MagicMock,
+        tmp_path,
+    ) -> TestClient:
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+        )
+        api._ingest_tmp = str(tmp_path)  # expose for assertions
+        server = TestServer(api.app)
+        client = TestClient(server)
+        client._api = api  # type: ignore[attr-defined]
+        await client.start_server()
+        yield client
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_ingest_disabled_without_token(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock
+    ) -> None:
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, default_channel_id=12345)
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/ingest", json={"content": "hi"}, headers=self.AUTH)
+            assert resp.status == 503
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_ingest_missing_auth_returns_401(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post("/api/ingest", json={"content": "hi"})
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_ingest_wrong_token_returns_401(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={"content": "hi"},
+            headers={"Authorization": "Bearer nope"},
+        )
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_ingest_returns_201_with_thread_info(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest", json={"content": "Teams thread body"}, headers=self.AUTH
+        )
+        assert resp.status == 201
+        data = await resp.json()
+        assert data["status"] == "spawned"
+        assert data["thread_id"] == "111222333"
+        assert data["attachments_saved"] == 0
+
+    @pytest.mark.asyncio
+    async def test_ingest_missing_content_returns_400(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post("/api/ingest", json={}, headers=self.AUTH)
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_ingest_accepts_prompt_alias(
+        self, ingest_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest", json={"prompt": "Via alias"}, headers=self.AUTH
+        )
+        assert resp.status == 201
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert prompt == "Via alias"
+
+    @pytest.mark.asyncio
+    async def test_ingest_saves_attachment_and_references_path(
+        self, ingest_client: TestClient, mock_cog: MagicMock, tmp_path
+    ) -> None:
+        import base64
+
+        payload = base64.b64encode(b"hello file").decode()
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "See attached",
+                "attachments": [{"filename": "report.txt", "data": payload}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        data = await resp.json()
+        assert data["attachments_saved"] == 1
+
+        # File written under {working_dir}/ingest/**/report.txt with correct bytes
+        matches = list(tmp_path.glob("ingest/*/report.txt"))
+        assert len(matches) == 1
+        assert matches[0].read_bytes() == b"hello file"
+
+        # Saved path is referenced in the prompt passed to spawn_session
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert "report.txt" in prompt
+        assert str(matches[0]) in prompt
+
+    @pytest.mark.asyncio
+    async def test_ingest_rejects_path_traversal_filename(
+        self, ingest_client: TestClient, tmp_path
+    ) -> None:
+        import base64
+
+        payload = base64.b64encode(b"x").decode()
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "evil",
+                "attachments": [{"filename": "../../etc/passwd", "data": payload}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        # Nothing written outside the ingest dir; basename sanitised to "passwd"
+        assert list(tmp_path.glob("ingest/*/passwd"))
+        assert not list(tmp_path.glob("**/etc/passwd"))
+
+    @pytest.mark.asyncio
+    async def test_ingest_invalid_base64_returns_400(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={"content": "x", "attachments": [{"filename": "a.bin", "data": "!!!notb64"}]},
+            headers=self.AUTH,
+        )
+        assert resp.status == 400

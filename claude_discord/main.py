@@ -155,6 +155,8 @@ async def main() -> None:
             default_channel_id=channel_id,
             host=config["api_host"],
             port=int(config["api_port"]),
+            ingest_token=os.getenv("CCDB_INGEST_TOKEN") or None,
+            working_dir=config["working_dir"] or None,
         )
 
     async with bot:
