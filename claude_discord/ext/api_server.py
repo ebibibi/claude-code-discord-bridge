@@ -879,17 +879,20 @@ class ApiServer:
         # ever produced. The row is created before spawn so the sink (which only
         # fires after the whole Claude run completes) can never race ahead of it.
         result_id: str | None = None
-        result_sink = None
+        result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None
         if self.ingest_repo is not None and auto_start:
             result_id = uuid.uuid4().hex
             await self.ingest_repo.create(result_id=result_id)
+            ingest_repo = self.ingest_repo
             captured_id = result_id
 
-            async def result_sink(text: str | None, error: str | None) -> None:
+            async def _capture_result(text: str | None, error: str | None) -> None:
                 if error is not None:
-                    await self.ingest_repo.set_error(captured_id, error)  # type: ignore[union-attr]
+                    await ingest_repo.set_error(captured_id, error)
                 else:
-                    await self.ingest_repo.set_result(captured_id, text or "")  # type: ignore[union-attr]
+                    await ingest_repo.set_result(captured_id, text or "")
+
+            result_sink = _capture_result
 
         try:
             thread = await cog.spawn_session(
