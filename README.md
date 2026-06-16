@@ -133,42 +133,11 @@ This is useful for notification-style workflows (e.g. daily briefings, CI alerts
 
 Claude subprocesses receive `DISCORD_THREAD_ID` as an environment variable, so a running session can spawn child sessions to parallelize work.
 
-### Headless One-Shot Runs (`/api/run`)
-
-`POST /api/run` runs an AI engine **once** and returns the result via polling — the non-interactive, no-Discord sibling of `/api/spawn`. Use it from a browser extension, a script, or any external system that wants "send a prompt, get the generated text back" without a Discord thread.
-
-It is **engine-neutral**: pick `claude`, `codex`, or whatever the bot's current backend is. The endpoint has no engine-specific branches — `create_backend` resolves the runner behind the shared `SessionBackend` protocol, so new backends work without touching `/api/run`.
-
-```bash
-# Dispatch a run (returns immediately with a run_id)
-curl -X POST "$CCDB_API_URL/api/run" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Summarize the latest release notes", "backend": "claude"}'
-# → {"run_id": "ab12…", "status": "running", "backend": "claude", "model": "sonnet"}
-
-# Poll for the result
-curl "$CCDB_API_URL/api/run/ab12…"
-# → {"status": "done", "result": "…", "backend": "claude", "model": "sonnet", "error": null}
-```
-
-Request body fields:
-
-| Field | Required | Default | Notes |
-|-------|----------|---------|-------|
-| `prompt` | ✅ | — | Instruction for the AI (≤ 64 KB). |
-| `backend` | | bot's current backend | `claude` \| `codex` \| … (validated against the known backends). |
-| `model` | | backend default | e.g. `sonnet`, `gpt-5.4`. |
-| `skill` | | — | Skill to apply (`^[\w-]+$`); woven into the prompt so it stays engine-neutral. |
-| `cwd` | | configured working dir | Working directory for the run. |
-| `system_prompt` | | — | Extra system prompt appended for the run. |
-
-Runs are dispatched as background jobs (long skill-backed runs can take minutes), so the POST never blocks. Results are stored in SQLite under `run_id`; the prompt itself is **not** persisted. Like every non-health endpoint, `/api/run` requires the Bearer token when `api_secret` is set.
-
 ### Authenticated External Ingest with Result Retrieval (`/api/ingest`)
 
 `POST /api/ingest` is the **authenticated, attachment-aware spawn** for untrusted external clients (browser extensions, mobile shortcuts, webhooks). Unlike `/api/spawn` (trusted, localhost), it requires a dedicated `ingest_token` (set `CCDB_INGEST_TOKEN`; independent of `api_secret`) and can carry base64 file attachments that are written to disk so the spawned session can read them. It creates a real Discord thread, so the full interaction stays observable.
 
-Unlike `/api/run`, the session is **interactive** — but you can still get its final answer back. When result retrieval is configured (auto-wired via `setup_bridge()`), the response includes a `result_id`, and `GET /api/ingest/{result_id}` polls for the session's final reply. This is the round-trip pattern: post a thread + attachments → wait → read the answer → write it back to your own system (e.g. a Teams thread), while Discord keeps the history.
+The session is **interactive** (a real Discord thread you can keep replying in) — but you can still get its final answer back programmatically. When result retrieval is configured (auto-wired via `setup_bridge()`), the response includes a `result_id`, and `GET /api/ingest/{result_id}` polls for the session's final reply. This is the round-trip pattern: post a thread + attachments → wait → read the answer → write it back to your own system (e.g. a Teams thread), while Discord keeps the history.
 
 ```bash
 # Post work (optionally with attachments); returns immediately
@@ -882,8 +851,6 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply |
 | POST | `/api/ingest` | Authenticated external spawn (browser extension / webhook) with base64 attachments; returns a `result_id` when result retrieval is configured |
 | GET | `/api/ingest/{result_id}` | Poll the spawned session's final reply (`status`/`result`/`error`/`thread_id`) |
-| POST | `/api/run` | Headless one-shot AI run; returns a `run_id` |
-| GET | `/api/run/{run_id}` | Poll a one-shot run's status/result |
 | POST | `/api/mark-resume` | Mark a thread for automatic resume on next bot startup |
 | GET | `/api/lounge` | Read recent AI Lounge messages |
 | POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |
