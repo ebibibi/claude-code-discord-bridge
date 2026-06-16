@@ -2,8 +2,8 @@
 
 When an external client (e.g. a Teams browser extension) posts to
 ``/api/ingest``, a real Discord thread is spawned and a Claude session runs
-interactively. Unlike ``/api/run`` (a headless one-shot), the session's final
-assistant reply is normally only visible inside the Discord thread.
+interactively. The session's final assistant reply is normally only visible
+inside the Discord thread.
 
 This repository captures that final reply keyed by a generated ``result_id``
 so the original caller can poll ``GET /api/ingest/{result_id}`` and retrieve
