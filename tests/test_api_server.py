@@ -907,3 +907,164 @@ class TestIngest:
             headers=self.AUTH,
         )
         assert resp.status == 400
+
+
+class TestIngestResult:
+    """Tests for /api/ingest result capture + GET /api/ingest/{result_id}."""
+
+    INGEST_TOKEN = "ingest-secret-xyz"
+    AUTH = {"Authorization": f"Bearer {INGEST_TOKEN}"}
+
+    @pytest.fixture
+    def mock_cog(self) -> MagicMock:
+        thread = MagicMock()
+        thread.id = 111222333
+        thread.name = "Ingested thread"
+        cog = MagicMock()
+        cog.spawn_session = AsyncMock(return_value=thread)
+        return cog
+
+    @pytest.fixture
+    def bot_with_text_channel(self, mock_cog: MagicMock) -> MagicMock:
+        import discord
+
+        b = MagicMock()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        b.get_channel.return_value = channel
+        b.cogs = {"ClaudeChatCog": mock_cog}
+        return b
+
+    @pytest.fixture
+    async def ingest_repo(self):
+        from claude_discord.database.ingest_repo import IngestResultRepository
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        r = IngestResultRepository(path)
+        await r.init_db()
+        yield r
+        os.unlink(path)
+
+    @pytest.fixture
+    async def result_client(
+        self,
+        repo: NotificationRepository,
+        bot_with_text_channel: MagicMock,
+        ingest_repo,
+        tmp_path,
+    ) -> TestClient:
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+            ingest_repo=ingest_repo,
+        )
+        server = TestServer(api.app)
+        client = TestClient(server)
+        client._api = api  # type: ignore[attr-defined]
+        await client.start_server()
+        yield client
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_post_returns_result_id_when_repo_configured(
+        self, result_client: TestClient
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        assert resp.status == 201
+        data = await resp.json()
+        assert "result_id" in data
+        assert len(data["result_id"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_get_result_running_then_done(
+        self, result_client: TestClient, ingest_repo
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        result_id = (await resp.json())["result_id"]
+
+        # Immediately after spawn, the result is still being produced.
+        poll = await result_client.get(f"/api/ingest/{result_id}", headers=self.AUTH)
+        assert poll.status == 200
+        running = await poll.json()
+        assert running["status"] == "running"
+        assert running["thread_id"] == "111222333"
+
+        # Simulate the session finishing and firing the result sink.
+        await ingest_repo.set_result(result_id, "the generated answer")
+
+        poll2 = await result_client.get(f"/api/ingest/{result_id}", headers=self.AUTH)
+        done = await poll2.json()
+        assert done["status"] == "done"
+        assert done["result"] == "the generated answer"
+
+    @pytest.mark.asyncio
+    async def test_sink_passed_to_spawn_writes_result(
+        self, result_client: TestClient, mock_cog: MagicMock, ingest_repo
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        result_id = (await resp.json())["result_id"]
+
+        # The handler must pass a result_sink to spawn_session.
+        sink = mock_cog.spawn_session.call_args.kwargs["result_sink"]
+        assert sink is not None
+
+        # Invoking the sink (as the real session would) persists the answer.
+        await sink("answer via sink", None)
+        rec = await ingest_repo.get(result_id)
+        assert rec["status"] == "done"
+        assert rec["result"] == "answer via sink"
+
+        # Error path routes to set_error.
+        await sink(None, "kaboom")
+        rec2 = await ingest_repo.get(result_id)
+        assert rec2["status"] == "error"
+        assert rec2["error"] == "kaboom"
+
+    @pytest.mark.asyncio
+    async def test_get_unknown_result_404(self, result_client: TestClient) -> None:
+        resp = await result_client.get("/api/ingest/does-not-exist", headers=self.AUTH)
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_get_result_requires_auth(self, result_client: TestClient) -> None:
+        resp = await result_client.get("/api/ingest/anything")
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_get_result_wrong_token_401(self, result_client: TestClient) -> None:
+        resp = await result_client.get(
+            "/api/ingest/anything", headers={"Authorization": "Bearer nope"}
+        )
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_no_result_id_without_repo(
+        self,
+        repo: NotificationRepository,
+        bot_with_text_channel: MagicMock,
+        tmp_path,
+    ) -> None:
+        # No ingest_repo wired → endpoint still works, just no result retrieval.
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+        )
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+            data = await resp.json()
+            assert "result_id" not in data
+            # GET returns 503 when retrieval isn't configured.
+            poll = await client.get("/api/ingest/whatever", headers=self.AUTH)
+            assert poll.status == 503
+        finally:
+            await client.close()

@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from .backend_factory import BackendFactory
     from .backend_settings import BackendSettings
+    from .database.ingest_repo import IngestResultRepository
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
     from .database.resume_repo import PendingResumeRepository
@@ -48,6 +49,7 @@ class BridgeComponents:
     lounge_repo: LoungeRepository | None = None
     resume_repo: PendingResumeRepository | None = None
     run_repo: RunRepository | None = None
+    ingest_repo: IngestResultRepository | None = None
     backend_factory: BackendFactory | None = None
     backend_settings: BackendSettings | None = None
 
@@ -68,6 +70,8 @@ class BridgeComponents:
             api_server.resume_repo = self.resume_repo
         if self.run_repo is not None:
             api_server.run_repo = self.run_repo
+        if self.ingest_repo is not None:
+            api_server.ingest_repo = self.ingest_repo
         if self.backend_factory is not None:
             api_server.backend_factory = self.backend_factory
         if self.backend_settings is not None:
@@ -162,6 +166,7 @@ async def setup_bridge(
     from .cogs.skill_command import SkillCommandCog
     from .database.ask_repo import PendingAskRepository
     from .database.inbox_repo import ThreadInboxRepository
+    from .database.ingest_repo import IngestResultRepository
     from .database.lounge_repo import LoungeRepository
     from .database.models import init_db
     from .database.repository import SessionRepository, UsageStatsRepository
@@ -254,6 +259,8 @@ async def setup_bridge(
     usage_repo = UsageStatsRepository(session_db_path)
     run_repo = RunRepository(session_db_path)
     await run_repo.init_db()
+    ingest_repo = IngestResultRepository(session_db_path)
+    await ingest_repo.init_db()
     logger.info("Session DB initialized: %s", session_db_path)
 
     # Attach repos to bot so generic cogs (e.g. AutoUpgradeCog) can discover them
@@ -384,6 +391,7 @@ async def setup_bridge(
         lounge_repo=lounge_repo,
         resume_repo=resume_repo,
         run_repo=run_repo,
+        ingest_repo=ingest_repo,
         backend_factory=backend_factory,
         backend_settings=_backend_settings_for_chat,
     )

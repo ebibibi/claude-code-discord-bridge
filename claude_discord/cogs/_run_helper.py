@@ -340,6 +340,7 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
         if config.status:
             with contextlib.suppress(Exception):
                 await config.status.set_error()
+        await _emit_result_sink(config, None, f"{type(exc).__name__}: {exc}")
         return processor.session_id
     finally:
         if sem is not None:
@@ -384,7 +385,27 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
             )
             return await run_claude_with_config(config.with_prompt(answer_prompt))
 
+    # Terminal path. The compact/ask reruns above delegate to a nested
+    # run_claude_with_config call, which reaches its own terminal return — so the
+    # sink fires exactly once, from the outermost completed run. An in-stream
+    # RESULT error (e.g. API 400/429) is reported as an error, not an empty
+    # "done", so the caller can tell a failure from an empty answer.
+    await _emit_result_sink(config, processor.final_assistant_text, processor.final_error)
     return processor.session_id
+
+
+async def _emit_result_sink(config: RunConfig, text: str | None, error: str | None) -> None:
+    """Invoke config.result_sink once with the run's terminal outcome.
+
+    A sink failure must never break the Claude run, so all exceptions are
+    suppressed and logged.
+    """
+    if config.result_sink is None:
+        return
+    try:
+        await config.result_sink(text, error)
+    except Exception:
+        logger.exception("result_sink callback failed for thread %d", config.thread.id)
 
 
 async def run_claude_in_thread(

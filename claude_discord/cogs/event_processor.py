@@ -175,9 +175,29 @@ class EventProcessor:
         self._last_turn_cache_read_tokens: int | None = None
         self._last_turn_cache_creation_tokens: int | None = None
 
+        # The session's final assistant reply text, captured when the
+        # session_complete event is handled. Surfaced via final_assistant_text
+        # so an external caller (e.g. /api/ingest) can retrieve the answer.
+        self._final_assistant_text: str = ""
+
+        # Set when the terminal RESULT event carries an in-stream error (rather
+        # than raising). Surfaced via final_error so result_sink consumers can
+        # distinguish a real failure from an empty answer.
+        self._final_error: str | None = None
+
     # ------------------------------------------------------------------
     # Public properties
     # ------------------------------------------------------------------
+
+    @property
+    def final_assistant_text(self) -> str:
+        """The session's final assistant reply text (empty until completion)."""
+        return self._final_assistant_text
+
+    @property
+    def final_error(self) -> str | None:
+        """In-stream error from the terminal RESULT event, or None on success."""
+        return self._final_error
 
     @property
     def session_id(self) -> str | None:
@@ -462,6 +482,10 @@ class EventProcessor:
                 last_assistant_url = self._streamer._current_message.jump_url
 
         if event.error:
+            # In-stream failure (e.g. an API 400/429 surfaced via the RESULT
+            # error field, not a raised exception). Capture it so result_sink
+            # consumers report a real error instead of an empty "done".
+            self._final_error = event.error
             await self._config.thread.send(embed=_make_error_embed(event.error))
             if self._config.status:
                 await self._config.status.set_error()
@@ -475,6 +499,10 @@ class EventProcessor:
                 if last_sent is not None:
                     last_assistant_url = last_sent.jump_url
                 last_assistant_text = response_text
+
+            # Capture the final reply so result_sink consumers (e.g. /api/ingest)
+            # can retrieve it after the session ends.
+            self._final_assistant_text = last_assistant_text
 
             # Send files listed in the .ccdb-attachments-{thread_id} marker file.
             await _send_attachment_requests(
