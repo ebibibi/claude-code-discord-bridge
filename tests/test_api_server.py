@@ -1068,3 +1068,58 @@ class TestIngestResult:
             assert poll.status == 503
         finally:
             await client.close()
+
+    @pytest.mark.asyncio
+    async def test_ingest_pings_and_joins_owner(
+        self, repo: NotificationRepository, ingest_repo, tmp_path
+    ) -> None:
+        """An ingest session auto-joins + @mentions the bot owner on start, and
+        pings them again on completion so a long-running result is delivered
+        asynchronously over Discord (no foreground poller needed)."""
+        import discord
+
+        thread = MagicMock()
+        thread.id = 111222333
+        thread.name = "MEHJ thread"
+        thread.send = AsyncMock()
+        thread.add_user = AsyncMock()
+
+        cog = MagicMock()
+        cog.spawn_session = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        bot.owner_id = 999  # configured owner → should be mentioned/added
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        bot.get_channel.return_value = channel
+        bot.cogs = {"ClaudeChatCog": cog}
+
+        api = ApiServer(
+            repo=repo,
+            bot=bot,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+            ingest_repo=ingest_repo,
+        )
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/ingest", json={"content": "hi"}, headers=self.AUTH)
+            assert resp.status == 201
+
+            # Owner auto-joined the thread.
+            thread.add_user.assert_awaited()
+
+            # Start ping mentions the owner.
+            contents = [c.kwargs.get("content", "") for c in thread.send.call_args_list]
+            assert any("<@999>" in s and "開始" in s for s in contents)
+
+            # Completion: invoking the captured sink pings the owner again.
+            sink = cog.spawn_session.call_args.kwargs["result_sink"]
+            await sink("the answer", None)
+            contents = [c.kwargs.get("content", "") for c in thread.send.call_args_list]
+            assert any("<@999>" in s and "回答ができました" in s for s in contents)
+        finally:
+            await client.close()
