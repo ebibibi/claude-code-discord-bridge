@@ -440,6 +440,43 @@ class TestSpawnSession:
         assert user_msg_arg is seed_msg
 
     @pytest.mark.asyncio
+    async def test_spawn_chunks_long_seed_message(self) -> None:
+        """A prompt longer than Discord's per-message limit is split across
+        multiple seed messages, but the FULL prompt still reaches _run_claude.
+
+        Regression: an ingested Teams thread exceeded Discord's 4000-char limit
+        and a single thread.send(prompt) failed with HTTP 400 (code 50035)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        sent: list[str] = []
+
+        async def fake_send(content):
+            sent.append(content)
+            return MagicMock(name=f"seed-{len(sent)}")
+
+        thread.send = AsyncMock(side_effect=fake_send)
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
+
+        long_prompt = "x" * 5000  # well beyond Discord's per-message limit
+        mock_run = AsyncMock()
+        with patch.object(cog, "_run_claude", new=mock_run):
+            await cog.spawn_session(channel, long_prompt)
+
+        # Chunked into multiple seed messages, each within Discord's limit.
+        assert thread.send.call_count > 1
+        assert all(len(c) <= 2000 for c in sent)
+        # The FULL, unmodified prompt still reached Claude (args: seed, thread, prompt).
+        assert mock_run.call_args.args[2] == long_prompt
+
+    @pytest.mark.asyncio
     async def test_spawn_auto_start_false_skips_run_claude(self) -> None:
         """When auto_start=False, spawn_session creates the thread but does not run Claude."""
         from unittest.mock import AsyncMock, MagicMock, patch

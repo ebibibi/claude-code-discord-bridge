@@ -34,6 +34,7 @@ from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRepository
 from ..database.resume_repo import PendingResumeRepository
 from ..database.settings_repo import SettingsRepository
+from ..discord_ui.chunker import chunk_message
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
@@ -749,7 +750,15 @@ class ClaudeChatCog(commands.Cog):
             auto_archive_duration=60,
         )
         # Post the prompt so StatusManager has a Message to add reactions to.
-        seed_message = await thread.send(prompt)
+        # Long prompts (e.g. an ingested Teams thread) exceed Discord's
+        # per-message limit, so chunk the seed for display. The full prompt is
+        # still passed to _run_claude below (the CLI has no such limit), so
+        # chunking only affects what's shown in the thread, never what Claude
+        # receives. The last chunk becomes the status-reaction anchor.
+        chunks = chunk_message(prompt) or [prompt]
+        seed_message = await thread.send(chunks[0])
+        for chunk in chunks[1:]:
+            seed_message = await thread.send(chunk)
         if auto_start:
             # Run Claude in the background so /api/spawn returns immediately.
             # The caller gets the thread reference without waiting for Claude to finish.
