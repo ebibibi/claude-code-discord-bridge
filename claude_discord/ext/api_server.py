@@ -98,6 +98,8 @@ class ApiServer:
         port: int = 8080,
         api_secret: str | None = None,
         ingest_token: str | None = None,
+        ingest_host: str | None = None,
+        ingest_port: int | None = None,
         working_dir: str | None = None,
         task_repo: TaskRepository | None = None,
         lounge_repo: LoungeRepository | None = None,
@@ -113,6 +115,8 @@ class ApiServer:
         self.port = port
         self.api_secret = api_secret
         self.ingest_token = ingest_token
+        self.ingest_host = ingest_host
+        self.ingest_port = ingest_port
         self.working_dir = working_dir
         self.task_repo = task_repo
         self.lounge_repo = lounge_repo
@@ -129,7 +133,12 @@ class ApiServer:
         if self.api_secret:
             self.app.middlewares.append(self._auth_middleware)
         self._setup_routes()
+        # Separate app for the externally reachable (non-localhost) listener.
+        # It exposes ONLY the token-gated ingest surface so the RCE-capable
+        # control plane (/api/spawn etc.) never leaves localhost.
+        self.external_app = self._build_external_app()
         self._runner: web.AppRunner | None = None
+        self._ext_runner: web.AppRunner | None = None
 
     def _setup_routes(self) -> None:
         self.app.router.add_get("/api/health", self.health)
@@ -154,6 +163,20 @@ class ApiServer:
         self.app.router.add_get("/api/ingest/{result_id}", self.get_ingest_result)
         # Startup resume routes
         self.app.router.add_post("/api/mark-resume", self.mark_resume)
+
+    def _build_external_app(self) -> web.Application:
+        """Build the app served on the externally reachable listener.
+
+        Only the safe, token-gated ingest surface is registered here. The
+        ``ingest`` and ``get_ingest_result`` handlers enforce ``ingest_token``
+        themselves (constant-time compare), so no global middleware is needed.
+        ``/api/health`` is intentionally open for liveness probes.
+        """
+        app = web.Application()
+        app.router.add_get("/api/health", self.health)
+        app.router.add_post("/api/ingest", self.ingest)
+        app.router.add_get("/api/ingest/{result_id}", self.get_ingest_result)
+        return app
 
     @web.middleware
     async def _auth_middleware(
@@ -185,11 +208,45 @@ class ApiServer:
         site = web.TCPSite(self._runner, self.host, self.port, reuse_address=True)
         await site.start()
         logger.info("REST API started: http://%s:%d", self.host, self.port)
+        await self._start_external_listener()
+
+    async def _start_external_listener(self) -> None:
+        """Start the ingest-only listener on a non-localhost interface.
+
+        Enabled only when both ``ingest_host`` and ``ingest_port`` are set. A
+        missing ``ingest_token`` is a hard refusal (not a silent skip): exposing
+        an unauthenticated surface to the LAN would be a security regression, so
+        we log a warning and leave the listener down.
+        """
+        if not (self.ingest_host and self.ingest_port):
+            return
+        if not self.ingest_token:
+            logger.warning(
+                "External ingest listener requested (%s:%d) but no ingest_token "
+                "is set — refusing to expose an unauthenticated surface. "
+                "Set CCDB_INGEST_TOKEN to enable it.",
+                self.ingest_host,
+                self.ingest_port,
+            )
+            return
+        self._ext_runner = web.AppRunner(self.external_app)
+        await self._ext_runner.setup()
+        ext_site = web.TCPSite(
+            self._ext_runner, self.ingest_host, self.ingest_port, reuse_address=True
+        )
+        await ext_site.start()
+        logger.info(
+            "External ingest API started: http://%s:%d (ingest-only, token-gated)",
+            self.ingest_host,
+            self.ingest_port,
+        )
 
     async def stop(self) -> None:
         """Stop the API server."""
         if self._runner:
             await self._runner.cleanup()
+        if self._ext_runner:
+            await self._ext_runner.cleanup()
 
     async def health(self, request: web.Request) -> web.Response:
         """GET /api/health — health check."""

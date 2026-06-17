@@ -156,6 +156,10 @@ async def main() -> None:
             host=config["api_host"],
             port=int(config["api_port"]),
             ingest_token=os.getenv("CCDB_INGEST_TOKEN") or None,
+            ingest_host=os.getenv("CCDB_INGEST_HOST") or None,
+            ingest_port=int(os.environ["CCDB_INGEST_PORT"])
+            if os.getenv("CCDB_INGEST_PORT")
+            else None,
             working_dir=config["working_dir"] or None,
         )
 
