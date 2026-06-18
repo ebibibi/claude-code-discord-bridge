@@ -160,6 +160,9 @@ async def main() -> None:
             ingest_port=int(os.environ["CCDB_INGEST_PORT"])
             if os.getenv("CCDB_INGEST_PORT")
             else None,
+            max_body_bytes=int(os.environ["CCDB_MAX_BODY_BYTES"])
+            if os.getenv("CCDB_MAX_BODY_BYTES")
+            else None,
             working_dir=config["working_dir"] or None,
         )
 
