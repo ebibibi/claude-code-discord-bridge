@@ -36,6 +36,7 @@ from ..database.resume_repo import PendingResumeRepository
 from ..database.settings_repo import SettingsRepository
 from ..discord_ui.chunker import chunk_message
 from ..discord_ui.embeds import stopped_embed
+from ..discord_ui.file_sender import send_file_blobs
 from ..discord_ui.status import StatusManager
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.thread_renamer import suggest_title
@@ -711,6 +712,7 @@ class ClaudeChatCog(commands.Cog):
         fork: bool = False,
         auto_start: bool = True,
         result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None,
+        attachments: list[tuple[str, bytes]] | None = None,
     ) -> discord.Thread:
         """Create a new thread and optionally start a Claude Code session.
 
@@ -739,6 +741,11 @@ class ClaudeChatCog(commands.Cog):
                         caller (e.g. /api/ingest) retrieve the final reply.
                         Only wired when ``auto_start`` is True (otherwise no
                         session runs and no result would ever be produced).
+            attachments: Optional ``(filename, bytes)`` pairs to post into the
+                        new thread as Discord file attachments, right after the
+                        seed prompt. Lets a programmatic caller (e.g. a Forgejo
+                        Issue watcher via ``/api/spawn``) surface the original
+                        attachments so they're viewable in the thread.
 
         Returns:
             The newly created :class:`discord.Thread`.
@@ -759,6 +766,10 @@ class ClaudeChatCog(commands.Cog):
         seed_message = await thread.send(chunks[0])
         for chunk in chunks[1:]:
             seed_message = await thread.send(chunk)
+        # Surface any caller-provided attachments in the thread so they're
+        # viewable alongside the prompt (e.g. files attached to a Forgejo Issue).
+        if attachments:
+            await send_file_blobs(thread, attachments)
         if auto_start:
             # Run Claude in the background so /api/spawn returns immediately.
             # The caller gets the thread reference without waiting for Claude to finish.
