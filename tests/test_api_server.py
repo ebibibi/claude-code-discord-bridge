@@ -642,6 +642,92 @@ class TestSpawn:
         assert kwargs.get("auto_start") is True
 
     @pytest.mark.asyncio
+    async def test_spawn_accepts_payload_over_1mb(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        """A >1MB attachment body must not be 413'd (aiohttp's default body limit
+        is 1MB; ApiServer raises client_max_size for base64 payloads)."""
+        import base64
+
+        blob = b"\x00" * (2 * 1024 * 1024)  # 2 MB → ~2.7 MB base64
+        resp = await spawn_client.post(
+            "/api/spawn",
+            json={
+                "prompt": "big attachment",
+                "attachments": [{"filename": "big.bin", "data": base64.b64encode(blob).decode()}],
+            },
+        )
+        assert resp.status == 201
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs["attachments"][0][1] == blob
+
+    @pytest.mark.asyncio
+    async def test_spawn_decodes_attachments_and_passes_to_cog(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        import base64
+
+        blob = b"%PDF-1.4 hello"
+        resp = await spawn_client.post(
+            "/api/spawn",
+            json={
+                "prompt": "Issue with attachment",
+                "attachments": [{"filename": "spec.pdf", "data": base64.b64encode(blob).decode()}],
+            },
+        )
+        assert resp.status == 201
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("attachments") == [("spec.pdf", blob)]
+
+    @pytest.mark.asyncio
+    async def test_spawn_without_attachments_passes_none(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post("/api/spawn", json={"prompt": "No files"})
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("attachments") is None
+
+    @pytest.mark.asyncio
+    async def test_spawn_invalid_base64_attachment_returns_400(
+        self, spawn_client: TestClient
+    ) -> None:
+        resp = await spawn_client.post(
+            "/api/spawn",
+            json={
+                "prompt": "Bad file",
+                "attachments": [{"filename": "x.bin", "data": "not!!base64!!"}],
+            },
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_spawn_attachments_must_be_a_list(self, spawn_client: TestClient) -> None:
+        resp = await spawn_client.post(
+            "/api/spawn",
+            json={"prompt": "x", "attachments": {"filename": "a"}},
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_spawn_sanitizes_attachment_filename(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        import base64
+
+        await spawn_client.post(
+            "/api/spawn",
+            json={
+                "prompt": "traversal",
+                "attachments": [
+                    {"filename": "../../etc/passwd", "data": base64.b64encode(b"x").decode()}
+                ],
+            },
+        )
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        name = kwargs["attachments"][0][0]
+        assert "/" not in name and ".." not in name
+
+    @pytest.mark.asyncio
     async def test_spawn_auto_start_false_passed_to_cog(
         self, spawn_client: TestClient, mock_cog: MagicMock
     ) -> None:

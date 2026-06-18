@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`/api/spawn` can post file attachments into the new thread** — `POST /api/spawn` now accepts an optional `attachments` array of `{filename, data}` where `data` is base64-encoded file bytes. After the seed prompt is posted, ccdb decodes them and posts them into the freshly created thread as real Discord file attachments (batched at Discord's 10-files-per-message limit, 8 MB/file skip), so a programmatic caller can surface the original files alongside the prompt. The motivating case: a Forgejo Issue/PR watcher that spawns a Discord thread and wants the issue's attachments viewable in-thread. Filenames are reduced to a safe basename (path-traversal guarded, shared with the ingest path); attachments are capped at 10 files / 25 MB total per request and validated (a bad base64 payload returns 400) before any thread is created. Backward-compatible: omit `attachments` and behaviour is unchanged (Zero-Config). Adds `attachments` to `ClaudeChatCog.spawn_session()` and `send_file_blobs()`/`collect_discord_files_from_blobs()` in `discord_ui/file_sender.py`. The body limit raised in v3.1.0 (#446) already covers these base64 payloads.
+
 ## [3.1.0] - 2026-06-18
 
 ### Added

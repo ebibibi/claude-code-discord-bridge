@@ -44,6 +44,11 @@ if TYPE_CHECKING:
 # extensions, mobile shortcuts, webhooks) that may carry file attachments.
 _MAX_INGEST_ATTACHMENTS = 20
 _MAX_INGEST_TOTAL_BYTES = 50 * 1024 * 1024
+# /api/spawn — trusted localhost callers may forward attachments to post into
+# the spawned thread (e.g. files attached to a Forgejo Issue). Capped to keep a
+# single request from buffering an unbounded amount of base64 in memory.
+_MAX_SPAWN_ATTACHMENTS = 10
+_MAX_SPAWN_TOTAL_BYTES = 25 * 1024 * 1024
 
 # Max accepted request body. aiohttp defaults to 1 MiB, which 413s any real
 # ingest (a full conversation thread plus base64 attachments). Base64 inflates
@@ -65,6 +70,49 @@ def _safe_attachment_name(raw: object, index: int) -> str:
     name = os.path.basename(str(raw or "")).strip()
     name = _UNSAFE_FILENAME_RE.sub("_", name).lstrip(".")
     return name or f"attachment_{index}"
+
+
+def _decode_spawn_attachments(
+    attachments: object,
+) -> tuple[list[tuple[str, bytes]], web.Response | None]:
+    """Decode ``/api/spawn`` base64 attachments into ``(filename, bytes)`` pairs.
+
+    Each item must be an object ``{filename?, data}`` where ``data`` is
+    base64-encoded file bytes. Filenames are reduced to a safe basename. On any
+    validation failure the second element is a ready-to-return 400 response and
+    the first is empty.
+    """
+    if not attachments:
+        return [], None
+    if not isinstance(attachments, list):
+        return [], web.json_response({"error": "attachments must be a list"}, status=400)
+    if len(attachments) > _MAX_SPAWN_ATTACHMENTS:
+        return [], web.json_response(
+            {"error": f"Too many attachments (max {_MAX_SPAWN_ATTACHMENTS})"},
+            status=400,
+        )
+
+    decoded: list[tuple[str, bytes]] = []
+    total = 0
+    for i, att in enumerate(attachments):
+        if not isinstance(att, dict):
+            return [], web.json_response({"error": f"Attachment {i} must be an object"}, status=400)
+        data_b64 = att.get("data")
+        if not data_b64:
+            return [], web.json_response({"error": f"Attachment {i} missing 'data'"}, status=400)
+        try:
+            blob = base64.b64decode(str(data_b64), validate=True)
+        except (binascii.Error, ValueError):
+            return [], web.json_response(
+                {"error": f"Attachment {i} has invalid base64 'data'"}, status=400
+            )
+        total += len(blob)
+        if total > _MAX_SPAWN_TOTAL_BYTES:
+            return [], web.json_response(
+                {"error": "Attachments exceed total size limit"}, status=413
+            )
+        decoded.append((_safe_attachment_name(att.get("filename"), i), blob))
+    return decoded, None
 
 
 logger = logging.getLogger(__name__)
@@ -739,12 +787,20 @@ class ApiServer:
         thread_name: str | None = data.get("thread_name") or None
         auto_start: bool = data.get("auto_start", True)
 
+        # Optional attachments to post into the new thread (e.g. files attached
+        # to a Forgejo Issue forwarded by a watcher). Decoded here; posting is
+        # handled inside spawn_session right after the seed prompt.
+        decoded_attachments, att_err = _decode_spawn_attachments(data.get("attachments"))
+        if att_err is not None:
+            return att_err
+
         try:
             thread = await cog.spawn_session(
                 raw,
                 prompt,
                 thread_name=thread_name,
                 auto_start=auto_start,
+                attachments=decoded_attachments or None,
             )
         except Exception as exc:
             logger.error("spawn_session failed: %s", exc, exc_info=True)
