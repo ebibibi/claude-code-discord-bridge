@@ -44,6 +44,12 @@ if TYPE_CHECKING:
 # extensions, mobile shortcuts, webhooks) that may carry file attachments.
 _MAX_INGEST_ATTACHMENTS = 20
 _MAX_INGEST_TOTAL_BYTES = 50 * 1024 * 1024
+
+# Max accepted request body. aiohttp defaults to 1 MiB, which 413s any real
+# ingest (a full conversation thread plus base64 attachments). Base64 inflates
+# the decoded payload ~4/3, so the body limit must exceed the decoded
+# attachment cap by that factor, plus headroom for the surrounding JSON.
+_DEFAULT_MAX_BODY_BYTES = _MAX_INGEST_TOTAL_BYTES * 4 // 3 + 1024 * 1024
 # Characters allowed in a saved attachment filename; everything else → "_".
 _UNSAFE_FILENAME_RE = re.compile(r"[^\w.\-]+")
 
@@ -100,6 +106,7 @@ class ApiServer:
         ingest_token: str | None = None,
         ingest_host: str | None = None,
         ingest_port: int | None = None,
+        max_body_bytes: int | None = None,
         working_dir: str | None = None,
         task_repo: TaskRepository | None = None,
         lounge_repo: LoungeRepository | None = None,
@@ -117,6 +124,7 @@ class ApiServer:
         self.ingest_token = ingest_token
         self.ingest_host = ingest_host
         self.ingest_port = ingest_port
+        self.max_body_bytes = max_body_bytes or _DEFAULT_MAX_BODY_BYTES
         self.working_dir = working_dir
         self.task_repo = task_repo
         self.lounge_repo = lounge_repo
@@ -129,7 +137,7 @@ class ApiServer:
             lounge_channel_id = int(ch_str) if ch_str.isdigit() else None
         self.lounge_channel_id = lounge_channel_id
 
-        self.app = web.Application()
+        self.app = web.Application(client_max_size=self.max_body_bytes)
         if self.api_secret:
             self.app.middlewares.append(self._auth_middleware)
         self._setup_routes()
@@ -172,7 +180,7 @@ class ApiServer:
         themselves (constant-time compare), so no global middleware is needed.
         ``/api/health`` is intentionally open for liveness probes.
         """
-        app = web.Application()
+        app = web.Application(client_max_size=self.max_body_bytes)
         app.router.add_get("/api/health", self.health)
         app.router.add_post("/api/ingest", self.ingest)
         app.router.add_get("/api/ingest/{result_id}", self.get_ingest_result)
