@@ -82,6 +82,68 @@ Déclenchez des tâches Claude Code depuis GitHub Actions via des webhooks Disco
 
 Vous utilisez déjà Claude Code CLI directement ? Synchronisez vos sessions de terminal existantes dans des fils Discord avec `/sync-sessions`. Remplit les messages de conversation récents pour que vous puissiez continuer une session CLI depuis votre téléphone sans perdre le contexte.
 
+### AI Lounge
+
+Un canal « salon de repos » partagé où toutes les sessions concurrentes s'annoncent, lisent les mises à jour des autres et se coordonnent avant les opérations destructives.
+
+Chaque session Claude reçoit automatiquement le contexte du lounge via `--append-system-prompt` — injecté comme contexte système éphémère plutôt que dans l'historique de conversation. Cela évite l'accumulation du contexte au fil des tours, qui provoquerait des erreurs « Prompt is too long » dans les sessions longues. Le contexte injecté comprend : les messages récents des autres sessions, ainsi que la règle de vérification avant toute opération destructive.
+
+```bash
+# Les sessions publient leurs intentions avant de démarrer :
+curl -X POST "$CCDB_API_URL/api/lounge" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Starting auth refactor on feature/oauth — worktree-A", "label": "feature dev"}'
+
+# Lire les messages récents du lounge (aussi injectés automatiquement dans chaque session) :
+curl "$CCDB_API_URL/api/lounge"
+```
+
+Le canal lounge sert aussi de fil d'activité visible par les humains — ouvrez-le dans Discord pour voir d'un coup d'œil ce que fait chaque session Claude active.
+
+### Création de Session Programmatique
+
+Créez de nouvelles sessions Claude Code depuis des scripts, GitHub Actions ou d'autres sessions Claude — sans interaction avec les messages Discord.
+
+```bash
+# Depuis une autre session Claude ou un script CI :
+curl -X POST "$CCDB_API_URL/api/spawn" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Exécuter un scan de sécurité sur le dépôt", "thread_name": "Security Scan"}'
+# Retourne immédiatement avec l'ID du fil ; Claude s'exécute en arrière-plan
+```
+
+**Démarrage différé (`auto_start=false`)** — Crée un fil et publie un message d'initialisation sans démarrer Claude immédiatement. Claude ne démarre que quand un utilisateur répond. Utile pour les flux de notification.
+
+### Ingestion Externe Authentifiée et Récupération de Résultats (`/api/ingest`)
+
+`POST /api/ingest` est le **spawn authentifié et compatible avec les pièces jointes** pour les clients externes non fiables (extensions de navigateur, raccourcis mobiles, webhooks). Contrairement à `/api/spawn` (fiable, localhost), il nécessite un `ingest_token` dédié (définissez `CCDB_INGEST_TOKEN` ; indépendant de `api_secret`) et peut transporter des pièces jointes base64 écrites sur disque pour que la session créée puisse les lire. Il crée un fil Discord réel, donc toute l'interaction reste observable.
+
+La session est **interactive** (un vrai fil Discord où vous pouvez continuer à répondre) — mais vous pouvez toujours obtenir sa réponse finale de façon programmatique. Quand la récupération de résultats est configurée (câblée automatiquement via `setup_bridge()`), la réponse inclut un `result_id`, et `GET /api/ingest/{result_id}` interroge la réponse finale de la session.
+
+```bash
+# Publier le travail (avec pièces jointes optionnelles) ; retourne immédiatement
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Résume ce fil et rédige une réponse",
+       "attachments": [{"filename": "thread.txt", "data": "<base64>"}]}'
+# → {"status": "spawned", "thread_id": "…", "result_id": "ab12…", "attachments_saved": 1}
+
+# Interroger la réponse finale
+curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_TOKEN"
+# → {"status": "done", "result": "…", "error": null, "thread_id": "…", "thread_name": "…"}
+```
+
+L'endpoint est optionnel : sans `ingest_token` configuré, `POST` répond `503`. Les résultats sont limités à 200 lignes.
+
+### Reprise au Démarrage
+
+Si le bot redémarre en pleine session, les sessions Claude interrompues sont automatiquement reprises quand le bot revient en ligne. Les sessions sont marquées pour reprise de trois façons :
+
+- **Automatique (redémarrage pour mise à jour)** — `AutoUpgradeCog` capture toutes les sessions actives juste avant un redémarrage de mise à jour et les marque automatiquement.
+- **Automatique (tout arrêt)** — `ClaudeChatCog.cog_unload()` marque les sessions en cours d'exécution quand le bot s'arrête par n'importe quel mécanisme.
+- **Manuel** — Toute session peut appeler `POST /api/mark-resume` directement.
+
 ---
 
 ## Fonctionnalités
@@ -340,6 +402,8 @@ uv add "claude-code-discord-bridge[api]"
 | DELETE | `/api/tasks/{id}` | Supprimer tâche |
 | PATCH | `/api/tasks/{id}` | Mettre à jour tâche |
 | POST | `/api/spawn` | Créer nouveau fil Discord et démarrer session Claude Code (non bloquant) |
+| POST | `/api/ingest` | Spawn externe authentifié (extension navigateur/webhook) avec pièces jointes base64 ; retourne `result_id` quand la récupération de résultats est configurée |
+| GET | `/api/ingest/{result_id}` | Interroger la réponse finale de la session créée (`status`/`result`/`error`/`thread_id`) |
 | POST | `/api/mark-resume` | Marquer fil pour reprise automatique au prochain démarrage du bot |
 | GET | `/api/lounge` | Lire les messages récents de l'AI Lounge |
 | POST | `/api/lounge` | Publier message dans l'AI Lounge |

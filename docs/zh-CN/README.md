@@ -116,6 +116,28 @@ curl -X POST "$CCDB_API_URL/api/spawn" \
 
 **延迟启动 (`auto_start=false`)** — 创建线程并发布种子消息，但不立即启动 Claude。只有当用户回复时 Claude 才启动，并自动接收种子消息作为上下文。
 
+### 认证外部摄取与结果检索 (`/api/ingest`)
+
+`POST /api/ingest` 是面向不可信外部客户端（浏览器扩展、移动快捷方式、webhook）的**认证、附件感知的生成接口**。与 `/api/spawn`（受信任的、localhost）不同，它需要专用的 `ingest_token`（通过 `CCDB_INGEST_TOKEN` 设置；与 `api_secret` 独立），并可携带 base64 文件附件写入磁盘，供生成的会话读取。它会创建真实的 Discord 线程，因此所有交互均可观察。
+
+会话是**交互式的**（真实的 Discord 线程，您可以继续回复）— 但您仍然可以以编程方式获取其最终答案。当配置了结果检索（通过 `setup_bridge()` 自动连接）时，响应中包含 `result_id`，`GET /api/ingest/{result_id}` 可轮询会话的最终回复。这是往返模式：发布线程 + 附件 → 等待 → 读取答案 → 写回您自己的系统（如 Teams 线程），同时 Discord 保留历史记录。
+
+```bash
+# 发布任务（可选附件）；立即返回
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "总结此线程并起草回复",
+       "attachments": [{"filename": "thread.txt", "data": "<base64>"}]}'
+# → {"status": "spawned", "thread_id": "…", "result_id": "ab12…", "attachments_saved": 1}
+
+# 轮询最终回复
+curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_TOKEN"
+# → {"status": "done", "result": "…", "error": null, "thread_id": "…", "thread_name": "…"}
+```
+
+该端点为可选功能：未配置 `ingest_token` 时，`POST` 返回 `503`。结果检索不可用时，`POST` 仅省略 `result_id`，`GET /api/ingest/{id}` 返回 `503` — 生成行为不变。请求体和附件**不会**持久化到结果存储中（仅存储状态、最终文本和线程 ID）；结果上限为 200 条。
+
 ### 启动恢复
 
 如果 Bot 在会话进行中重启，被中断的 Claude 会话在 Bot 重新上线时会自动恢复。
@@ -447,6 +469,8 @@ uv add "claude-code-discord-bridge[api]"
 | DELETE | `/api/tasks/{id}` | 删除任务 |
 | PATCH | `/api/tasks/{id}` | 更新任务 |
 | POST | `/api/spawn` | 创建新 Discord 线程并启动 Claude Code 会话（非阻塞） |
+| POST | `/api/ingest` | 认证外部生成（浏览器扩展/webhook），支持 base64 附件；配置结果检索时返回 `result_id` |
+| GET | `/api/ingest/{result_id}` | 轮询生成会话的最终回复（`status`/`result`/`error`/`thread_id`） |
 | POST | `/api/mark-resume` | 标记线程在下次 Bot 启动时自动恢复 |
 | GET | `/api/lounge` | 读取最近的 AI Lounge 消息 |
 | POST | `/api/lounge` | 向 AI Lounge 发布消息 |

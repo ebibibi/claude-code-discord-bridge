@@ -82,6 +82,54 @@ Dispare tarefas do Claude Code a partir do GitHub Actions via webhooks do Discor
 
 Já usa Claude Code CLI diretamente? Sincronize suas sessões de terminal existentes em threads do Discord com `/sync-sessions`. Retroalimenta mensagens de conversa recentes para que você possa continuar uma sessão CLI do seu celular sem perder contexto.
 
+### AI Lounge
+
+Um canal compartilhado de "sala de descanso" onde todas as sessões concorrentes se anunciam, leem as atualizações das outras e se coordenam antes de operações destrutivas.
+
+### Criação de Sessão Programática
+
+Crie novas sessões do Claude Code a partir de scripts, GitHub Actions ou outras sessões do Claude — sem interação com mensagens do Discord.
+
+```bash
+# A partir de outra sessão Claude ou de um script CI:
+curl -X POST "$CCDB_API_URL/api/spawn" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Executar varredura de segurança no repositório", "thread_name": "Security Scan"}'
+# Retorna imediatamente com o ID da thread; Claude executa em segundo plano
+```
+
+**Início adiado (`auto_start=false`)** — Crie uma thread e publique uma mensagem semente sem iniciar o Claude imediatamente. Claude inicia apenas quando um usuário responde. Útil para fluxos de notificação.
+
+### Ingestão Externa Autenticada e Recuperação de Resultados (`/api/ingest`)
+
+`POST /api/ingest` é o **spawn autenticado e compatível com anexos** para clientes externos não confiáveis (extensões de navegador, atalhos móveis, webhooks). Ao contrário de `/api/spawn` (confiável, localhost), requer um `ingest_token` dedicado (configure `CCDB_INGEST_TOKEN`; independente de `api_secret`) e pode carregar anexos base64 que são gravados em disco para que a sessão criada os leia. Cria uma thread real do Discord, mantendo toda a interação observável.
+
+A sessão é **interativa** (uma thread real do Discord onde você pode continuar respondendo) — mas ainda pode obter a resposta final programaticamente. Quando a recuperação de resultados está configurada (conectada automaticamente via `setup_bridge()`), a resposta inclui um `result_id`, e `GET /api/ingest/{result_id}` faz polling da resposta final da sessão.
+
+```bash
+# Publicar trabalho (com anexos opcionais); retorna imediatamente
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Resuma esta thread e rascunhe uma resposta",
+       "attachments": [{"filename": "thread.txt", "data": "<base64>"}]}'
+# → {"status": "spawned", "thread_id": "…", "result_id": "ab12…", "attachments_saved": 1}
+
+# Polling da resposta final
+curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_TOKEN"
+# → {"status": "done", "result": "…", "error": null, "thread_id": "…", "thread_name": "…"}
+```
+
+O endpoint é opt-in: sem `ingest_token` configurado, `POST` responde `503`. Os resultados estão limitados a 200 linhas.
+
+### Retomada na Inicialização
+
+Se o bot reiniciar durante uma sessão, as sessões Claude interrompidas são automaticamente retomadas quando o bot volta online. As sessões são marcadas para retomada de três formas:
+
+- **Automático (reinício por atualização)** — `AutoUpgradeCog` captura todas as sessões ativas antes de um reinício por atualização e as marca automaticamente.
+- **Automático (qualquer desligamento)** — `ClaudeChatCog.cog_unload()` marca as sessões em execução quando o bot é desligado por qualquer mecanismo.
+- **Manual** — Qualquer sessão pode chamar `POST /api/mark-resume` diretamente.
+
 ---
 
 ## Funcionalidades
@@ -340,6 +388,8 @@ uv add "claude-code-discord-bridge[api]"
 | DELETE | `/api/tasks/{id}` | Remover tarefa |
 | PATCH | `/api/tasks/{id}` | Atualizar tarefa |
 | POST | `/api/spawn` | Criar nova thread do Discord e iniciar sessão do Claude Code (não bloqueante) |
+| POST | `/api/ingest` | Spawn externo autenticado (extensão de navegador/webhook) com anexos base64; retorna `result_id` quando recuperação de resultados está configurada |
+| GET | `/api/ingest/{result_id}` | Polling da resposta final da sessão criada (`status`/`result`/`error`/`thread_id`) |
 | POST | `/api/mark-resume` | Marcar thread para retomada automática na próxima inicialização do bot |
 | GET | `/api/lounge` | Ler mensagens recentes do AI Lounge |
 | POST | `/api/lounge` | Publicar mensagem no AI Lounge |

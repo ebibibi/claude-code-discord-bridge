@@ -98,6 +98,36 @@ curl -X POST "$CCDB_API_URL/api/spawn" \
 # 스레드 생성 후 즉시 반환; Claude는 백그라운드에서 실행
 ```
 
+### 인증된 외부 인제스트 및 결과 조회 (`/api/ingest`)
+
+`POST /api/ingest`는 신뢰할 수 없는 외부 클라이언트(브라우저 확장 프로그램, 모바일 단축키, webhook)를 위한 **인증된, 첨부 파일 지원 스폰**입니다. `/api/spawn`(신뢰된, localhost)과 달리, 전용 `ingest_token`(`CCDB_INGEST_TOKEN`으로 설정; `api_secret`과 독립)이 필요하며, base64 파일 첨부를 디스크에 기록하여 스폰된 세션이 읽을 수 있습니다. 실제 Discord 스레드를 생성하므로 모든 상호작용을 관찰할 수 있습니다.
+
+세션은 **인터랙티브**합니다(계속 답장할 수 있는 실제 Discord 스레드) — 하지만 최종 답변을 프로그래밍 방식으로 가져올 수도 있습니다. 결과 조회가 구성된 경우(`setup_bridge()`를 통해 자동 연결), 응답에 `result_id`가 포함되며 `GET /api/ingest/{result_id}`로 세션의 최종 답변을 폴링할 수 있습니다. 이것이 왕복 패턴입니다: 스레드 + 첨부 파일 게시 → 대기 → 답변 읽기 → 자체 시스템(예: Teams 스레드)에 기록, Discord가 기록을 보관합니다.
+
+```bash
+# 작업 게시(선택적으로 첨부 파일 포함); 즉시 반환
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "이 스레드를 요약하고 답장 초안을 작성해",
+       "attachments": [{"filename": "thread.txt", "data": "<base64>"}]}'
+# → {"status": "spawned", "thread_id": "…", "result_id": "ab12…", "attachments_saved": 1}
+
+# 최종 답변 폴링
+curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_TOKEN"
+# → {"status": "done", "result": "…", "error": null, "thread_id": "…", "thread_name": "…"}
+```
+
+이 엔드포인트는 옵트인 방식입니다: `ingest_token`이 구성되지 않으면 `POST`는 `503`을 반환합니다. 결과 조회를 사용할 수 없으면 `POST`는 `result_id`를 생략하고 `GET /api/ingest/{id}`는 `503`을 반환합니다 — 스폰 동작은 변경되지 않습니다. 요청 본문과 첨부 파일은 결과 저장소에 **저장되지 않습니다**(상태, 최종 텍스트, 스레드 ID만); 결과는 최대 200개입니다.
+
+### 시작 재개
+
+봇이 세션 도중 재시작되면, 중단된 Claude 세션이 봇이 다시 온라인이 될 때 자동으로 재개됩니다. 재개를 위한 등록 방법은 세 가지입니다:
+
+- **자동(업그레이드 재시작)** — `AutoUpgradeCog`가 패키지 업그레이드 재시작 직전에 모든 활성 세션을 스냅샷하고 자동으로 등록합니다.
+- **자동(모든 종료)** — `ClaudeChatCog.cog_unload()`가 `systemctl stop`, `bot.close()`, SIGTERM 등 모든 종료 방법에서 실행 중인 세션을 자동 등록합니다.
+- **수동** — `POST /api/mark-resume`를 직접 호출하여 등록할 수 있습니다.
+
 ---
 
 ## 기능 목록
@@ -356,6 +386,8 @@ uv add "claude-code-discord-bridge[api]"
 | DELETE | `/api/tasks/{id}` | 작업 삭제 |
 | PATCH | `/api/tasks/{id}` | 작업 업데이트 |
 | POST | `/api/spawn` | 새 Discord 스레드 생성 및 Claude Code 세션 시작 (논블로킹) |
+| POST | `/api/ingest` | 인증된 외부 스폰 (브라우저 확장/webhook), base64 첨부 파일 지원; 결과 조회가 구성된 경우 `result_id` 반환 |
+| GET | `/api/ingest/{result_id}` | 스폰된 세션의 최종 답변 폴링 (`status`/`result`/`error`/`thread_id`) |
 | POST | `/api/mark-resume` | 다음 봇 시작 시 자동 재개를 위해 스레드 마킹 |
 | GET | `/api/lounge` | 최근 AI Lounge 메시지 읽기 |
 | POST | `/api/lounge` | AI Lounge에 메시지 게시 |
