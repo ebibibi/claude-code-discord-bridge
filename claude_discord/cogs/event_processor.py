@@ -533,25 +533,21 @@ class EventProcessor:
                 if self._config.status:
                     await self._config.status.set_done()
 
-                # Post the configured statusLine as Discord subtext. Only
-                # meaningful for the Claude backend — the statusLine command
-                # reads ~/.claude/settings.json and surfaces Anthropic-specific
-                # quota windows (5h, 7d) that have no Codex equivalent. Skip
-                # for non-claude backends entirely.
-                if _backend_name_from_runner(self._config.runner) == "claude":
-                    asyncio.create_task(
-                        _post_statusline_footer(
-                            thread=self._config.thread,
-                            working_dir=self._config.runner.working_dir,
-                            model=self._config.runner.model,
-                            context_window=event.context_window,
-                            input_tokens=event.input_tokens,
-                            cache_creation_tokens=event.cache_creation_tokens,
-                            cache_read_tokens=event.cache_read_tokens,
-                            api_label=self._config.runner.describe_api(),
-                        ),
-                        name=f"statusline-{self._config.thread.id}",
-                    )
+                asyncio.create_task(
+                    _post_statusline_footer(
+                        thread=self._config.thread,
+                        working_dir=self._config.runner.working_dir,
+                        model=self._config.runner.model,
+                        context_window=event.context_window,
+                        input_tokens=event.input_tokens,
+                        cache_creation_tokens=event.cache_creation_tokens,
+                        cache_read_tokens=event.cache_read_tokens,
+                        api_label=self._config.runner.describe_api(),
+                        backend=_backend_name_from_runner(self._config.runner),
+                        command=self._config.runner.command,
+                    ),
+                    name=f"statusline-{self._config.thread.id}",
+                )
 
                 # Schedule inbox classification as a background task (non-blocking).
                 # Only runs when inbox_repo is wired in (THREAD_INBOX_ENABLED=true).
@@ -823,6 +819,8 @@ async def _post_statusline_footer(
     cache_creation_tokens: int | None,
     cache_read_tokens: int | None,
     api_label: str | None = None,
+    backend: str = "claude",
+    command: str = "claude",
 ) -> None:
     """Post the current API provider line and the configured statusLine.
 
@@ -832,8 +830,7 @@ async def _post_statusline_footer(
     (read from ``~/.claude/settings.json``) is appended below it when present.
     Posts nothing when neither is available.
     """
-    import os
-
+    from ..discord_ui.codex_usage import build_codex_usage_lines, fetch_codex_rate_limits
     from ..discord_ui.statusline import (
         build_statusline_json,
         read_statusline_command,
@@ -841,9 +838,9 @@ async def _post_statusline_footer(
     )
 
     statusline_text: str | None = None
-    command = read_statusline_command()
-    if command:
-        cwd = working_dir or os.path.expanduser("~")
+    statusline_command = read_statusline_command() if backend == "claude" else None
+    if statusline_command:
+        cwd = working_dir or str(Path.home())
         json_input = build_statusline_json(
             cwd=cwd,
             model_id=model,
@@ -853,11 +850,16 @@ async def _post_statusline_footer(
             cache_creation_tokens=cache_creation_tokens or 0,
             cache_read_tokens=cache_read_tokens or 0,
         )
-        result = await render_statusline(command, json_input)
+        result = await render_statusline(statusline_command, json_input)
         if result:
             lines = [line for line in result.splitlines() if line.strip()]
             if lines:
                 statusline_text = "\n".join(lines[:3])
+    elif backend == "codex":
+        payload = await fetch_codex_rate_limits(command)
+        lines = build_codex_usage_lines(payload) if payload else []
+        if lines:
+            statusline_text = "\n".join(lines[:3])
 
     parts: list[str] = []
     if api_label:
