@@ -265,7 +265,9 @@ class CodexRunner:
         elif self.permission_mode in _APPROVAL_MODE_MAP:
             args.extend(["--ask-for-approval", _APPROVAL_MODE_MAP[self.permission_mode]])
 
-        if self.working_dir:
+        # `--cd` is only accepted by `codex exec`, not `codex exec resume`.
+        # Resume reuses the working directory of the original session.
+        if self.working_dir and not session_id:
             args.extend(["--cd", self.working_dir])
 
         # Positional args come last. For resume: SESSION_ID then PROMPT.

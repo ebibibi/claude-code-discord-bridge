@@ -53,6 +53,15 @@ class TestCodexRunnerBuildArgs:
         assert "--cd" in args or "-C" in args
         assert "/tmp/work" in args
 
+    def test_working_dir_flag_omitted_on_resume(self) -> None:
+        """`codex exec resume` does not accept --cd; it must be omitted on resume."""
+        runner = CodexRunner(command="codex", model="o4-mini", working_dir="/tmp/work")
+        args = runner._build_args(
+            "hello", session_id="0199a213-81c0-7800-8aa1-bbab2a035a53"
+        )
+        assert "--cd" not in args
+        assert "-C" not in args
+
     def test_prompt_is_last_arg(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini")
         args = runner._build_args("hello world", session_id=None)
@@ -253,8 +262,9 @@ class TestCodexRunnerArgvStructure:
         )
         args = runner._build_args("hello", session_id=sid)
         sid_idx = args.index(sid)
-        # --json, --model, --ask-for-approval, --cd must all come before SESSION_ID.
-        for flag in ("--json", "--model", "--ask-for-approval", "--cd"):
+        # --cd is not accepted by `codex exec resume`, so it is intentionally
+        # omitted on resume; the remaining shared flags must precede SESSION_ID.
+        for flag in ("--json", "--model", "--ask-for-approval"):
             assert flag in args, f"{flag} missing from resume args"
             assert args.index(flag) < sid_idx, (
                 f"{flag} should appear before SESSION_ID in codex exec resume"
