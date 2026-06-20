@@ -22,6 +22,7 @@ import logging
 import os
 import re
 import uuid
+import zipfile
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -44,6 +45,13 @@ if TYPE_CHECKING:
 # extensions, mobile shortcuts, webhooks) that may carry file attachments.
 _MAX_INGEST_ATTACHMENTS = 20
 _MAX_INGEST_TOTAL_BYTES = 50 * 1024 * 1024
+# Clients may bundle many files into a single ``.zip`` attachment (so a whole
+# Teams thread's attachments arrive as one upload rather than hitting the
+# per-request count cap). Such archives are expanded server-side so the spawned
+# Claude session reads files by path instead of inflating the prompt. Guards
+# below bound the cost of a malicious or accidental zip bomb.
+_MAX_INGEST_UNZIP_TOTAL_BYTES = 200 * 1024 * 1024
+_MAX_INGEST_UNZIP_MEMBERS = 5000
 # /api/spawn — trusted localhost callers may forward attachments to post into
 # the spawned thread (e.g. files attached to a Forgejo Issue). Capped to keep a
 # single request from buffering an unbounded amount of base64 in memory.
@@ -875,6 +883,83 @@ class ApiServer:
             logger.info("Saved ingest attachment %s (%d bytes)", _sanitize_log(path), len(blob))
         return saved, None
 
+    def _expand_zip_bundles(self, saved_paths: list[Path]) -> list[Path]:
+        """Expand any ``.zip`` among ``saved_paths`` into its member files.
+
+        A single zip lets a client bundle a whole thread's attachments into one
+        upload (sidestepping the per-request count cap) and keeps the prompt to
+        paths only — the spawned session reads files selectively rather than
+        receiving every byte inline.
+
+        Each archive is extracted into its own directory next to the zip; the
+        zip is removed and replaced in the returned list by its extracted files.
+        Extraction is bounded (``_MAX_INGEST_UNZIP_*``) and refuses members that
+        would escape the target directory (zip-slip). On any failure the zip is
+        left untouched in the list so nothing is silently lost.
+        """
+        result: list[Path] = []
+        for path in saved_paths:
+            if not zipfile.is_zipfile(path):
+                result.append(path)
+                continue
+            extracted = self._safe_extract_zip(path)
+            if extracted is None:
+                # Extraction refused/failed — keep the zip so it isn't lost.
+                result.append(path)
+                continue
+            result.extend(extracted)
+            with contextlib.suppress(OSError):
+                path.unlink()
+        return result
+
+    def _safe_extract_zip(self, zip_path: Path) -> list[Path] | None:
+        """Extract ``zip_path`` into a sibling dir; return extracted files.
+
+        Returns ``None`` (and writes nothing) when the archive is malformed or
+        exceeds the size/member guards. Members that would escape the target
+        directory are skipped individually.
+        """
+        dest_dir = zip_path.parent / f"{zip_path.stem}_files"
+        dest_root = dest_dir.resolve()
+        extracted: list[Path] = []
+        try:
+            with zipfile.ZipFile(zip_path) as zf:
+                infos = [i for i in zf.infolist() if not i.is_dir()]
+                if len(infos) > _MAX_INGEST_UNZIP_MEMBERS:
+                    logger.warning(
+                        "Ingest zip %s has too many members (%d) — left unextracted",
+                        _sanitize_log(zip_path),
+                        len(infos),
+                    )
+                    return None
+                total = sum(i.file_size for i in infos)
+                if total > _MAX_INGEST_UNZIP_TOTAL_BYTES:
+                    logger.warning(
+                        "Ingest zip %s uncompressed size %d exceeds cap — left unextracted",
+                        _sanitize_log(zip_path),
+                        total,
+                    )
+                    return None
+                for info in infos:
+                    member = info.filename
+                    if member.startswith("__MACOSX/"):
+                        continue
+                    dest = (dest_dir / member).resolve()
+                    if dest != dest_root and dest_root not in dest.parents:
+                        logger.warning(
+                            "Skipping zip member escaping target dir: %s",
+                            _sanitize_log(member),
+                        )
+                        continue
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(info) as src, open(dest, "wb") as out:
+                        out.write(src.read())
+                    extracted.append(dest)
+        except (zipfile.BadZipFile, OSError) as exc:
+            logger.error("Failed to extract ingest zip %s: %s", _sanitize_log(zip_path), exc)
+            return None
+        return extracted
+
     async def ingest(self, request: web.Request) -> web.Response:
         """POST /api/ingest — authenticated spawn for untrusted external clients.
 
@@ -960,13 +1045,17 @@ class ApiServer:
         saved_paths, err = self._save_ingest_attachments(attachments, request_id)
         if err is not None:
             return err
+        # Expand any bundled .zip so the session reads individual files by path.
+        saved_paths = self._expand_zip_bundles(saved_paths)
 
         prompt = content
         if saved_paths:
             listing = "\n".join(f"- {p}" for p in saved_paths)
             prompt = (
                 f"{content}\n\n"
-                f"添付ファイル（ローカルに保存済み。Read ツール等で参照できます）:\n{listing}"
+                f"添付ファイル（ローカルに保存済み）。下記はパス一覧です。"
+                f"全部を読み込む必要はありません。返信に必要なものだけ Read ツール等で"
+                f"選択的に開いてください:\n{listing}"
             )
 
         thread_name: str | None = data.get("thread_name") or None
