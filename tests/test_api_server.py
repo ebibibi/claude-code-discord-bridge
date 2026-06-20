@@ -994,6 +994,66 @@ class TestIngest:
         )
         assert resp.status == 400
 
+    @staticmethod
+    def _make_zip(members: dict[str, bytes]) -> str:
+        """Build an in-memory zip from {arcname: bytes} and return base64."""
+        import base64
+        import io
+        import zipfile
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name, blob in members.items():
+                zf.writestr(name, blob)
+        return base64.b64encode(buf.getvalue()).decode()
+
+    @pytest.mark.asyncio
+    async def test_ingest_extracts_zip_bundle_and_lists_extracted_files(
+        self, ingest_client: TestClient, mock_cog: MagicMock, tmp_path
+    ) -> None:
+        zip_b64 = self._make_zip({"a.txt": b"alpha", "docs/b.md": b"# beta"})
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "See bundle",
+                "attachments": [{"filename": "bundle.zip", "data": zip_b64}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+
+        # Zip is expanded on disk; its members exist with correct bytes.
+        a = list(tmp_path.glob("ingest/*/**/a.txt"))
+        b = list(tmp_path.glob("ingest/*/**/b.md"))
+        assert len(a) == 1 and a[0].read_bytes() == b"alpha"
+        assert len(b) == 1 and b[0].read_bytes() == b"# beta"
+
+        # The zip archive itself is removed after extraction.
+        assert not list(tmp_path.glob("ingest/*/bundle.zip"))
+
+        # Prompt references the extracted files (paths only), not the zip name.
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert "a.txt" in prompt
+        assert "b.md" in prompt
+        assert "bundle.zip" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_ingest_zip_extraction_blocks_zip_slip(
+        self, ingest_client: TestClient, tmp_path
+    ) -> None:
+        zip_b64 = self._make_zip({"../../evil.txt": b"pwned", "ok.txt": b"safe"})
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "evil zip",
+                "attachments": [{"filename": "bundle.zip", "data": zip_b64}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        # Nothing escapes the ingest dir.
+        assert not list(tmp_path.glob("**/evil.txt"))
+
 
 class TestIngestResult:
     """Tests for /api/ingest result capture + GET /api/ingest/{result_id}."""
