@@ -27,6 +27,8 @@ BACKEND_GLOBAL = "backend.global"
 BACKEND_THREAD_PREFIX = "backend.thread."  # + thread_id
 MODEL_GLOBAL_PREFIX = "model.global."  # + backend
 MODEL_THREAD_PREFIX = "model.thread."  # + thread_id + "." + backend
+EFFORT_GLOBAL_PREFIX = "effort.global."  # + backend
+EFFORT_THREAD_PREFIX = "effort.thread."  # + thread_id + "." + backend
 
 
 class BackendSettings:
@@ -96,6 +98,22 @@ class BackendSettings:
             return v
         return self._env_model.get(backend) or None
 
+    async def current_effort(self, backend: str, thread_id: int | None = None) -> str | None:
+        """Return the reasoning-effort override for ``backend``, or None.
+
+        ``None`` means "no override stored" — the caller should let the
+        backend CLI use its own default (e.g. Codex's ``model_reasoning_effort``
+        in config.toml). Resolution: thread > global > None.
+        """
+        if backend not in ALL_BACKENDS:
+            return None
+        if thread_id is not None:
+            v = await self.repo.get(f"{EFFORT_THREAD_PREFIX}{thread_id}.{backend}")
+            if v:
+                return v
+        v = await self.repo.get(f"{EFFORT_GLOBAL_PREFIX}{backend}")
+        return v if v else None
+
     # ── Mutation ────────────────────────────────────────────
 
     async def set_backend(self, backend: str, *, thread_id: int | None = None) -> None:
@@ -120,6 +138,26 @@ class BackendSettings:
             await self.repo.set(f"{MODEL_GLOBAL_PREFIX}{backend}", model)
             logger.info("model set: global backend=%s -> %s", backend, model)
 
+    async def set_effort(self, backend: str, effort: str, *, thread_id: int | None = None) -> None:
+        if backend not in ALL_BACKENDS:
+            raise ValueError(f"unknown backend {backend!r}")
+        if not effort:
+            raise ValueError("effort must not be empty")
+        if thread_id is not None:
+            await self.repo.set(f"{EFFORT_THREAD_PREFIX}{thread_id}.{backend}", effort)
+            logger.info("effort set: thread=%d backend=%s -> %s", thread_id, backend, effort)
+        else:
+            await self.repo.set(f"{EFFORT_GLOBAL_PREFIX}{backend}", effort)
+            logger.info("effort set: global backend=%s -> %s", backend, effort)
+
+    async def clear_effort(self, backend: str, *, thread_id: int | None = None) -> bool:
+        """Remove a stored effort override. Returns True if something was deleted."""
+        if backend not in ALL_BACKENDS:
+            raise ValueError(f"unknown backend {backend!r}")
+        if thread_id is not None:
+            return await self.repo.delete(f"{EFFORT_THREAD_PREFIX}{thread_id}.{backend}")
+        return await self.repo.delete(f"{EFFORT_GLOBAL_PREFIX}{backend}")
+
     async def clear_thread_overrides(self, thread_id: int) -> int:
         """Remove all thread-scoped overrides. Returns count deleted."""
         deleted = 0
@@ -127,5 +165,7 @@ class BackendSettings:
             deleted += 1
         for b in ALL_BACKENDS:
             if await self.repo.delete(f"{MODEL_THREAD_PREFIX}{thread_id}.{b}"):
+                deleted += 1
+            if await self.repo.delete(f"{EFFORT_THREAD_PREFIX}{thread_id}.{b}"):
                 deleted += 1
         return deleted

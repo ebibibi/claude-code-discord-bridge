@@ -44,16 +44,22 @@ def load_config() -> dict[str, str]:
         """Read CCDB_* env var with CLAUDE_* fallback."""
         return os.getenv(new) or os.getenv(old, default)
 
+    backend = os.getenv("CCDB_BACKEND", "claude")
+    # Default model is backend-specific: Claude needs an explicit alias
+    # ("sonnet"), but Codex defers to its own config.toml default when left
+    # empty (so we never pin a stale version like gpt-5.4).
+    default_model = "" if backend == "codex" else "sonnet"
+
     return {
         "token": token,
         "channel_id": channel_id,
-        "backend": os.getenv("CCDB_BACKEND", "claude"),
+        "backend": backend,
         "command": _env("CCDB_COMMAND", "CLAUDE_COMMAND", ""),
         # Per-backend explicit command paths. Used by BackendFactory when
         # the user switches backend at runtime via /backend.
         "claude_command": _env("CCDB_CLAUDE_COMMAND", "CLAUDE_COMMAND", ""),
         "codex_command": os.getenv("CCDB_CODEX_COMMAND", ""),
-        "model": _env("CCDB_MODEL", "CLAUDE_MODEL", "sonnet"),
+        "model": _env("CCDB_MODEL", "CLAUDE_MODEL", default_model),
         "permission_mode": _env("CCDB_PERMISSION_MODE", "CLAUDE_PERMISSION_MODE", "acceptEdits"),
         "working_dir": _env("CCDB_WORKING_DIR", "CLAUDE_WORKING_DIR", ""),
         "dangerously_skip_permissions": _env(

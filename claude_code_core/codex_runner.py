@@ -33,6 +33,11 @@ _APPROVAL_MODE_MAP: dict[str, str] = {
     "none": "never",
 }
 
+# Reasoning-effort levels accepted by the Codex CLI / GPT-5.x models. Used to
+# validate the value before it is injected into a `-c model_reasoning_effort=`
+# config override (defence-in-depth against config injection).
+VALID_CODEX_EFFORTS: frozenset[str] = frozenset({"minimal", "low", "medium", "high", "xhigh"})
+
 
 def parse_codex_line(line: str) -> StreamEvent | None:
     """Parse a single Codex JSONL line into a StreamEvent."""
@@ -128,7 +133,7 @@ class CodexRunner:
     def __init__(
         self,
         command: str = "codex",
-        model: str = "o4-mini",
+        model: str | None = None,
         permission_mode: str = "default",
         working_dir: str | None = None,
         timeout_seconds: int = 300,
@@ -138,10 +143,18 @@ class CodexRunner:
         api_secret: str | None = None,
         thread_id: int | None = None,
         images: list[ImageData] | None = None,
+        effort: str | None = None,
         **_kwargs: object,
     ) -> None:
         self.command = command
+        # ``model`` is optional: when falsy we omit ``--model`` so the Codex
+        # CLI falls back to its own default (``model`` in ~/.codex/config.toml,
+        # currently gpt-5.5). This keeps ccdb in lock-step with the console
+        # default instead of pinning a version that goes stale.
         self.model = model
+        # ``effort`` maps to Codex's ``model_reasoning_effort`` config value.
+        # None means "defer to the CLI default" (config.toml, currently high).
+        self.effort = effort
         self.permission_mode = permission_mode
         self.working_dir = working_dir
         self.timeout_seconds = timeout_seconds
@@ -196,6 +209,7 @@ class CodexRunner:
         model: str | None = None,
         working_dir: str | None | object = _UNSET,
         thread_id: int | None = None,
+        effort: str | None | object = _UNSET,
         **_kwargs: object,
     ) -> CodexRunner:
         """Create a fresh runner with the same configuration but no active process."""
@@ -213,6 +227,7 @@ class CodexRunner:
             api_secret=self.api_secret,
             thread_id=thread_id if thread_id is not None else self.thread_id,
             images=self.images,
+            effort=self.effort if effort is _UNSET else effort,  # type: ignore[arg-type]
         )
 
     async def interrupt(self) -> None:
@@ -258,7 +273,16 @@ class CodexRunner:
                 raise ValueError(f"Invalid session_id format: {session_id!r}")
             args.append("resume")
 
-        args.extend(["--json", "--model", self.model])
+        args.append("--json")
+        if self.model:
+            args.extend(["--model", self.model])
+        if self.effort:
+            if self.effort not in VALID_CODEX_EFFORTS:
+                raise ValueError(
+                    f"Invalid Codex effort {self.effort!r}; "
+                    f"choose one of {', '.join(sorted(VALID_CODEX_EFFORTS))}"
+                )
+            args.extend(["-c", f"model_reasoning_effort={self.effort}"])
 
         if self.dangerously_skip_permissions:
             args.append("--dangerously-bypass-approvals-and-sandbox")

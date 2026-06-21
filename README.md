@@ -168,25 +168,28 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 ccdb 3.0 introduces two slash commands that change which AI handles the next session, with no bot restart:
 
 - `/backend [name] [scope]` — show or switch backend. `name` is `claude` or `codex`. `scope` is `thread` (this thread only) or `global` (server-wide default). When you omit `scope`, the command auto-resolves: in a thread it scopes to that thread, otherwise it sets the global default.
-- `/model [name] [scope]` — show or switch the model used by the **current** backend. Each backend remembers its own model preference, so flipping backend back and forth keeps your favoured models intact.
+- `/model [name] [scope]` — show or switch the model used by the **current** backend. Each backend remembers its own model preference, so flipping backend back and forth keeps your favoured models intact. Leave a backend's model unset to defer to that CLI's own default (e.g. Codex uses the `model` in `~/.codex/config.toml`, so ccdb tracks the console default instead of pinning a version).
+- `/effort [level] [scope]` — show or switch the **reasoning effort** used by the current backend. Valid levels are backend-specific: Claude accepts `low/medium/high/max`; Codex accepts `minimal/low/medium/high/xhigh` (mapped to the CLI's `model_reasoning_effort`). Leave it unset to defer to the CLI default.
 
-Both commands persist to SQLite via `SettingsRepository`, so the choice survives bot restarts. Calling `/backend` with no arguments prints the current global default plus any thread override.
+All three commands persist to SQLite via `SettingsRepository`, so the choice survives bot restarts. Calling them with no arguments prints the current global default plus any thread override.
 
 Visual cues so you never forget which one you're talking to:
 
 - **Claude sessions** open with a blurple embed titled "🤖 Claude Code session started".
 - **Codex sessions** open with an OpenAI-teal embed titled "🌀 OpenAI Codex session started".
-- The completion embed prepends a `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.4` chip alongside the usual duration / cost / token / context metrics.
+- The completion embed prepends a `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.5` chip alongside the usual duration / cost / token / context metrics. (When a backend's model is left at the CLI default, the chip shows just the backend name.)
 
 Concrete example:
 
 ```text
 /backend codex                        # global → codex (next new sessions use codex)
 /model gpt-5-codex                    # global → codex uses gpt-5-codex
+/effort xhigh                          # global → codex reasons at xhigh effort
                                        # …open a thread, send a message…
 /backend claude scope:thread          # this thread only → switch back to claude
 /model opus scope:thread              # this thread only → claude/opus
-                                       # other threads keep the global codex+gpt-5-codex default
+/effort max scope:thread              # this thread only → claude reasons at max
+                                       # other threads keep the global codex defaults
 ```
 
 Behind the scenes:

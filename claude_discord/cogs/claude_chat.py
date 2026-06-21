@@ -77,6 +77,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "model-set": "🤖 Model",
     "model": "🤖 Model",
     "backend": "🤖 Model",
+    "effort": "⚡ Effort",
     "effort-show": "⚡ Effort",
     "effort-set": "⚡ Effort",
     "effort-clear": "⚡ Effort",
@@ -333,13 +334,23 @@ class ClaudeChatCog(commands.Cog):
 
         # Apply per-call overrides that the factory does not know about.
         # Both ClaudeRunner and CodexRunner allow attribute assignment for
-        # these fields; effort/fork are Claude-specific and gated by hasattr.
+        # these fields; effort/fork are gated by hasattr.
         if tools_override is not None:
             runner.allowed_tools = tools_override
         if working_dir_override is not None:
             runner.working_dir = working_dir_override
-        if effort_override is not None and hasattr(runner, "effort"):
-            runner.effort = effort_override  # type: ignore[attr-defined]
+
+        # Effort resolution is per-backend:
+        #   1. BackendSettings effort for THIS backend (thread > global) — set
+        #      via the backend-aware /effort command. Works for both backends.
+        #   2. Legacy /effort-set value (``effort_override``) — Claude only;
+        #      Codex effort levels differ ("max" is not a Codex level).
+        effective_effort = await self._backend_settings.current_effort(backend, thread_id)
+        if effective_effort is None and backend == "claude":
+            effective_effort = effort_override
+        if effective_effort is not None and hasattr(runner, "effort"):
+            runner.effort = effective_effort  # type: ignore[attr-defined]
+
         if fork_session and hasattr(runner, "fork_session"):
             runner.fork_session = True  # type: ignore[attr-defined]
 
