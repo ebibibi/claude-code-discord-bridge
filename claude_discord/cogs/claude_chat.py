@@ -75,6 +75,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "sync-settings": "📌 Session",
     "model": "🤖 Model",
     "backend": "🤖 Model",
+    "engine-status": "🤖 Model",
     "effort": "⚡ Effort",
     "tools-show": "🔧 Advanced",
     "tools-set": "🔧 Advanced",
@@ -1119,6 +1120,10 @@ class ClaudeChatCog(commands.Cog):
                     chat_only=chat_only,
                     notify_user_id=user_message.author.id,
                     result_sink=result_sink,
+                    backend_settings=self._backend_settings,
+                    codex_command=(
+                        self._factory.codex_command if self._factory is not None else "codex"
+                    ),
                 )
             )
         finally:
