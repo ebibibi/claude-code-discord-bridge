@@ -125,3 +125,57 @@ class TestMutationValidation:
         )
         with pytest.raises(ValueError):
             await s.set_model("claude", "")
+
+
+class TestEffort:
+    async def _settings(self) -> BackendSettings:
+        repo, _ = await _new_repo()
+        return BackendSettings(
+            repo,
+            env_backend="claude",
+            env_model_for_claude="sonnet",
+            env_model_for_codex="",
+        )
+
+    async def test_no_override_returns_none(self) -> None:
+        s = await self._settings()
+        assert await s.current_effort("codex") is None
+        assert await s.current_effort("claude") is None
+
+    async def test_global_set_and_read(self) -> None:
+        s = await self._settings()
+        await s.set_effort("codex", "high")
+        assert await s.current_effort("codex") == "high"
+        # Effort is per-backend: setting codex must not affect claude.
+        assert await s.current_effort("claude") is None
+
+    async def test_thread_overrides_global(self) -> None:
+        s = await self._settings()
+        await s.set_effort("codex", "low")
+        await s.set_effort("codex", "xhigh", thread_id=42)
+        assert await s.current_effort("codex") == "low"
+        assert await s.current_effort("codex", thread_id=42) == "xhigh"
+
+    async def test_clear_effort(self) -> None:
+        s = await self._settings()
+        await s.set_effort("codex", "high")
+        assert await s.clear_effort("codex") is True
+        assert await s.current_effort("codex") is None
+
+    async def test_clear_thread_overrides_includes_effort(self) -> None:
+        s = await self._settings()
+        await s.set_backend("codex", thread_id=7)
+        await s.set_effort("codex", "high", thread_id=7)
+        deleted = await s.clear_thread_overrides(7)
+        assert deleted == 2  # backend + effort
+        assert await s.current_effort("codex", thread_id=7) is None
+
+    async def test_set_effort_rejects_empty(self) -> None:
+        s = await self._settings()
+        with pytest.raises(ValueError):
+            await s.set_effort("codex", "")
+
+    async def test_set_effort_rejects_unknown_backend(self) -> None:
+        s = await self._settings()
+        with pytest.raises(ValueError):
+            await s.set_effort("gpt4", "high")  # type: ignore[arg-type]

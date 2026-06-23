@@ -20,6 +20,8 @@ from discord import app_commands
 from discord.app_commands import Choice
 from discord.ext import commands
 
+from claude_code_core.codex_runner import VALID_CODEX_EFFORTS
+
 from ..backend_settings import ALL_BACKENDS, BackendSettings
 
 if TYPE_CHECKING:
@@ -31,6 +33,46 @@ logger = logging.getLogger(__name__)
 
 SCOPE_THREAD = "thread"
 SCOPE_GLOBAL = "global"
+
+# Valid reasoning-effort levels per backend. Codex and Claude do not share the
+# same set (Claude has "max"; Codex has "minimal"/"xhigh"), so /effort validates
+# against the level set of whichever backend is currently active.
+VALID_EFFORTS: dict[str, frozenset[str]] = {
+    "claude": frozenset({"low", "medium", "high", "max"}),
+    "codex": VALID_CODEX_EFFORTS,
+}
+
+# Ordered effort levels per backend for the /effort autocomplete (frozensets are
+# unordered; surfacing them low→high reads naturally in the Discord dropdown).
+EFFORT_ORDER: dict[str, list[str]] = {
+    "claude": ["low", "medium", "high", "max"],
+    "codex": ["minimal", "low", "medium", "high", "xhigh"],
+}
+
+# Suggested model ids per backend for the /model autocomplete. The model field is
+# free-text — any id the backend CLI accepts is allowed — so these are only
+# convenience suggestions surfaced in the dropdown, not an enforced allowlist.
+# Codex model defaults live in ~/.codex/config.toml; ccdb never pins one, so the
+# Codex suggestions are common ids only (typing any other id still works).
+SUGGESTED_MODELS: dict[str, list[tuple[str, str]]] = {
+    "claude": [
+        ("haiku", "Haiku 4.5 (fast, cost-effective)"),
+        ("sonnet", "Sonnet 4.6 (balanced)"),
+        ("opus", "Opus 4.8 (powerful, deep reasoning)"),
+        ("fable", "Fable 5 (state-of-the-art, token-efficient)"),
+    ],
+    "codex": [
+        ("gpt-5.5", "GPT-5.5 (current Codex console default)"),
+        ("gpt-5.5-codex", "GPT-5.5 Codex"),
+        ("gpt-5.4", "GPT-5.4 (previous default)"),
+        ("o4-mini", "o4-mini (fast)"),
+    ],
+}
+
+
+def _model_label(model: str | None) -> str:
+    """Human-readable model label; ``None`` means the backend CLI's own default."""
+    return f"`{model}`" if model else "_(CLI default)_"
 
 
 class BackendCommandCog(commands.Cog):
@@ -193,6 +235,31 @@ class BackendCommandCog(commands.Cog):
 
     # ── /model ─────────────────────────────────────────────────────
 
+    async def _backend_for_autocomplete(self, interaction: discord.Interaction) -> str:
+        """Resolve the backend whose suggestions an autocomplete should show.
+
+        Mirrors the command's default scope resolution: in a thread, the thread's
+        backend; otherwise the global backend.
+        """
+        thread_id = self._thread_id_or_none(interaction)
+        return await self._settings.current_backend(thread_id)
+
+    async def _model_name_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[Choice[str]]:
+        """Suggest models for the active backend, filtered by what's typed."""
+        backend = await self._backend_for_autocomplete(interaction)
+        current_lower = current.lower()
+        choices: list[Choice[str]] = []
+        for value, desc in SUGGESTED_MODELS.get(backend, []):
+            if current_lower and current_lower not in value.lower():
+                continue
+            label = f"{value} — {desc}"
+            choices.append(Choice(name=label[:100], value=value))
+        return choices[:25]
+
     @app_commands.command(
         name="model",
         description="Show or switch the model for the current backend",
@@ -203,6 +270,7 @@ class BackendCommandCog(commands.Cog):
             Choice(name="global", value=SCOPE_GLOBAL),
         ],
     )
+    @app_commands.autocomplete(name=_model_name_autocomplete)
     @app_commands.describe(
         name="Model id (e.g. sonnet, opus, gpt-5.4, o4-mini). Omit to show current.",
         scope=(
@@ -235,12 +303,14 @@ class BackendCommandCog(commands.Cog):
                 backend_for_global, None
             ) or self._factory.default_model_for(backend_for_global)
             lines: list[str] = [
-                f"\U0001f9e0 **Global model**: `{current_g}` (for `{backend_for_global}`)",
+                f"\U0001f9e0 **Global model**: {_model_label(current_g)} "
+                f"(for `{backend_for_global}`)",
             ]
             if thread_id_now is not None:
                 resolved_t = current_t or self._factory.default_model_for(backend_for_thread)
                 lines.append(
-                    f"\U0001f9f5 **This thread**: `{resolved_t}` (for `{backend_for_thread}`)"
+                    f"\U0001f9f5 **This thread**: {_model_label(resolved_t)} "
+                    f"(for `{backend_for_thread}`)"
                 )
             await interaction.response.send_message("\n".join(lines), ephemeral=True)
             return
@@ -280,3 +350,106 @@ class BackendCommandCog(commands.Cog):
             f"{scope_label}. Next session will use it.",
             ephemeral=False,
         )
+
+    # ── /effort ────────────────────────────────────────────────────
+
+    async def _effort_level_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[Choice[str]]:
+        """Suggest effort levels valid for the active backend, low→high."""
+        backend = await self._backend_for_autocomplete(interaction)
+        current_lower = current.lower()
+        levels = EFFORT_ORDER.get(backend, sorted(VALID_EFFORTS.get(backend, frozenset())))
+        return [
+            Choice(name=level, value=level)
+            for level in levels
+            if not current_lower or current_lower in level.lower()
+        ][:25]
+
+    @app_commands.command(
+        name="effort",
+        description="Show or set the reasoning effort for the current backend",
+    )
+    @app_commands.choices(
+        scope=[
+            Choice(name="thread", value=SCOPE_THREAD),
+            Choice(name="global", value=SCOPE_GLOBAL),
+        ],
+    )
+    @app_commands.autocomplete(level=_effort_level_autocomplete)
+    @app_commands.describe(
+        level=(
+            "Effort level. Claude: low/medium/high/max. "
+            "Codex: minimal/low/medium/high/xhigh. Omit to show current."
+        ),
+        scope=(
+            "thread: only this thread; global: server-wide. "
+            "Default: thread when in thread, else global."
+        ),
+    )
+    async def effort_command(
+        self,
+        interaction: discord.Interaction,
+        level: str | None = None,
+        scope: str | None = None,
+    ) -> None:
+        thread_id_now = self._thread_id_or_none(interaction)
+
+        # Show current
+        if level is None:
+            backend_for_global = await self._settings.current_backend(None)
+            current_g = await self._settings.current_effort(backend_for_global, None)
+            lines: list[str] = [
+                f"⚡ **Global effort**: {self._effort_label(current_g)} "
+                f"(for `{backend_for_global}`)",
+            ]
+            if thread_id_now is not None:
+                backend_for_thread = await self._settings.current_backend(thread_id_now)
+                current_t = await self._settings.current_effort(backend_for_thread, thread_id_now)
+                lines.append(
+                    f"\U0001f9f5 **This thread**: {self._effort_label(current_t)} "
+                    f"(for `{backend_for_thread}`)"
+                )
+            await interaction.response.send_message("\n".join(lines), ephemeral=True)
+            return
+
+        resolved_scope, target_thread_id = self._resolve_scope(interaction, scope)
+        if resolved_scope == SCOPE_THREAD and target_thread_id is None:
+            await interaction.response.send_message(
+                "`scope:thread` requires the command to be run inside a thread.",
+                ephemeral=True,
+            )
+            return
+
+        backend_for_save = await self._settings.current_backend(
+            target_thread_id if resolved_scope == SCOPE_THREAD else None
+        )
+        valid = VALID_EFFORTS.get(backend_for_save, frozenset())
+        normalized = level.strip().lower()
+        if normalized not in valid:
+            await interaction.response.send_message(
+                f"❌ Unknown effort `{level}` for `{backend_for_save}`. "
+                f"Choose: {', '.join(sorted(valid))}.",
+                ephemeral=True,
+            )
+            return
+
+        await self._settings.set_effort(backend_for_save, normalized, thread_id=target_thread_id)
+
+        scope_label = (
+            f"<#{target_thread_id}>"
+            if resolved_scope == SCOPE_THREAD and target_thread_id is not None
+            else "**globally**"
+        )
+        await interaction.response.send_message(
+            f"⚡ Effort set to `{normalized}` for `{backend_for_save}` "
+            f"{scope_label}. Next session will use it.",
+            ephemeral=False,
+        )
+
+    @staticmethod
+    def _effort_label(effort: str | None) -> str:
+        """Human-readable effort label; ``None`` means the backend CLI's default."""
+        return f"`{effort}`" if effort else "_(CLI default)_"

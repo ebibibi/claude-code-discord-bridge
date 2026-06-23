@@ -63,6 +63,36 @@ class TestCodexRunnerBuildArgs:
         with pytest.raises(ValueError, match="Invalid session_id"):
             runner._build_args("hello", session_id="'; DROP TABLE --")
 
+    def test_no_model_omits_model_flag(self) -> None:
+        # model=None (the new default) means: defer to the Codex CLI's own
+        # config.toml default — never pass --model.
+        runner = CodexRunner(command="codex")
+        assert runner.model is None
+        args = runner._build_args("hello", session_id=None)
+        assert "--model" not in args
+        assert "-m" not in args
+
+    def test_empty_model_omits_model_flag(self) -> None:
+        runner = CodexRunner(command="codex", model="")
+        args = runner._build_args("hello", session_id=None)
+        assert "--model" not in args
+
+    def test_effort_injects_reasoning_config(self) -> None:
+        runner = CodexRunner(command="codex", model="gpt-5.5", effort="high")
+        args = runner._build_args("hello", session_id=None)
+        assert "-c" in args
+        assert "model_reasoning_effort=high" in args
+
+    def test_no_effort_omits_reasoning_config(self) -> None:
+        runner = CodexRunner(command="codex", model="gpt-5.5")
+        args = runner._build_args("hello", session_id=None)
+        assert not any(a.startswith("model_reasoning_effort=") for a in args)
+
+    def test_invalid_effort_raises(self) -> None:
+        runner = CodexRunner(command="codex", model="gpt-5.5", effort="bogus")
+        with pytest.raises(ValueError, match="Invalid Codex effort"):
+            runner._build_args("hello", session_id=None)
+
 
 class TestCodexRunnerClone:
     """Tests for clone() — creating a new runner with overrides."""
@@ -88,6 +118,16 @@ class TestCodexRunnerClone:
         runner = CodexRunner(command="codex", model="o4-mini")
         cloned = runner.clone(model="gpt-5.4")
         assert type(cloned) is CodexRunner
+
+    def test_clone_preserves_effort(self) -> None:
+        runner = CodexRunner(command="codex", model="gpt-5.5", effort="xhigh")
+        cloned = runner.clone()
+        assert cloned.effort == "xhigh"
+
+    def test_clone_overrides_effort(self) -> None:
+        runner = CodexRunner(command="codex", model="gpt-5.5", effort="high")
+        cloned = runner.clone(effort="low")
+        assert cloned.effort == "low"
 
 
 class TestParseCodexLine:

@@ -49,14 +49,16 @@ class SessionBackend(Protocol):
 def create_backend(
     *,
     backend: str = "claude",
-    model: str,
+    model: str | None = None,
     **kwargs: object,
 ) -> SessionBackend:
     """Create a backend runner by name.
 
     Args:
         backend: "claude" or "codex".
-        model: Model identifier (e.g. "sonnet", "o4-mini").
+        model: Model identifier (e.g. "sonnet", "o4-mini"). ``None`` lets the
+            backend pick its own default — Codex omits ``--model`` and defers
+            to its CLI config.
         **kwargs: Forwarded to the runner constructor.
     """
     if backend == "claude":

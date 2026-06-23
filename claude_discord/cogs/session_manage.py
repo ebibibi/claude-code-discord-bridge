@@ -55,25 +55,16 @@ _DEFAULT_SINCE_HOURS = 24
 SETTING_SYNC_MIN_RESULTS = "sync_min_results"
 _DEFAULT_MIN_RESULTS = 10
 
-# Model management
+# Legacy model/effort setting keys.
+#
+# The user-facing ``/model-set`` / ``/effort-set`` commands were removed in
+# favour of the backend-aware ``/model`` and ``/effort`` commands (see
+# ``cogs/backend_command.py``). These two keys are retained **read-only** as a
+# backward-compatibility fallback: installs that stored a value under the old
+# commands still have it honoured at spawn time by ``ClaudeChatCog`` (Claude
+# backend only). Nothing writes them any more.
 SETTING_CLAUDE_MODEL = "claude_model"
-_VALID_MODELS = {"haiku", "sonnet", "opus", "fable"}
-_MODEL_CHOICES = [
-    app_commands.Choice(name="Haiku 4.5 (fast, cost-effective)", value="haiku"),
-    app_commands.Choice(name="Sonnet 4.6 (balanced, default)", value="sonnet"),
-    app_commands.Choice(name="Opus 4.8 (powerful, deep reasoning)", value="opus"),
-    app_commands.Choice(name="Fable 5 (state-of-the-art, token-efficient)", value="fable"),
-]
-
-# Effort level management
 SETTING_CLAUDE_EFFORT = "claude_effort"
-_VALID_EFFORTS = {"low", "medium", "high", "max"}
-_EFFORT_CHOICES = [
-    app_commands.Choice(name="Low (fast, minimal reasoning)", value="low"),
-    app_commands.Choice(name="Medium (balanced)", value="medium"),
-    app_commands.Choice(name="High (thorough, default)", value="high"),
-    app_commands.Choice(name="Max (maximum reasoning)", value="max"),
-]
 
 # Tool permission management
 SETTING_ALLOWED_TOOLS = "allowed_tools"
@@ -169,186 +160,12 @@ class SessionManageCog(commands.Cog):
             return getattr(chat_cog, "runner", None)
         return None
 
-    async def _get_effective_model(self) -> str:
-        """Return the effective model: settings_repo override or runner default."""
-        if self.settings_repo is not None:
-            stored = await self.settings_repo.get(SETTING_CLAUDE_MODEL)
-            if stored:
-                return stored
-        runner = self._get_runner()
-        if runner is not None and hasattr(runner, "model"):
-            return runner.model  # type: ignore[return-value]
-        return "sonnet"
-
-    # ── Model commands ────────────────────────────────────────────────────────
-
-    @app_commands.command(name="model-show", description="Show the current Claude model")
-    async def model_show(self, interaction: discord.Interaction) -> None:
-        """Display the current global model and, if in a thread, the per-session model."""
-        effective_model = await self._get_effective_model()
-
-        embed = discord.Embed(
-            title="🤖 Current Claude Model",
-            color=COLOR_INFO,
-        )
-
-        # Global / default model field
-        stored = await self.settings_repo.get(SETTING_CLAUDE_MODEL) if self.settings_repo else None
-        runner = self._get_runner()
-        runner_model = getattr(runner, "model", "sonnet") if runner else "sonnet"
-        if stored:
-            embed.description = (
-                f"**Global override:** `{stored}`\n*(runner default: `{runner_model}`)*"
-            )
-        else:
-            embed.description = (
-                f"**Default model:** `{runner_model}`\n"
-                "*(no override set — use `/model-set` to change)*"
-            )
-
-        # Per-thread session model (if inside a thread)
-        if isinstance(interaction.channel, discord.Thread):
-            record = await self.repo.get(interaction.channel.id)
-            if record and record.model:
-                embed.add_field(
-                    name="This thread's last session",
-                    value=f"`{record.model}`",
-                    inline=False,
-                )
-
-        embed.set_footer(text=f"Effective model for new sessions: {effective_model}")
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(
-        name="model-set", description="Change the global Claude model for new sessions"
-    )  # noqa: E501
-    @app_commands.describe(model="Model to use for all new Claude sessions")
-    @app_commands.choices(model=_MODEL_CHOICES)
-    async def model_set(self, interaction: discord.Interaction, model: str) -> None:
-        """Set the global default model stored in settings_repo."""
-        if model not in _VALID_MODELS:
-            await interaction.response.send_message(
-                f"❌ Unknown model `{model}`. Valid choices: {', '.join(sorted(_VALID_MODELS))}",
-                ephemeral=True,
-            )
-            return
-
-        if self.settings_repo is None:
-            await interaction.response.send_message(
-                "❌ Settings repository is unavailable — model cannot be persisted.",
-                ephemeral=True,
-            )
-            return
-
-        await self.settings_repo.set(SETTING_CLAUDE_MODEL, model)
-
-        embed = discord.Embed(
-            title="✅ Model Updated",
-            description=f"Global model set to **`{model}`**.\nAll new sessions will use this model.",  # noqa: E501
-            color=COLOR_SUCCESS,
-        )
-        await interaction.response.send_message(embed=embed)
-
-    # ── Effort commands ───────────────────────────────────────────────────────
-
-    async def _get_effective_effort(self) -> str | None:
-        """Return the effective effort: settings_repo override or runner default."""
-        if self.settings_repo is not None:
-            stored = await self.settings_repo.get(SETTING_CLAUDE_EFFORT)
-            if stored:
-                return stored
-        runner = self._get_runner()
-        if runner is not None and hasattr(runner, "effort"):
-            return runner.effort  # type: ignore[return-value]
-        return None
-
-    @app_commands.command(name="effort-show", description="Show the current effort level")
-    async def effort_show(self, interaction: discord.Interaction) -> None:
-        """Display the current global effort level."""
-        effective = await self._get_effective_effort()
-
-        embed = discord.Embed(
-            title="⚡ Current Effort Level",
-            color=COLOR_INFO,
-        )
-
-        stored = await self.settings_repo.get(SETTING_CLAUDE_EFFORT) if self.settings_repo else None
-        runner = self._get_runner()
-        runner_effort = getattr(runner, "effort", None) if runner else None
-
-        if stored:
-            desc = f"**Global override:** `{stored}`"
-            if runner_effort:
-                desc += f"\n*(runner default: `{runner_effort}`)*"
-            embed.description = desc
-        elif runner_effort:
-            embed.description = (
-                f"**Default effort:** `{runner_effort}`\n"
-                "*(no override set — use `/effort-set` to change)*"
-            )
-        else:
-            embed.description = (
-                "**No effort level set** (CLI default)\n*(use `/effort-set` to change)*"
-            )
-
-        embed.set_footer(
-            text=f"Effective effort for new sessions: {effective or 'not set (CLI default)'}"
-        )
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(
-        name="effort-set", description="Change the global effort level for new sessions"
-    )
-    @app_commands.describe(effort="Effort level for all new Claude sessions")
-    @app_commands.choices(effort=_EFFORT_CHOICES)
-    async def effort_set(self, interaction: discord.Interaction, effort: str) -> None:
-        """Set the global default effort level stored in settings_repo."""
-        if effort not in _VALID_EFFORTS:
-            await interaction.response.send_message(
-                f"❌ Unknown effort `{effort}`. Valid choices: {', '.join(sorted(_VALID_EFFORTS))}",
-                ephemeral=True,
-            )
-            return
-
-        if self.settings_repo is None:
-            await interaction.response.send_message(
-                "❌ Settings repository is unavailable — effort cannot be persisted.",
-                ephemeral=True,
-            )
-            return
-
-        await self.settings_repo.set(SETTING_CLAUDE_EFFORT, effort)
-
-        embed = discord.Embed(
-            title="✅ Effort Updated",
-            description=(
-                f"Global effort set to **`{effort}`**.\n"
-                "All new sessions will use this effort level."
-            ),
-            color=COLOR_SUCCESS,
-        )
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(
-        name="effort-clear", description="Clear the effort override (use CLI default)"
-    )
-    async def effort_clear(self, interaction: discord.Interaction) -> None:
-        """Remove the effort override so CLI default is used."""
-        if self.settings_repo is None:
-            await interaction.response.send_message(
-                "❌ Settings repository is unavailable.",
-                ephemeral=True,
-            )
-            return
-
-        await self.settings_repo.delete(SETTING_CLAUDE_EFFORT)
-
-        embed = discord.Embed(
-            title="✅ Effort Cleared",
-            description="Effort override removed. New sessions will use the CLI default.",
-            color=COLOR_SUCCESS,
-        )
-        await interaction.response.send_message(embed=embed)
+    # Note: the legacy Claude-only ``/model-show`` / ``/model-set`` /
+    # ``/effort-show`` / ``/effort-set`` / ``/effort-clear`` commands were
+    # removed here in favour of the backend-aware ``/model`` and ``/effort``
+    # commands in ``cogs/backend_command.py`` (which autocomplete per active
+    # backend). The ``SETTING_CLAUDE_MODEL`` / ``SETTING_CLAUDE_EFFORT`` keys are
+    # retained read-only for backward compatibility (see their definitions).
 
     # ── Tool permission commands ──────────────────────────────────────────────
 
