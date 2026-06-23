@@ -1,204 +1,163 @@
-"""Tests for /model command group in SessionManageCog.
+"""Tests for backend-aware autocomplete on /model and /effort.
 
-TDD: Write tests first, then implement.
-
-Commands:
-- /model show  — display current global model (+ per-thread model if in thread)
-- /model set   — update global default model in settings_repo
+The old Claude-only ``/model-set`` / ``/effort-set`` commands (which hardcoded
+Claude model choices) were removed in favour of the backend-aware ``/model`` and
+``/effort`` commands. Those take free-text values; this module verifies the
+autocomplete surfaces the *active backend's* suggestions so Codex users see
+Codex models/efforts, not Claude ones.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import tempfile
+from pathlib import Path
+from unittest.mock import MagicMock
 
+import aiosqlite
 import discord
-import pytest
 
-from claude_discord.cogs.session_manage import (
-    SETTING_CLAUDE_MODEL,
-    SessionManageCog,
+from claude_discord.backend_factory import BackendFactory
+from claude_discord.backend_settings import BackendSettings
+from claude_discord.cogs.backend_command import (
+    SUGGESTED_MODELS,
+    VALID_EFFORTS,
+    BackendCommandCog,
 )
-from claude_discord.database.repository import SessionRecord
+from claude_discord.database.settings_repo import SettingsRepository
 
 
-def _make_record(
-    thread_id: int = 100,
-    session_id: str = "abc-123",
-    model: str | None = "sonnet",
-) -> SessionRecord:
-    return SessionRecord(
-        thread_id=thread_id,
-        session_id=session_id,
-        working_dir="/home/user",
-        model=model,
-        origin="discord",
-        summary=None,
-        created_at="2026-02-22 10:00:00",
-        last_used_at="2026-02-22 11:00:00",
+async def _new_settings_repo() -> SettingsRepository:
+    tmp = Path(tempfile.mkdtemp()) / "settings.db"
+    async with aiosqlite.connect(str(tmp)) as db:
+        await db.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        await db.commit()
+    return SettingsRepository(str(tmp))
+
+
+def _make_cog(settings: BackendSettings) -> BackendCommandCog:
+    factory = BackendFactory(
+        claude_command="claude",
+        codex_command="codex",
+        permission_mode="acceptEdits",
+        working_dir=None,
+        timeout_seconds=300,
+        dangerously_skip_permissions=False,
+        allowed_tools=None,
+        append_system_prompt=None,
+        effort=None,
     )
+    chat_cog = MagicMock()
+    chat_cog.runner = MagicMock()
+    return BackendCommandCog(MagicMock(), settings=settings, factory=factory, chat_cog=chat_cog)
 
 
-def _make_thread_interaction(thread_id: int = 12345) -> MagicMock:
-    interaction = MagicMock(spec=discord.Interaction)
+def _thread_interaction(thread_id: int) -> MagicMock:
+    interaction = MagicMock()
     thread = MagicMock(spec=discord.Thread)
     thread.id = thread_id
     interaction.channel = thread
-    interaction.response = MagicMock()
-    interaction.response.send_message = AsyncMock()
     return interaction
 
 
-def _make_channel_interaction() -> MagicMock:
-    interaction = MagicMock(spec=discord.Interaction)
-    interaction.channel = MagicMock(spec=discord.TextChannel)
-    interaction.response = MagicMock()
-    interaction.response.send_message = AsyncMock()
+def _channel_interaction() -> MagicMock:
+    interaction = MagicMock()
+    interaction.channel = MagicMock()  # not a discord.Thread
     return interaction
 
 
-def _make_cog(
-    default_model: str = "sonnet",
-    settings_model: str | None = None,
-) -> SessionManageCog:
-    from claude_discord.cogs.session_manage import SessionManageCog
-
-    bot = MagicMock()
-    bot.channel_id = 999
-
-    repo = MagicMock()
-    repo.get = AsyncMock(return_value=None)
-    repo.list_all = AsyncMock(return_value=[])
-
-    settings_repo = MagicMock()
-    settings_repo.get = AsyncMock(return_value=settings_model)
-    settings_repo.set = AsyncMock()
-
-    runner = MagicMock()
-    runner.model = default_model
-
-    return SessionManageCog(
-        bot=bot,
-        repo=repo,
-        settings_repo=settings_repo,
-        runner=runner,
+async def _settings() -> BackendSettings:
+    repo = await _new_settings_repo()
+    return BackendSettings(
+        repo,
+        env_backend="claude",
+        env_model_for_claude="sonnet",
+        env_model_for_codex="",
     )
 
 
-class TestModelShow:
-    async def test_show_global_model_in_channel(self):
-        """In a channel (not thread), show the global model."""
-        cog = _make_cog(default_model="sonnet", settings_model=None)
-        interaction = _make_channel_interaction()
-        await cog.model_show.callback(cog, interaction)
-        call_args = interaction.response.send_message.call_args
-        embed = call_args.kwargs.get("embed")
-        assert embed is not None
-        # Global model should appear in the embed
-        assert "sonnet" in embed.description.lower() or any(
-            "sonnet" in str(f.value).lower() for f in embed.fields
-        )
+class TestModelAutocomplete:
+    async def test_claude_backend_suggests_claude_models(self) -> None:
+        settings = await _settings()  # default backend claude
+        cog = _make_cog(settings)
+        interaction = _channel_interaction()
 
-    async def test_show_settings_model_overrides_runner(self):
-        """settings_repo model takes precedence over runner.model."""
-        cog = _make_cog(default_model="sonnet", settings_model="opus")
-        interaction = _make_channel_interaction()
-        await cog.model_show.callback(cog, interaction)
-        call_args = interaction.response.send_message.call_args
-        embed = call_args.kwargs.get("embed")
-        assert embed is not None
-        text = embed.description + " ".join(str(f.value) for f in embed.fields)
-        assert "opus" in text.lower()
+        choices = await cog._model_name_autocomplete(interaction, "")
 
-    async def test_show_thread_model_from_session(self):
-        """In a thread with a session, also show the per-thread model."""
-        cog = _make_cog(default_model="sonnet", settings_model=None)
-        record = _make_record(thread_id=12345, model="haiku")
-        cog.repo.get = AsyncMock(return_value=record)
+        values = {c.value for c in choices}
+        assert {"haiku", "sonnet", "opus", "fable"} <= values
+        # No Codex models leaked in.
+        assert not any(v.startswith("gpt-") for v in values)
 
-        interaction = _make_thread_interaction(thread_id=12345)
-        await cog.model_show.callback(cog, interaction)
-        call_args = interaction.response.send_message.call_args
-        embed = call_args.kwargs.get("embed")
-        assert embed is not None
-        text = embed.description + " ".join(str(f.value) for f in embed.fields)
-        assert "haiku" in text.lower()
+    async def test_codex_backend_suggests_codex_models(self) -> None:
+        settings = await _settings()
+        await settings.set_backend("codex")
+        cog = _make_cog(settings)
+        interaction = _channel_interaction()
 
-    async def test_show_no_session_in_thread(self):
-        """In a thread with no session, only show global model."""
-        cog = _make_cog(default_model="sonnet", settings_model=None)
-        cog.repo.get = AsyncMock(return_value=None)
+        choices = await cog._model_name_autocomplete(interaction, "")
 
-        interaction = _make_thread_interaction(thread_id=12345)
-        await cog.model_show.callback(cog, interaction)
-        # Should succeed without error
-        assert interaction.response.send_message.called
+        values = {c.value for c in choices}
+        expected = {m for m, _ in SUGGESTED_MODELS["codex"]}
+        assert values == expected
+        # No Claude models leaked in.
+        assert "sonnet" not in values
 
-    async def test_show_no_settings_repo(self):
-        """Graceful fallback when settings_repo is None."""
-        from claude_discord.cogs.session_manage import SessionManageCog
+    async def test_filters_by_current_substring(self) -> None:
+        settings = await _settings()
+        cog = _make_cog(settings)
+        interaction = _channel_interaction()
 
-        bot = MagicMock()
-        repo = MagicMock()
-        repo.get = AsyncMock(return_value=None)
-        runner = MagicMock()
-        runner.model = "sonnet"
+        choices = await cog._model_name_autocomplete(interaction, "op")
 
-        cog = SessionManageCog(bot=bot, repo=repo, runner=runner)
-        interaction = _make_channel_interaction()
-        await cog.model_show.callback(cog, interaction)
-        assert interaction.response.send_message.called
+        assert [c.value for c in choices] == ["opus"]
+
+    async def test_thread_backend_drives_suggestions(self) -> None:
+        settings = await _settings()
+        await settings.set_backend("codex", thread_id=42)
+        cog = _make_cog(settings)
+        interaction = _thread_interaction(42)
+
+        choices = await cog._model_name_autocomplete(interaction, "")
+
+        values = {c.value for c in choices}
+        assert values == {m for m, _ in SUGGESTED_MODELS["codex"]}
+
+    async def test_caps_at_25_choices(self) -> None:
+        settings = await _settings()
+        cog = _make_cog(settings)
+        interaction = _channel_interaction()
+
+        choices = await cog._model_name_autocomplete(interaction, "")
+
+        assert len(choices) <= 25
 
 
-class TestModelSet:
-    async def test_set_valid_model(self):
-        """Setting a valid model stores it in settings_repo."""
-        cog = _make_cog()
-        interaction = _make_channel_interaction()
-        await cog.model_set.callback(cog, interaction, model="opus")
-        cog.settings_repo.set.assert_awaited_once_with(SETTING_CLAUDE_MODEL, "opus")
+class TestEffortAutocomplete:
+    async def test_claude_backend_lists_claude_levels(self) -> None:
+        settings = await _settings()
+        cog = _make_cog(settings)
+        interaction = _channel_interaction()
 
-    async def test_set_model_sends_confirmation(self):
-        """Setting a model sends a confirmation embed."""
-        cog = _make_cog()
-        interaction = _make_channel_interaction()
-        await cog.model_set.callback(cog, interaction, model="haiku")
-        call_args = interaction.response.send_message.call_args
-        embed = call_args.kwargs.get("embed")
-        assert embed is not None
-        assert "haiku" in embed.description.lower() or any(
-            "haiku" in str(f.value).lower() for f in embed.fields
-        )
+        choices = await cog._effort_level_autocomplete(interaction, "")
 
-    async def test_set_invalid_model_rejected(self):
-        """Setting an unsupported model shows an error, does not save."""
-        cog = _make_cog()
-        interaction = _make_channel_interaction()
-        await cog.model_set.callback(cog, interaction, model="gpt-4")
-        # settings_repo.set should NOT be called for invalid models
-        cog.settings_repo.set.assert_not_awaited()
-        call_args = interaction.response.send_message.call_args
-        assert call_args.kwargs.get("ephemeral") is True
+        assert {c.value for c in choices} == set(VALID_EFFORTS["claude"])
 
-    async def test_set_model_no_settings_repo(self):
-        """When settings_repo is None, set sends ephemeral error."""
-        from claude_discord.cogs.session_manage import SessionManageCog
+    async def test_codex_backend_lists_codex_levels(self) -> None:
+        settings = await _settings()
+        await settings.set_backend("codex")
+        cog = _make_cog(settings)
+        interaction = _channel_interaction()
 
-        bot = MagicMock()
-        repo = MagicMock()
-        repo.get = AsyncMock(return_value=None)
-        runner = MagicMock()
-        runner.model = "sonnet"
+        choices = await cog._effort_level_autocomplete(interaction, "")
 
-        cog = SessionManageCog(bot=bot, repo=repo, runner=runner)
-        interaction = _make_channel_interaction()
-        await cog.model_set.callback(cog, interaction, model="opus")
-        call_args = interaction.response.send_message.call_args
-        assert call_args.kwargs.get("ephemeral") is True
+        assert {c.value for c in choices} == set(VALID_EFFORTS["codex"])
 
-    @pytest.mark.parametrize("model", ["haiku", "sonnet", "opus", "fable"])
-    async def test_all_valid_models_accepted(self, model: str):
-        """All documented model names should be accepted."""
-        cog = _make_cog()
-        interaction = _make_channel_interaction()
-        await cog.model_set.callback(cog, interaction, model=model)
-        cog.settings_repo.set.assert_awaited_once_with(SETTING_CLAUDE_MODEL, model)
+    async def test_effort_filters_by_substring(self) -> None:
+        settings = await _settings()
+        await settings.set_backend("codex")
+        cog = _make_cog(settings)
+        interaction = _channel_interaction()
+
+        choices = await cog._effort_level_autocomplete(interaction, "min")
+
+        assert [c.value for c in choices] == ["minimal"]

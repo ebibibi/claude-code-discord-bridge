@@ -42,6 +42,33 @@ VALID_EFFORTS: dict[str, frozenset[str]] = {
     "codex": VALID_CODEX_EFFORTS,
 }
 
+# Ordered effort levels per backend for the /effort autocomplete (frozensets are
+# unordered; surfacing them low→high reads naturally in the Discord dropdown).
+EFFORT_ORDER: dict[str, list[str]] = {
+    "claude": ["low", "medium", "high", "max"],
+    "codex": ["minimal", "low", "medium", "high", "xhigh"],
+}
+
+# Suggested model ids per backend for the /model autocomplete. The model field is
+# free-text — any id the backend CLI accepts is allowed — so these are only
+# convenience suggestions surfaced in the dropdown, not an enforced allowlist.
+# Codex model defaults live in ~/.codex/config.toml; ccdb never pins one, so the
+# Codex suggestions are common ids only (typing any other id still works).
+SUGGESTED_MODELS: dict[str, list[tuple[str, str]]] = {
+    "claude": [
+        ("haiku", "Haiku 4.5 (fast, cost-effective)"),
+        ("sonnet", "Sonnet 4.6 (balanced)"),
+        ("opus", "Opus 4.8 (powerful, deep reasoning)"),
+        ("fable", "Fable 5 (state-of-the-art, token-efficient)"),
+    ],
+    "codex": [
+        ("gpt-5.5", "GPT-5.5 (current Codex console default)"),
+        ("gpt-5.5-codex", "GPT-5.5 Codex"),
+        ("gpt-5.4", "GPT-5.4 (previous default)"),
+        ("o4-mini", "o4-mini (fast)"),
+    ],
+}
+
 
 def _model_label(model: str | None) -> str:
     """Human-readable model label; ``None`` means the backend CLI's own default."""
@@ -208,6 +235,31 @@ class BackendCommandCog(commands.Cog):
 
     # ── /model ─────────────────────────────────────────────────────
 
+    async def _backend_for_autocomplete(self, interaction: discord.Interaction) -> str:
+        """Resolve the backend whose suggestions an autocomplete should show.
+
+        Mirrors the command's default scope resolution: in a thread, the thread's
+        backend; otherwise the global backend.
+        """
+        thread_id = self._thread_id_or_none(interaction)
+        return await self._settings.current_backend(thread_id)
+
+    async def _model_name_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[Choice[str]]:
+        """Suggest models for the active backend, filtered by what's typed."""
+        backend = await self._backend_for_autocomplete(interaction)
+        current_lower = current.lower()
+        choices: list[Choice[str]] = []
+        for value, desc in SUGGESTED_MODELS.get(backend, []):
+            if current_lower and current_lower not in value.lower():
+                continue
+            label = f"{value} — {desc}"
+            choices.append(Choice(name=label[:100], value=value))
+        return choices[:25]
+
     @app_commands.command(
         name="model",
         description="Show or switch the model for the current backend",
@@ -218,6 +270,7 @@ class BackendCommandCog(commands.Cog):
             Choice(name="global", value=SCOPE_GLOBAL),
         ],
     )
+    @app_commands.autocomplete(name=_model_name_autocomplete)
     @app_commands.describe(
         name="Model id (e.g. sonnet, opus, gpt-5.4, o4-mini). Omit to show current.",
         scope=(
@@ -300,6 +353,21 @@ class BackendCommandCog(commands.Cog):
 
     # ── /effort ────────────────────────────────────────────────────
 
+    async def _effort_level_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[Choice[str]]:
+        """Suggest effort levels valid for the active backend, low→high."""
+        backend = await self._backend_for_autocomplete(interaction)
+        current_lower = current.lower()
+        levels = EFFORT_ORDER.get(backend, sorted(VALID_EFFORTS.get(backend, frozenset())))
+        return [
+            Choice(name=level, value=level)
+            for level in levels
+            if not current_lower or current_lower in level.lower()
+        ][:25]
+
     @app_commands.command(
         name="effort",
         description="Show or set the reasoning effort for the current backend",
@@ -310,6 +378,7 @@ class BackendCommandCog(commands.Cog):
             Choice(name="global", value=SCOPE_GLOBAL),
         ],
     )
+    @app_commands.autocomplete(level=_effort_level_autocomplete)
     @app_commands.describe(
         level=(
             "Effort level. Claude: low/medium/high/max. "

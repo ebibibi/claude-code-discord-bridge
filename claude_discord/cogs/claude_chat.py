@@ -73,14 +73,9 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "resume-info": "📌 Session",
     "sync-sessions": "📌 Session",
     "sync-settings": "📌 Session",
-    "model-show": "🤖 Model",
-    "model-set": "🤖 Model",
     "model": "🤖 Model",
     "backend": "🤖 Model",
     "effort": "⚡ Effort",
-    "effort-show": "⚡ Effort",
-    "effort-set": "⚡ Effort",
-    "effort-clear": "⚡ Effort",
     "tools-show": "🔧 Advanced",
     "tools-set": "🔧 Advanced",
     "tools-reset": "🔧 Advanced",
@@ -308,7 +303,8 @@ class ClaudeChatCog(commands.Cog):
         # Model resolution order:
         # 1. Explicit /model command value for THIS backend (thread > global).
         #    Env fallback is NOT considered yet — see step 3.
-        # 2. Legacy /model-set value (passed in as ``model_override``).
+        # 2. Legacy ``claude_model`` setting value (passed in as
+        #    ``model_override``) — left over from the removed /model-set command.
         #    Honoured only when the current backend is claude. Passing a
         #    Claude model id to Codex would cause `codex exec` to fail
         #    with an unknown model error.
@@ -343,7 +339,8 @@ class ClaudeChatCog(commands.Cog):
         # Effort resolution is per-backend:
         #   1. BackendSettings effort for THIS backend (thread > global) — set
         #      via the backend-aware /effort command. Works for both backends.
-        #   2. Legacy /effort-set value (``effort_override``) — Claude only;
+        #   2. Legacy ``claude_effort`` setting value (``effort_override``),
+        #      left over from the removed /effort-set command — Claude only;
         #      Codex effort levels differ ("max" is not a Codex level).
         effective_effort = await self._backend_settings.current_effort(backend, thread_id)
         if effective_effort is None and backend == "claude":
