@@ -208,6 +208,26 @@ class TestParseCodexLine:
         assert event is not None
         assert event.tool_result_content is not None
 
+    def test_command_execution_completion_routes_as_tool_result(self) -> None:
+        """The completion must be a USER event so EventProcessor cancels the
+        live timer via _on_tool_result. If it stays ASSISTANT, the timer runs
+        forever and the embed is stuck on "Running ... Ns elapsed"."""
+        line = json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item_2",
+                    "type": "command_execution",
+                    "command": "ls -la",
+                    "output": "total 42",
+                },
+            }
+        )
+        event = parse_codex_line(line)
+        assert event is not None
+        assert event.message_type == MessageType.USER
+        assert event.tool_result_id == "item_2"
+
     def test_invalid_json_returns_none(self) -> None:
         event = parse_codex_line("not valid json")
         assert event is None
@@ -231,6 +251,40 @@ class TestParseCodexLine:
         assert event is not None
         assert event.tool_use is not None
         assert event.tool_use.tool_name == "Edit"
+
+    def test_file_changes_is_atomic_and_gets_synthetic_completion(self) -> None:
+        """file_changes arrives as a single item.completed with no item.started.
+        It opens a tool embed + live timer, so a synthetic tool result must be
+        paired with it to stop the timer."""
+        from claude_code_core.codex_runner import _atomic_tool_completion
+
+        line = json.dumps(
+            {
+                "type": "item.completed",
+                "item": {"id": "item_3", "type": "file_changes", "text": "Modified main.py"},
+            }
+        )
+        event = parse_codex_line(line)
+        assert event is not None
+        completion = _atomic_tool_completion(event)
+        assert completion is not None
+        assert completion.message_type == MessageType.USER
+        assert completion.tool_result_id == "item_3"
+
+    def test_command_execution_start_is_not_atomic(self) -> None:
+        """A command_execution start has its own completion event, so it must
+        NOT receive a synthetic completion (that would double-cancel)."""
+        from claude_code_core.codex_runner import _atomic_tool_completion
+
+        line = json.dumps(
+            {
+                "type": "item.started",
+                "item": {"id": "item_2", "type": "command_execution", "command": "ls"},
+            }
+        )
+        event = parse_codex_line(line)
+        assert event is not None
+        assert _atomic_tool_completion(event) is None
 
     def test_turn_started(self) -> None:
         line = json.dumps({"type": "turn.started"})
