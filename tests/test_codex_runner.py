@@ -215,9 +215,10 @@ class TestCodexRunnerArgvStructure:
         codex exec [OPTIONS] [PROMPT]
         codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
 
-    Both subcommands accept ``--json``, ``--model``, ``--ask-for-approval``,
-    ``--dangerously-bypass-approvals-and-sandbox``, ``--cd``. The resume
-    positional args come AFTER all flags, with SESSION_ID before PROMPT.
+    ``exec`` accepts: ``--json``, ``--model``, ``--ask-for-approval``,
+    ``--dangerously-bypass-approvals-and-sandbox``, ``--cd``.
+    ``exec resume`` accepts the same flags EXCEPT ``--cd`` (causes exit code 2).
+    The resume positional args come AFTER all flags, with SESSION_ID before PROMPT.
 
     These tests guard against regressions like the one that shipped briefly
     in 3.0.0 where resume was invoked as ``codex resume <id> --json …`` —
@@ -253,12 +254,29 @@ class TestCodexRunnerArgvStructure:
         )
         args = runner._build_args("hello", session_id=sid)
         sid_idx = args.index(sid)
-        # --json, --model, --ask-for-approval, --cd must all come before SESSION_ID.
-        for flag in ("--json", "--model", "--ask-for-approval", "--cd"):
+        # --json, --model, --ask-for-approval must all come before SESSION_ID.
+        # NOTE: --cd is NOT supported by `codex exec resume` (only by `codex exec`).
+        for flag in ("--json", "--model", "--ask-for-approval"):
             assert flag in args, f"{flag} missing from resume args"
             assert args.index(flag) < sid_idx, (
                 f"{flag} should appear before SESSION_ID in codex exec resume"
             )
+
+    def test_cd_flag_not_passed_on_resume(self) -> None:
+        """codex exec resume does not accept --cd; must be omitted to avoid exit code 2."""
+        sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
+        runner = CodexRunner(command="codex", model="gpt-5.4", working_dir="/work")
+        args = runner._build_args("hello", session_id=sid)
+        assert "--cd" not in args, (
+            "`codex exec resume` does not support --cd; passing it causes exit code 2"
+        )
+
+    def test_cd_flag_passed_on_new_session(self) -> None:
+        """--cd must still be passed for new sessions."""
+        runner = CodexRunner(command="codex", model="gpt-5.4", working_dir="/work")
+        args = runner._build_args("hello", session_id=None)
+        assert "--cd" in args
+        assert "/work" in args
 
     def test_resume_session_id_before_prompt(self) -> None:
         sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
