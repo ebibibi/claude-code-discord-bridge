@@ -105,9 +105,12 @@ def parse_codex_line(line: str) -> StreamEvent | None:
             )
 
         if item_type == "command_execution":
+            # USER (not ASSISTANT): EventProcessor only cancels the live elapsed
+            # timer and finalizes the tool embed on USER events (_on_tool_result).
+            # Tagging this ASSISTANT leaves the timer running forever.
             return StreamEvent(
                 raw=data,
-                message_type=MessageType.ASSISTANT,
+                message_type=MessageType.USER,
                 tool_result_id=item.get("id", ""),
                 tool_result_content=item.get("output", ""),
             )
@@ -125,6 +128,33 @@ def parse_codex_line(line: str) -> StreamEvent | None:
             )
 
     return None
+
+
+# Codex item types that arrive as a single ``item.completed`` with no preceding
+# ``item.started`` (atomic tools). The EventProcessor opens a tool embed and a
+# live elapsed timer for every tool_use, and only stops it when a matching tool
+# result arrives. For atomic tools no result would ever come, so the timer would
+# accumulate forever — we synthesize a completion to close it immediately.
+_ATOMIC_ITEM_TYPES: frozenset[str] = frozenset({"file_changes"})
+
+
+def _atomic_tool_completion(event: StreamEvent) -> StreamEvent | None:
+    """Return a synthetic tool-result event for an atomic Codex tool_use.
+
+    Returns None for events that are not atomic tool_use events (e.g. a
+    ``command_execution`` start, which has its own completion event).
+    """
+    if event.tool_use is None:
+        return None
+    item_type = event.raw.get("item", {}).get("type", "")
+    if item_type not in _ATOMIC_ITEM_TYPES:
+        return None
+    return StreamEvent(
+        raw=event.raw,
+        message_type=MessageType.USER,
+        tool_result_id=event.tool_use.tool_id,
+        tool_result_content="",
+    )
 
 
 class CodexRunner:
@@ -343,6 +373,12 @@ class CodexRunner:
                 yield event
                 if event.is_complete:
                     return
+                # Atomic tools (e.g. file_changes) have no completion event of
+                # their own; pair them with a synthetic result so the live
+                # elapsed timer is cancelled instead of accumulating forever.
+                completion = _atomic_tool_completion(event)
+                if completion is not None:
+                    yield completion
 
         if self._process.returncode is None:
             await asyncio.wait_for(self._process.wait(), timeout=10)
