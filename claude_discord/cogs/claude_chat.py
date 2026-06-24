@@ -179,6 +179,35 @@ class ClaudeChatCog(commands.Cog):
         while len(self._processed_messages) > self._processed_messages_limit:
             self._processed_messages.popitem(last=False)
 
+        # スラッシュコマンドを「文章」として打った誤入力をここで弾く。
+        # 例: 「/order 4972468011897:1」をDiscordの候補から選ばずそのまま送信すると、
+        # アプリコマンドとして発火せず素のメッセージになり、本来ならClaudeセッション
+        # (claude -p / 課金) が起動して「Unknown command」を返すだけで終わる。
+        # 先頭が "/" かつ最初の語が登録済みコマンド名なら、セッションを起こさず
+        # スラッシュUIの使い方を案内して終了する（課金ゼロ＋自己解決を促す）。
+        in_scope = (
+            message.channel.id == self.bot.channel_id
+            or (
+                isinstance(message.channel, discord.Thread)
+                and message.channel.parent_id == self.bot.channel_id
+            )
+        )
+        stripped = (message.content or "").lstrip()
+        if in_scope and len(stripped) > 1 and stripped.startswith("/"):
+            first_token = stripped[1:].split(maxsplit=1)[0].lower()
+            try:
+                command_names = {c.name for c in self.bot.tree.get_commands()}
+            except Exception:  # noqa: BLE001 — ツリー取得失敗時はガードをスキップ
+                command_names = set()
+            if first_token in command_names:
+                await message.reply(
+                    f"`/{first_token}` はスラッシュコマンドです。文章として送らず、"
+                    f"メッセージ欄で `/` を入力 → 候補から **/{first_token}** を選び、"
+                    "引数（JANなど）は表示される入力欄に貼って送信してください。",
+                    mention_author=False,
+                )
+                return
+
         # Check if message is in the configured channel (new conversation)
         if message.channel.id == self.bot.channel_id:
             await self._handle_new_conversation(message)
