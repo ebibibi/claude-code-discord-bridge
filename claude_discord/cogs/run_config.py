@@ -24,6 +24,7 @@ from ..database.repository import SessionRepository
 from ..discord_ui.status import StatusManager
 
 if TYPE_CHECKING:
+    from ..backend_settings import BackendSettings
     from ..database.inbox_repo import ThreadInboxRepository
     from ..database.repository import UsageStatsRepository
     from ..discord_ui.thread_dashboard import ThreadStatusDashboard
@@ -96,6 +97,14 @@ class RunConfig:
     # internal compact/AskUserQuestion reruns via dataclasses.replace, and fires
     # exactly once at the true terminal return in run_claude_with_config.
     result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None
+
+    # Backend/model settings resolver. When provided (interactive chat only),
+    # the per-turn footer consults it for the 2-layer Codex-status toggle
+    # (status.codex global/thread). Headless flows (scheduler, webhook, API
+    # ingest) leave this None, so they never spawn the Codex status probe.
+    backend_settings: BackendSettings | None = None
+    # Command used to invoke Codex (for the Codex status probe in the footer).
+    codex_command: str = "codex"
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

@@ -533,25 +533,35 @@ class EventProcessor:
                 if self._config.status:
                     await self._config.status.set_done()
 
-                # Post the configured statusLine as Discord subtext. Only
-                # meaningful for the Claude backend — the statusLine command
-                # reads ~/.claude/settings.json and surfaces Anthropic-specific
-                # quota windows (5h, 7d) that have no Codex equivalent. Skip
-                # for non-claude backends entirely.
-                if _backend_name_from_runner(self._config.runner) == "claude":
-                    asyncio.create_task(
-                        _post_statusline_footer(
-                            thread=self._config.thread,
-                            working_dir=self._config.runner.working_dir,
-                            model=self._config.runner.model,
-                            context_window=event.context_window,
-                            input_tokens=event.input_tokens,
-                            cache_creation_tokens=event.cache_creation_tokens,
-                            cache_read_tokens=event.cache_read_tokens,
-                            api_label=self._config.runner.describe_api(),
-                        ),
-                        name=f"statusline-{self._config.thread.id}",
-                    )
+                # Post the per-turn engine status footer.
+                #
+                # - Claude statusLine (read from ~/.claude/settings.json)
+                #   surfaces Anthropic quota windows (5h, 7d).
+                # - Codex status line surfaces Codex usage via `codex
+                #   app-server` (account/rateLimits/read).
+                #
+                # When the 2-layer Codex toggle (status.codex) is enabled both
+                # are shown after every turn, so the user can compare usage and
+                # decide which engine to use. The Codex probe only runs for
+                # interactive chat (backend_settings is wired) — headless flows
+                # leave it None and incur no extra subprocess.
+                asyncio.create_task(
+                    _post_engine_status_footer(
+                        thread=self._config.thread,
+                        backend=_backend_name_from_runner(self._config.runner),
+                        working_dir=self._config.runner.working_dir,
+                        model=self._config.runner.model,
+                        context_window=event.context_window,
+                        input_tokens=event.input_tokens,
+                        cache_creation_tokens=event.cache_creation_tokens,
+                        cache_read_tokens=event.cache_read_tokens,
+                        api_label=self._config.runner.describe_api(),
+                        backend_settings=self._config.backend_settings,
+                        codex_command=self._config.codex_command,
+                        thread_id=self._config.thread.id,
+                    ),
+                    name=f"statusline-{self._config.thread.id}",
+                )
 
                 # Schedule inbox classification as a background task (non-blocking).
                 # Only runs when inbox_repo is wired in (THREAD_INBOX_ENABLED=true).
@@ -814,6 +824,49 @@ class EventProcessor:
 # ---------------------------------------------------------------------------
 
 
+async def _render_claude_statusline_text(
+    working_dir: str | None,
+    model: str,
+    context_window: int | None,
+    input_tokens: int | None,
+    cache_creation_tokens: int | None,
+    cache_read_tokens: int | None,
+) -> str | None:
+    """Render the configured Claude statusLine to Discord-ready text (or None).
+
+    Reads ``statusLine.command`` from ``~/.claude/settings.json`` and executes
+    it with the current session state. Returns the (max 3) non-empty output
+    lines joined, or ``None`` when no command is configured / it produced
+    nothing.
+    """
+    import os
+
+    from ..discord_ui.statusline import (
+        build_statusline_json,
+        read_statusline_command,
+        render_statusline,
+    )
+
+    command = read_statusline_command()
+    if not command:
+        return None
+    cwd = working_dir or os.path.expanduser("~")
+    json_input = build_statusline_json(
+        cwd=cwd,
+        model_id=model,
+        model_display_name=model,
+        context_size=context_window or 200000,
+        input_tokens=input_tokens or 0,
+        cache_creation_tokens=cache_creation_tokens or 0,
+        cache_read_tokens=cache_read_tokens or 0,
+    )
+    result = await render_statusline(command, json_input)
+    if not result:
+        return None
+    lines = [line for line in result.splitlines() if line.strip()]
+    return "\n".join(lines[:3]) if lines else None
+
+
 async def _post_statusline_footer(
     thread: object,
     working_dir: str | None,
@@ -832,38 +885,95 @@ async def _post_statusline_footer(
     (read from ``~/.claude/settings.json``) is appended below it when present.
     Posts nothing when neither is available.
     """
-    import os
-
-    from ..discord_ui.statusline import (
-        build_statusline_json,
-        read_statusline_command,
-        render_statusline,
+    statusline_text = await _render_claude_statusline_text(
+        working_dir,
+        model,
+        context_window,
+        input_tokens,
+        cache_creation_tokens,
+        cache_read_tokens,
     )
-
-    statusline_text: str | None = None
-    command = read_statusline_command()
-    if command:
-        cwd = working_dir or os.path.expanduser("~")
-        json_input = build_statusline_json(
-            cwd=cwd,
-            model_id=model,
-            model_display_name=model,
-            context_size=context_window or 200000,
-            input_tokens=input_tokens or 0,
-            cache_creation_tokens=cache_creation_tokens or 0,
-            cache_read_tokens=cache_read_tokens or 0,
-        )
-        result = await render_statusline(command, json_input)
-        if result:
-            lines = [line for line in result.splitlines() if line.strip()]
-            if lines:
-                statusline_text = "\n".join(lines[:3])
 
     parts: list[str] = []
     if api_label:
         parts.append(f"\U0001f517 API: {api_label}")
     if statusline_text:
         parts.append(statusline_text)
+
+    if not parts:
+        return
+
+    body = "\n".join(parts)
+    with contextlib.suppress(Exception):
+        await thread.send(f"```\n{body}\n```")  # type: ignore[union-attr]
+
+
+async def _post_engine_status_footer(
+    thread: object,
+    *,
+    backend: str,
+    working_dir: str | None,
+    model: str,
+    context_window: int | None,
+    input_tokens: int | None,
+    cache_creation_tokens: int | None,
+    cache_read_tokens: int | None,
+    api_label: str | None,
+    backend_settings: object | None,
+    codex_command: str,
+    thread_id: int | None,
+) -> None:
+    """Post the per-turn engine status footer (Claude statusLine + Codex line).
+
+    The Codex status line is gated by the 2-layer ``status.codex`` toggle:
+      - ``off``  → never shown
+      - ``auto`` → shown only when it can be fetched (codex installed +
+        logged in); silently hidden otherwise
+      - ``on``   → always attempted; a short hint is shown when it fails
+
+    The Claude statusLine renders on Claude turns as before. It is *also*
+    rendered on Codex turns when the Codex status line is active, so the
+    Anthropic quota stays visible for side-by-side comparison.
+    """
+    from ..backend_settings import BackendSettings
+    from ..discord_ui.engine_status import get_codex_status_line
+
+    # Resolve the Codex-status mode (off when no settings resolver is wired,
+    # e.g. headless flows).
+    mode = "off"
+    if isinstance(backend_settings, BackendSettings):
+        mode = await backend_settings.codex_status_mode(thread_id)
+    show_codex = mode in ("auto", "on")
+
+    # Codex line (account/rateLimits/read via codex app-server), cached.
+    codex_line: str | None = None
+    if show_codex:
+        codex_line = await get_codex_status_line(codex_command)
+        if codex_line is None and mode == "on":
+            codex_line = "\U0001f916 Codex: 残量取得失敗（codex login 済みか確認）"
+
+    # Render the Claude statusLine on Claude turns, or whenever the Codex line
+    # is being shown (so both engines appear together). On non-Claude turns the
+    # session model id is not a Claude model, so suppress the model label.
+    render_claude_sl = backend == "claude" or codex_line is not None
+    statusline_text: str | None = None
+    if render_claude_sl:
+        statusline_text = await _render_claude_statusline_text(
+            working_dir,
+            model if backend == "claude" else "",
+            context_window,
+            input_tokens,
+            cache_creation_tokens,
+            cache_read_tokens,
+        )
+
+    parts: list[str] = []
+    if api_label and backend == "claude":
+        parts.append(f"\U0001f517 API: {api_label}")
+    if statusline_text:
+        parts.append(statusline_text)
+    if codex_line:
+        parts.append(codex_line)
 
     if not parts:
         return

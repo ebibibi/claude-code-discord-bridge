@@ -22,7 +22,12 @@ from discord.ext import commands
 
 from claude_code_core.codex_runner import VALID_CODEX_EFFORTS
 
-from ..backend_settings import ALL_BACKENDS, BackendSettings
+from ..backend_settings import (
+    ALL_BACKENDS,
+    CODEX_STATUS_DEFAULT,
+    CODEX_STATUS_MODES,
+    BackendSettings,
+)
 
 if TYPE_CHECKING:
     from ..backend_factory import BackendFactory
@@ -453,3 +458,76 @@ class BackendCommandCog(commands.Cog):
     def _effort_label(effort: str | None) -> str:
         """Human-readable effort label; ``None`` means the backend CLI's default."""
         return f"`{effort}`" if effort else "_(CLI default)_"
+
+    # ── /engine-status ─────────────────────────────────────────────
+
+    @app_commands.command(
+        name="engine-status",
+        description="Show/set whether the Codex usage line appears after each turn",
+    )
+    @app_commands.choices(
+        mode=[Choice(name=m, value=m) for m in CODEX_STATUS_MODES],
+        scope=[
+            Choice(name="thread", value=SCOPE_THREAD),
+            Choice(name="global", value=SCOPE_GLOBAL),
+        ],
+    )
+    @app_commands.describe(
+        mode=(
+            "auto: show Codex usage only when it can be fetched; "
+            "on: always; off: never. Omit to show current setting."
+        ),
+        scope=(
+            "thread: only this thread; global: server-wide default. "
+            "Default: thread when invoked in a thread, otherwise global."
+        ),
+    )
+    async def engine_status_command(
+        self,
+        interaction: discord.Interaction,
+        mode: str | None = None,
+        scope: str | None = None,
+    ) -> None:
+        thread_id_now = self._thread_id_or_none(interaction)
+
+        # Show current selection if no mode provided.
+        if mode is None:
+            current_g = await self._settings.codex_status_mode(None)
+            lines = [f"\U0001f9e0 **Global Codex status**: `{current_g}`"]
+            if thread_id_now is not None:
+                current_t = await self._settings.codex_status_mode(thread_id_now)
+                tag = " (thread override)" if current_t != current_g else ""
+                lines.append(f"\U0001f9f5 **This thread**: `{current_t}`{tag}")
+            lines.append(
+                f"-# auto = show Codex usage only when reachable (default: "
+                f"`{CODEX_STATUS_DEFAULT}`)."
+            )
+            await interaction.response.send_message("\n".join(lines), ephemeral=True)
+            return
+
+        if mode not in CODEX_STATUS_MODES:
+            await interaction.response.send_message(
+                f"Unknown mode `{mode}`. Choose: {', '.join(CODEX_STATUS_MODES)}.",
+                ephemeral=True,
+            )
+            return
+
+        resolved_scope, target_thread_id = self._resolve_scope(interaction, scope)
+        if resolved_scope == SCOPE_THREAD and target_thread_id is None:
+            await interaction.response.send_message(
+                "`scope:thread` requires the command to be run inside a thread.",
+                ephemeral=True,
+            )
+            return
+
+        await self._settings.set_codex_status_mode(mode, thread_id=target_thread_id)
+
+        scope_label = (
+            f"<#{target_thread_id}>"
+            if resolved_scope == SCOPE_THREAD and target_thread_id is not None
+            else "**globally**"
+        )
+        await interaction.response.send_message(
+            f"\U0001f300 Codex status set to `{mode}` {scope_label}.",
+            ephemeral=False,
+        )

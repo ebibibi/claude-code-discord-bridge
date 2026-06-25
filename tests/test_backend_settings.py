@@ -10,6 +10,7 @@ import pytest
 
 from claude_discord.backend_settings import (
     BACKEND_GLOBAL,
+    CODEX_STATUS_GLOBAL,
     BackendSettings,
 )
 from claude_discord.database.settings_repo import SettingsRepository
@@ -101,6 +102,53 @@ class TestResolution:
         deleted = await s.clear_thread_overrides(7)
         assert deleted == 2
         assert await s.current_backend(thread_id=7) == "claude"
+
+
+class TestCodexStatusMode:
+    async def _settings(self) -> BackendSettings:
+        repo, _ = await _new_repo()
+        return BackendSettings(
+            repo,
+            env_backend="claude",
+            env_model_for_claude="sonnet",
+            env_model_for_codex="",
+        )
+
+    async def test_default_is_auto(self) -> None:
+        s = await self._settings()
+        assert await s.codex_status_mode() == "auto"
+        assert await s.codex_status_mode(thread_id=5) == "auto"
+
+    async def test_global_set(self) -> None:
+        s = await self._settings()
+        await s.set_codex_status_mode("on")
+        assert await s.codex_status_mode() == "on"
+
+    async def test_thread_overrides_global(self) -> None:
+        s = await self._settings()
+        await s.set_codex_status_mode("on")
+        await s.set_codex_status_mode("off", thread_id=42)
+        assert await s.codex_status_mode() == "on"
+        assert await s.codex_status_mode(thread_id=42) == "off"
+        # other thread sees global
+        assert await s.codex_status_mode(thread_id=1) == "on"
+
+    async def test_invalid_value_in_db_falls_through(self) -> None:
+        s = await self._settings()
+        await s.repo.set(CODEX_STATUS_GLOBAL, "bogus")
+        assert await s.codex_status_mode() == "auto"
+
+    async def test_set_rejects_unknown_mode(self) -> None:
+        s = await self._settings()
+        with pytest.raises(ValueError):
+            await s.set_codex_status_mode("sometimes")
+
+    async def test_clear_thread_overrides_removes_codex_status(self) -> None:
+        s = await self._settings()
+        await s.set_codex_status_mode("off", thread_id=7)
+        deleted = await s.clear_thread_overrides(7)
+        assert deleted == 1
+        assert await s.codex_status_mode(thread_id=7) == "auto"
 
 
 class TestMutationValidation:

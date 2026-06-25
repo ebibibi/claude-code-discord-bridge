@@ -30,6 +30,16 @@ MODEL_THREAD_PREFIX = "model.thread."  # + thread_id + "." + backend
 EFFORT_GLOBAL_PREFIX = "effort.global."  # + backend
 EFFORT_THREAD_PREFIX = "effort.thread."  # + thread_id + "." + backend
 
+# Codex status footer toggle (2-layer: global default + per-thread override).
+#   "auto" — show the Codex status line only when it can actually be fetched
+#            (codex installed + logged in). Invisible for Claude-only users.
+#   "on"   — always attempt; surface a hint when the fetch fails.
+#   "off"  — never show the Codex status line.
+CODEX_STATUS_GLOBAL = "status.codex.global"
+CODEX_STATUS_THREAD_PREFIX = "status.codex.thread."  # + thread_id
+CODEX_STATUS_MODES = ("auto", "on", "off")
+CODEX_STATUS_DEFAULT = "auto"
+
 
 class BackendSettings:
     """Thin wrapper around SettingsRepository that resolves backend/model."""
@@ -114,7 +124,31 @@ class BackendSettings:
         v = await self.repo.get(f"{EFFORT_GLOBAL_PREFIX}{backend}")
         return v if v else None
 
+    async def codex_status_mode(self, thread_id: int | None = None) -> str:
+        """Return the Codex status footer mode for this thread (or globally).
+
+        Resolution: thread override > global > ``CODEX_STATUS_DEFAULT`` (auto).
+        """
+        if thread_id is not None:
+            v = await self.repo.get(f"{CODEX_STATUS_THREAD_PREFIX}{thread_id}")
+            if v in CODEX_STATUS_MODES:
+                return v
+        v = await self.repo.get(CODEX_STATUS_GLOBAL)
+        if v in CODEX_STATUS_MODES:
+            return v
+        return CODEX_STATUS_DEFAULT
+
     # ── Mutation ────────────────────────────────────────────
+
+    async def set_codex_status_mode(self, mode: str, *, thread_id: int | None = None) -> None:
+        if mode not in CODEX_STATUS_MODES:
+            raise ValueError(f"unknown codex status mode {mode!r}")
+        if thread_id is not None:
+            await self.repo.set(f"{CODEX_STATUS_THREAD_PREFIX}{thread_id}", mode)
+            logger.info("codex status set: thread=%d -> %s", thread_id, mode)
+        else:
+            await self.repo.set(CODEX_STATUS_GLOBAL, mode)
+            logger.info("codex status set: global -> %s", mode)
 
     async def set_backend(self, backend: str, *, thread_id: int | None = None) -> None:
         if backend not in ALL_BACKENDS:
@@ -168,4 +202,6 @@ class BackendSettings:
                 deleted += 1
             if await self.repo.delete(f"{EFFORT_THREAD_PREFIX}{thread_id}.{b}"):
                 deleted += 1
+        if await self.repo.delete(f"{CODEX_STATUS_THREAD_PREFIX}{thread_id}"):
+            deleted += 1
         return deleted
