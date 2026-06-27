@@ -87,7 +87,8 @@ class StopView(discord.ui.View):
         button.disabled = True
         self.stop()
 
-        await interaction.response.edit_message(view=self)
+        with contextlib.suppress(discord.HTTPException):
+            await interaction.response.edit_message(view=self)
         await self._runner.interrupt()
 
         with contextlib.suppress(discord.HTTPException):
