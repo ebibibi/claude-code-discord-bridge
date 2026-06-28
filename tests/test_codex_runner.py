@@ -79,10 +79,10 @@ class TestCodexRunnerBuildArgs:
         assert "resume" in args
         assert "0199a213-81c0-7800-8aa1-bbab2a035a53" in args
 
-    def test_approval_mode_mapping(self) -> None:
+    def test_permission_mode_does_not_emit_removed_approval_flag(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini", permission_mode="acceptEdits")
         args = runner._build_args("hello", session_id=None)
-        assert any(a in args for a in ["--ask-for-approval", "-a"])
+        assert "--ask-for-approval" not in args
 
     def test_dangerously_skip_permissions(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini", dangerously_skip_permissions=True)
@@ -620,14 +620,16 @@ class TestParseCodexLine:
 class TestCodexRunnerArgvStructure:
     """Strict structural tests — verify args match codex CLI's actual grammar.
 
-    Codex CLI v0.124 grammar (verified against ``codex exec --help`` /
+    Codex CLI v0.142+ grammar (verified against ``codex exec --help`` /
     ``codex exec resume --help``):
 
         codex exec [OPTIONS] [PROMPT]
         codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
 
-    ``exec`` accepts: ``--json``, ``--model``, ``--ask-for-approval``,
+    ``exec`` accepts: ``--json``, ``--model``,
     ``--dangerously-bypass-approvals-and-sandbox``, ``--cd``.
+    ``--ask-for-approval`` was removed in 0.142 (sandbox/approval is now
+    driven by ``-s/--sandbox`` and config), so we must never emit it.
     ``exec resume`` accepts the same flags EXCEPT ``--cd`` (causes exit code 2).
     The resume positional args come AFTER all flags, with SESSION_ID before PROMPT.
 
@@ -665,9 +667,9 @@ class TestCodexRunnerArgvStructure:
         )
         args = runner._build_args("hello", session_id=sid)
         sid_idx = args.index(sid)
-        # --json, --model, --ask-for-approval must all come before SESSION_ID.
+        # --json and --model must come before SESSION_ID.
         # NOTE: --cd is NOT supported by `codex exec resume` (only by `codex exec`).
-        for flag in ("--json", "--model", "--ask-for-approval"):
+        for flag in ("--json", "--model"):
             assert flag in args, f"{flag} missing from resume args"
             assert args.index(flag) < sid_idx, (
                 f"{flag} should appear before SESSION_ID in codex exec resume"

@@ -28,12 +28,6 @@ logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
-_APPROVAL_MODE_MAP: dict[str, str] = {
-    "acceptEdits": "except-edit",
-    "full": "always",
-    "none": "never",
-}
-
 # Reasoning-effort levels accepted by the Codex CLI / GPT-5.x models. Used to
 # validate the value before it is injected into a `-c model_reasoning_effort=`
 # config override (defence-in-depth against config injection).
@@ -487,8 +481,6 @@ class CodexRunner:
 
         if self.dangerously_skip_permissions:
             args.append("--dangerously-bypass-approvals-and-sandbox")
-        elif self.permission_mode in _APPROVAL_MODE_MAP:
-            args.extend(["--ask-for-approval", _APPROVAL_MODE_MAP[self.permission_mode]])
 
         # --cd is only accepted by `codex exec`, not by `codex exec resume`.
         if self.working_dir and not session_id:
