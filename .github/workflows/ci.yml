@@ -22,7 +22,7 @@ jobs:
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -86,7 +86,7 @@ jobs:
     if: failure() && github.event_name == 'schedule'
     runs-on: [self-hosted, linux, x64]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Create auto-fix label if missing
         env:
