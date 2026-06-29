@@ -125,7 +125,7 @@ class SessionRepository:
     async def get_recent_summaries(
         self,
         channel_id: int,
-        limit: int = 5,
+        limit: int = 10,
         exclude_thread: int | None = None,
     ) -> list[SessionRecord]:
         """Get recent sessions with summaries from the same channel.

@@ -36,6 +36,25 @@ TOOL_RESULT_MAX_CHARS = 3000
 _TIMEOUT_PATTERN = re.compile(r"Timed out after (\d+) seconds")
 
 
+def _lounge_injection_enabled() -> bool:
+    """Whether to inject AI Lounge context into the per-turn system prompt.
+
+    Default ON so bots that do not set the flag (e.g. bot1 / ccdb) keep the
+    exact same behaviour as before.  A bot can opt OUT by setting
+    ``LOUNGE_ENABLED`` to a falsey value (``false`` / ``0`` / ``no`` / ``off``)
+    in its env file — used for single-purpose bots (e.g. bot2) where the shared
+    lounge chatter is cross-contamination noise rather than useful coordination.
+    """
+    import os
+
+    return os.getenv("LOUNGE_ENABLED", "true").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
 def _make_error_embed(error: str) -> discord.Embed:
     """Return a timeout_embed for timeout errors, error_embed otherwise."""
     m = _TIMEOUT_PATTERN.match(error)
@@ -67,7 +86,10 @@ async def _build_system_context(config: RunConfig) -> str | None:
         parts.append(base_prompt)
 
     # Layer 3: AI Lounge context (recent messages + invitation).
-    if config.lounge_repo is not None:
+    # Gated by LOUNGE_ENABLED (default ON). Bots that run standalone (no useful
+    # cross-bot coordination) opt out via LOUNGE_ENABLED=false so the shared,
+    # unattributed lounge chatter does not pollute every turn's system prompt.
+    if config.lounge_repo is not None and _lounge_injection_enabled():
         try:
             recent = await config.lounge_repo.get_recent(limit=10)
             lounge_context = build_lounge_prompt(recent)
@@ -75,6 +97,8 @@ async def _build_system_context(config: RunConfig) -> str | None:
             logger.debug("Lounge context built (%d recent message(s))", len(recent))
         except Exception:
             logger.warning("Failed to fetch lounge context — skipping", exc_info=True)
+    elif config.lounge_repo is not None:
+        logger.debug("Lounge injection disabled via LOUNGE_ENABLED — skipping")
 
     # Layer 1 + 2: Register session and build concurrency notice.
     if config.registry is not None:
@@ -100,7 +124,7 @@ async def _build_system_context(config: RunConfig) -> str | None:
         if channel_id is not None:
             try:
                 recent_sessions = await config.repo.get_recent_summaries(
-                    channel_id, limit=5, exclude_thread=config.thread.id
+                    channel_id, limit=10, exclude_thread=config.thread.id
                 )
                 if recent_sessions:
                     summary_lines = [
@@ -120,23 +144,24 @@ async def _build_system_context(config: RunConfig) -> str | None:
                 logger.warning("Failed to fetch cross-thread summaries", exc_info=True)
 
     # Layer 5: Auto-loaded memory files (★★★ section from MEMORY.md).
-    # Only inject for new sessions to keep resumed sessions lean.
-    if config.session_id is None:
-        try:
-            import asyncio
-
-            memory_context = await asyncio.to_thread(
-                load_auto_memory, config.runner.working_dir
-            )
-            if memory_context:
-                parts.append(memory_context)
-                logger.info(
-                    "Auto-loaded memory injected (%d chars) for thread %d",
-                    len(memory_context),
-                    config.thread.id,
-                )
-        except Exception:
-            logger.warning("Failed to load auto-memory", exc_info=True)
+    # DISABLED (2026-06-27): Claude Code自体がMEMORY.mdを自動読み込みするため、
+    # ここでの注入は二重注入（~12KB/セッションの無駄）だった。
+    # Claude Codeの自動読み込みが無くなった場合は下記を復活させる。
+    # if config.session_id is None:
+    #     try:
+    #         import asyncio
+    #         memory_context = await asyncio.to_thread(
+    #             load_auto_memory, config.runner.working_dir
+    #         )
+    #         if memory_context:
+    #             parts.append(memory_context)
+    #             logger.info(
+    #                 "Auto-loaded memory injected (%d chars) for thread %d",
+    #                 len(memory_context),
+    #                 config.thread.id,
+    #             )
+    #     except Exception:
+    #         logger.warning("Failed to load auto-memory", exc_info=True)
 
     return "\n\n".join(parts) if parts else None
 
