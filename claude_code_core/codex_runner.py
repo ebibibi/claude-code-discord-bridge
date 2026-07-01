@@ -210,7 +210,7 @@ class CodexRunner:
 
         self._process = await asyncio.create_subprocess_exec(
             *args,
-            stdin=asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
@@ -219,6 +219,9 @@ class CodexRunner:
         )
 
         logger.info("Codex CLI started: pid=%s", self._process.pid)
+
+        if self._process.stdin is not None:
+            await self._send_prompt(prompt)
 
         try:
             async for event in self._read_stream():
@@ -286,6 +289,26 @@ class CodexRunner:
         """Codex CLI does not support stdin injection; this is a no-op."""
         logger.debug("inject_tool_result called on CodexRunner (no-op): %s", request_id)
 
+    async def _send_prompt(self, prompt: str) -> None:
+        """Write the initial prompt to stdin and close it.
+
+        ``codex exec -`` and ``codex exec resume <session_id> -`` read the
+        prompt from stdin. Keeping the prompt out of argv avoids OS E2BIG /
+        ``Argument list too long`` failures for large Discord attachments.
+        """
+        assert self._process is not None and self._process.stdin is not None
+        try:
+            self._process.stdin.write(prompt.encode())
+            await self._process.stdin.drain()
+            self._process.stdin.close()
+            wait_closed = getattr(self._process.stdin, "wait_closed", None)
+            if wait_closed is not None:
+                await wait_closed()
+        except (BrokenPipeError, ConnectionResetError):
+            logger.debug("Codex stdin closed before prompt write completed", exc_info=True)
+        except Exception:
+            logger.warning("_send_prompt: failed to write to stdin", exc_info=True)
+
     def _build_args(self, prompt: str, session_id: str | None) -> list[str]:
         """Build command-line arguments for codex CLI.
 
@@ -293,8 +316,10 @@ class CodexRunner:
             codex exec [OPTIONS] [PROMPT]
             codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
 
-        Both subcommands accept --json and --model. The resume positional
-        args come AFTER any flags, with SESSION_ID before PROMPT.
+        Both subcommands accept --json and --model. We pass "-" as the prompt
+        positional so Codex reads the actual prompt from stdin instead of argv.
+        The resume positional args come AFTER any flags, with SESSION_ID before
+        the stdin marker.
         """
         # Always under the `exec` subcommand. `resume` is its sub-subcommand.
         args = [self.command, "exec"]
@@ -323,10 +348,10 @@ class CodexRunner:
         if self.working_dir and not session_id:
             args.extend(["--cd", self.working_dir])
 
-        # Positional args come last. For resume: SESSION_ID then PROMPT.
+        # Positional args come last. For resume: SESSION_ID then stdin marker.
         if session_id:
             args.append(session_id)
-        args.append(prompt)
+        args.append("-")
         return args
 
     _STRIPPED_ENV_KEYS = frozenset(
