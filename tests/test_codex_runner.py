@@ -11,6 +11,44 @@ from claude_code_core.codex_runner import CodexRunner, parse_codex_line
 from claude_code_core.types import MessageType
 
 
+class _FakeStream:
+    def __init__(self, lines: list[bytes] | None = None, read_data: bytes = b"") -> None:
+        self._lines = list(lines or [])
+        self._read_data = read_data
+
+    async def readline(self) -> bytes:
+        if self._lines:
+            return self._lines.pop(0)
+        return b""
+
+    async def read(self) -> bytes:
+        return self._read_data
+
+
+class _FakeProcess:
+    def __init__(
+        self,
+        *,
+        stdout_lines: list[bytes] | None = None,
+        stderr: bytes = b"",
+        returncode: int = 0,
+        pid: int = 12345,
+    ) -> None:
+        self.stdout = _FakeStream(stdout_lines)
+        self.stderr = _FakeStream(read_data=stderr)
+        self.returncode = returncode
+        self.pid = pid
+
+    async def wait(self) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+
 class TestCodexRunnerIsBackend:
     """CodexRunner must satisfy the SessionBackend protocol."""
 
@@ -128,6 +166,78 @@ class TestCodexRunnerClone:
         runner = CodexRunner(command="codex", model="gpt-5.5", effort="high")
         cloned = runner.clone(effort="low")
         assert cloned.effort == "low"
+
+
+class TestCodexRunnerRun:
+    @pytest.mark.asyncio
+    async def test_resume_missing_rollout_falls_back_to_new_session(self, monkeypatch) -> None:
+        stale_session = "13f2eb43-93cf-4df6-86d0-a20c035cc26e"
+        started_line = json.dumps(
+            {"type": "thread.started", "thread_id": "019f-new-session"}
+        ).encode()
+        completed_line = json.dumps({"type": "turn.completed", "usage": {}}).encode()
+        processes = [
+            _FakeProcess(
+                stderr=(
+                    b"Error: thread/resume: thread/resume failed: "
+                    b"no rollout found for thread id 13f2eb43-93cf-4df6-86d0-a20c035cc26e"
+                ),
+                returncode=1,
+                pid=100,
+            ),
+            _FakeProcess(
+                stdout_lines=[started_line + b"\n", completed_line + b"\n"],
+                returncode=0,
+                pid=101,
+            ),
+        ]
+        calls: list[tuple[str, ...]] = []
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            calls.append(args)
+            return processes.pop(0)
+
+        monkeypatch.setattr(
+            "claude_code_core.codex_runner.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+        runner = CodexRunner(command="codex", working_dir="/work")
+
+        events = [event async for event in runner.run("hello", session_id=stale_session)]
+
+        assert len(calls) == 2
+        assert calls[0][:3] == ("codex", "exec", "resume")
+        assert stale_session in calls[0]
+        assert "resume" not in calls[1]
+        assert "--cd" in calls[1]
+        assert "/work" in calls[1]
+        assert [event.error for event in events if event.error] == []
+        assert events[0].session_id == "019f-new-session"
+
+    @pytest.mark.asyncio
+    async def test_non_rollout_resume_error_is_reported(self, monkeypatch) -> None:
+        process = _FakeProcess(stderr=b"permission denied", returncode=1)
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            return process
+
+        monkeypatch.setattr(
+            "claude_code_core.codex_runner.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+        runner = CodexRunner(command="codex")
+
+        events = [
+            event
+            async for event in runner.run(
+                "hello",
+                session_id="019e29a0-d5b0-71f0-bdc0-46f09a06fdaf",
+            )
+        ]
+
+        assert len(events) == 1
+        assert events[0].error is not None
+        assert "CLI exited with code 1" in events[0].error
 
 
 class TestParseCodexLine:
