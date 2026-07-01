@@ -1435,6 +1435,7 @@ class TestCompactRerun:
             prompt="check X",
             session_id="sess-306",
             registry=registry,
+            chat_only=True,
         )
         await run_claude_with_config(config)
 

@@ -136,6 +136,7 @@ def parse_codex_line(line: str) -> StreamEvent | None:
 # result arrives. For atomic tools no result would ever come, so the timer would
 # accumulate forever — we synthesize a completion to close it immediately.
 _ATOMIC_ITEM_TYPES: frozenset[str] = frozenset({"file_changes"})
+_MISSING_ROLLOUT_PATTERN = re.compile(r"no rollout found for thread id", re.IGNORECASE)
 
 
 def _atomic_tool_completion(event: StreamEvent) -> StreamEvent | None:
@@ -155,6 +156,11 @@ def _atomic_tool_completion(event: StreamEvent) -> StreamEvent | None:
         tool_result_id=event.tool_use.tool_id,
         tool_result_content="",
     )
+
+
+def _is_missing_rollout_error(error: str | None) -> bool:
+    """Return True when Codex cannot resume because local rollout history is gone."""
+    return bool(error and _MISSING_ROLLOUT_PATTERN.search(error))
 
 
 class CodexRunner:
@@ -202,37 +208,60 @@ class CodexRunner:
         session_id: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Run Codex CLI and yield stream events."""
-        args = self._build_args(prompt, session_id)
-        env = self._build_env()
-        cwd = self.working_dir or os.getcwd()
+        attempt_session_id = session_id
+        retried_without_resume = False
 
-        logger.info("Starting Codex CLI: %s (cwd=%s)", " ".join(args[:6]) + " ...", cwd)
+        while True:
+            args = self._build_args(prompt, attempt_session_id)
+            env = self._build_env()
+            cwd = self.working_dir or os.getcwd()
+            should_retry_without_resume = False
 
-        self._process = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-            env=env,
-            limit=10 * 1024 * 1024,
-        )
+            logger.info("Starting Codex CLI: %s (cwd=%s)", " ".join(args[:6]) + " ...", cwd)
 
-        logger.info("Codex CLI started: pid=%s", self._process.pid)
-
-        try:
-            async for event in self._read_stream():
-                yield event
-        except TimeoutError:
-            logger.warning("Codex CLI timed out after %ds", self.timeout_seconds)
-            yield StreamEvent(
-                raw={},
-                message_type=MessageType.RESULT,
-                is_complete=True,
-                error=f"Timed out after {self.timeout_seconds} seconds",
+            self._process = await asyncio.create_subprocess_exec(
+                *args,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+                limit=10 * 1024 * 1024,
             )
-        finally:
-            await self._cleanup()
+
+            logger.info("Codex CLI started: pid=%s", self._process.pid)
+
+            try:
+                async for event in self._read_stream():
+                    if (
+                        attempt_session_id
+                        and not retried_without_resume
+                        and _is_missing_rollout_error(event.error)
+                    ):
+                        logger.warning(
+                            "Codex resume history for session %s is missing; "
+                            "starting a new session instead",
+                            attempt_session_id,
+                        )
+                        should_retry_without_resume = True
+                        retried_without_resume = True
+                        break
+                    yield event
+            except TimeoutError:
+                logger.warning("Codex CLI timed out after %ds", self.timeout_seconds)
+                yield StreamEvent(
+                    raw={},
+                    message_type=MessageType.RESULT,
+                    is_complete=True,
+                    error=f"Timed out after {self.timeout_seconds} seconds",
+                )
+            finally:
+                await self._cleanup()
+
+            if should_retry_without_resume:
+                attempt_session_id = None
+                continue
+            return
 
     def clone(
         self,
@@ -393,11 +422,14 @@ class CodexRunner:
                 self._process.returncode,
                 stderr_text[:200],
             )
+            error = f"CLI exited with code {self._process.returncode}"
+            if stderr_text:
+                error = f"{error}: {stderr_text[:1000]}"
             yield StreamEvent(
                 raw={},
                 message_type=MessageType.RESULT,
                 is_complete=True,
-                error=f"CLI exited with code {self._process.returncode}",
+                error=error,
             )
 
     async def _cleanup(self) -> None:
