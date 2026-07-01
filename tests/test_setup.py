@@ -63,6 +63,48 @@ async def test_setup_bridge_registers_scheduler_when_enabled(tmp_path: object) -
 
 
 @pytest.mark.asyncio
+async def test_setup_bridge_wires_backend_settings_into_components_and_scheduler(
+    tmp_path: object,
+) -> None:
+    """Headless cogs should receive the same backend resolver as chat commands."""
+    from claude_discord.backend_factory import BackendFactory
+
+    bot = _make_bot()
+    runner = _make_runner()
+    runner.model = "sonnet"
+    factory = BackendFactory(
+        claude_command="claude",
+        codex_command="codex",
+        permission_mode="acceptEdits",
+        working_dir=None,
+        timeout_seconds=300,
+        dangerously_skip_permissions=False,
+        allowed_tools=None,
+        append_system_prompt=None,
+        effort=None,
+    )
+
+    result = await setup_bridge(
+        bot,
+        runner,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        task_db_path=str(tmp_path / "tasks.db"),  # type: ignore[operator]
+        enable_scheduler=True,
+        backend_factory=factory,
+    )
+
+    assert result.backend_factory is factory
+    assert result.backend_settings is not None
+    scheduler_cog = next(
+        call.args[0]
+        for call in bot.add_cog.call_args_list
+        if call.args[0].__class__.__name__ == "SchedulerCog"
+    )
+    assert scheduler_cog.backend_factory is factory
+    assert scheduler_cog.backend_settings is result.backend_settings
+
+
+@pytest.mark.asyncio
 async def test_setup_bridge_skips_scheduler_when_disabled(tmp_path: object) -> None:
     """setup_bridge should NOT register SchedulerCog when enable_scheduler=False."""
     bot = _make_bot()
