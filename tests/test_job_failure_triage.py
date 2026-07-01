@@ -354,6 +354,34 @@ class TestStartTriage:
         assert "429" in captured_config.prompt
 
     @pytest.mark.asyncio
+    async def test_uses_current_backend_from_components(self) -> None:
+        cog = _make_cog()
+        codex_runner = MagicMock()
+        cog.components.backend_factory = MagicMock()
+        cog.components.backend_factory.build.return_value = codex_runner
+        cog.components.backend_settings = MagicMock()
+        cog.components.backend_settings.current_backend = AsyncMock(return_value="codex")
+        cog.components.backend_settings.current_model = AsyncMock(return_value=None)
+        cog.components.backend_settings.current_effort = AsyncMock(return_value=None)
+        embed = _make_failure_embed()
+        msg = _make_message(embeds=[embed])
+        msg.create_thread.return_value.id = 1357
+
+        with patch(
+            "examples.ebibot.cogs.job_failure_triage.run_claude_with_config",
+            new_callable=AsyncMock,
+        ) as mock_run:
+            await cog._start_triage(msg, _extract_failure_info(embed))
+
+        cog.runner.clone.assert_not_called()
+        cog.components.backend_factory.build.assert_called_once_with(
+            backend="codex", model=None, thread_id=1357
+        )
+        run_config = mock_run.call_args[0][0]
+        assert run_config.runner is codex_runner
+        assert run_config.backend_settings is cog.components.backend_settings
+
+    @pytest.mark.asyncio
     async def test_skips_non_text_channel(self) -> None:
         cog = _make_cog()
         embed = _make_failure_embed()

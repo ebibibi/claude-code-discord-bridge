@@ -22,11 +22,14 @@ import discord
 from discord.ext import commands, tasks
 
 from ._run_helper import run_claude_with_config
+from .headless_backend import build_headless_runner
 from .run_config import RunConfig
 
 if TYPE_CHECKING:
     from claude_code_core.backend import SessionBackend
 
+    from ..backend_factory import BackendFactory
+    from ..backend_settings import BackendSettings
     from ..database.repository import SessionRepository
     from ..database.task_repo import TaskRepository
 
@@ -52,11 +55,15 @@ class SchedulerCog(commands.Cog):
         *,
         repo: TaskRepository,
         session_repo: SessionRepository | None = None,
+        backend_factory: BackendFactory | None = None,
+        backend_settings: BackendSettings | None = None,
     ) -> None:
         self.bot = bot
         self.runner = runner
         self.repo = repo
         self.session_repo = session_repo
+        self.backend_factory = backend_factory
+        self.backend_settings = backend_settings
         # Track in-flight tasks to avoid double-running the same task_id.
         self._running: set[int] = set()
 
@@ -143,9 +150,13 @@ class SchedulerCog(commands.Cog):
                 if thread is None:
                     return
 
-            cloned = self.runner.clone()
-            if task.get("working_dir"):
-                cloned.working_dir = task["working_dir"]
+            cloned = await build_headless_runner(
+                self.runner,
+                factory=self.backend_factory,
+                settings=self.backend_settings,
+                thread_id=thread.id,
+                working_dir=task.get("working_dir"),
+            )
 
             registry = getattr(self.bot, "session_registry", None)
             await run_claude_with_config(
@@ -156,6 +167,7 @@ class SchedulerCog(commands.Cog):
                     prompt=task["prompt"],
                     session_id=session_id,
                     registry=registry,
+                    backend_settings=self.backend_settings,
                 )
             )
 

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from claude_code_core.backend import SessionBackend
 
     from .backend_factory import BackendFactory
+    from .backend_settings import BackendSettings
     from .database.ingest_repo import IngestResultRepository
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
@@ -47,6 +48,8 @@ class BridgeComponents:
     lounge_repo: LoungeRepository | None = None
     resume_repo: PendingResumeRepository | None = None
     ingest_repo: IngestResultRepository | None = None
+    backend_factory: BackendFactory | None = None
+    backend_settings: BackendSettings | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -263,12 +266,12 @@ async def setup_bridge(
     # --- ClaudeChatCog ---
     # Build BackendSettings up front so we can also pass it into
     # ClaudeChatCog (so per-thread /backend overrides take effect on spawn).
-    _backend_settings_for_chat = None
+    backend_settings: BackendSettings | None = None
     if backend_factory is not None:
         from .backend_settings import BackendSettings
 
         _runner_class = runner.__class__.__name__
-        _backend_settings_for_chat = BackendSettings(
+        backend_settings = BackendSettings(
             settings_repo,
             env_backend=_runner_class.replace("Runner", "").lower(),
             env_model_for_claude=(runner.model if _runner_class == "ClaudeRunner" else ""),
@@ -280,7 +283,7 @@ async def setup_bridge(
         repo=session_repo,
         runner=runner,
         factory=backend_factory,
-        backend_settings=_backend_settings_for_chat,
+        backend_settings=backend_settings,
         max_concurrent=max_concurrent,
         allowed_user_ids=allowed_user_ids,
         ask_repo=ask_repo,
@@ -334,7 +337,14 @@ async def setup_bridge(
         from .cogs._run_helper import configure_wakeup_scheduler
 
         configure_wakeup_scheduler(task_repo)
-        scheduler_cog = SchedulerCog(bot, runner, repo=task_repo, session_repo=session_repo)
+        scheduler_cog = SchedulerCog(
+            bot,
+            runner,
+            repo=task_repo,
+            session_repo=session_repo,
+            backend_factory=backend_factory,
+            backend_settings=backend_settings,
+        )
         await bot.add_cog(scheduler_cog)
         logger.info("Registered SchedulerCog")
 
@@ -352,16 +362,9 @@ async def setup_bridge(
 
     # --- BackendCommandCog (optional — only if a BackendFactory was provided) ---
     if backend_factory is not None:
-        from .backend_settings import BackendSettings
         from .cogs.backend_command import BackendCommandCog
 
-        _runner_class = runner.__class__.__name__
-        backend_settings = BackendSettings(
-            settings_repo,
-            env_backend=_runner_class.replace("Runner", "").lower(),
-            env_model_for_claude=(runner.model if _runner_class == "ClaudeRunner" else ""),
-            env_model_for_codex=(runner.model if _runner_class == "CodexRunner" else ""),
-        )
+        assert backend_settings is not None
         backend_cmd_cog = BackendCommandCog(
             bot,  # type: ignore[arg-type]
             settings=backend_settings,
@@ -377,6 +380,8 @@ async def setup_bridge(
         lounge_repo=lounge_repo,
         resume_repo=resume_repo,
         ingest_repo=ingest_repo,
+        backend_factory=backend_factory,
+        backend_settings=backend_settings,
     )
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided
