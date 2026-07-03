@@ -57,6 +57,7 @@ _MAX_INGEST_UNZIP_MEMBERS = 5000
 # single request from buffering an unbounded amount of base64 in memory.
 _MAX_SPAWN_ATTACHMENTS = 10
 _MAX_SPAWN_TOTAL_BYTES = 25 * 1024 * 1024
+_MAX_DISCORD_THREAD_NAME_LENGTH = 100
 
 # Max accepted request body. aiohttp defaults to 1 MiB, which 413s any real
 # ingest (a full conversation thread plus base64 attachments). Base64 inflates
@@ -133,6 +134,16 @@ def _sanitize_log(value: object) -> str:
     attacks where an attacker embeds fake log entries in a single field.
     """
     return re.sub(r"[\r\n]", " ", str(value))
+
+
+def _normalize_thread_name(value: object) -> str | None:
+    """Return a Discord-safe thread name, or None when no usable name was supplied."""
+    if value is None:
+        return None
+    name = str(value).strip()
+    if not name:
+        return None
+    return name[:_MAX_DISCORD_THREAD_NAME_LENGTH]
 
 
 class ApiServer:
@@ -372,7 +383,7 @@ class ApiServer:
                 return poll_result
             poll_obj = poll_result
 
-        thread_name = data.get("thread_name")
+        thread_name = _normalize_thread_name(data.get("thread_name"))
         fmt = data.get("format", "text" if thread_name else "embed")
 
         # Determine target: create a new thread or send directly to channel

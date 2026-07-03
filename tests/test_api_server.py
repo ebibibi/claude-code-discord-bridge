@@ -372,6 +372,34 @@ class TestNotifyThread:
         assert data["thread_id"] == "111222333"
         assert data["thread_name"] == "PR Review"
 
+    @pytest.mark.asyncio
+    async def test_notify_blank_thread_name_sends_to_channel(
+        self, thread_client: TestClient, bot_with_thread: MagicMock
+    ) -> None:
+        """Whitespace-only thread_name is treated as absent, avoiding Discord 400s."""
+        channel = bot_with_thread.get_channel.return_value
+        resp = await thread_client.post(
+            "/api/notify",
+            json={"message": "No thread please", "thread_name": "   "},
+        )
+        assert resp.status == 200
+        channel.create_thread.assert_not_called()
+        channel.send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notify_thread_name_is_trimmed_and_limited_to_discord_max(
+        self, thread_client: TestClient, bot_with_thread: MagicMock
+    ) -> None:
+        """Thread names are normalized before passing them to Discord."""
+        channel = bot_with_thread.get_channel.return_value
+        raw_name = f"  {'a' * 120}  "
+        resp = await thread_client.post(
+            "/api/notify",
+            json={"message": "Long title", "thread_name": raw_name},
+        )
+        assert resp.status == 200
+        channel.create_thread.assert_called_once_with(name="a" * 100)
+
 
 class TestSchedule:
     @pytest.mark.asyncio
