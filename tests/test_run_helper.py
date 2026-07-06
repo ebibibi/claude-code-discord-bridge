@@ -921,6 +921,28 @@ class TestConcurrencyIntegration:
 
     @pytest.mark.asyncio
     @pytest.mark.real_system_context
+    async def test_file_delivery_mentions_substantial_written_deliverables(
+        self, thread: MagicMock, runner: MagicMock, repo: MagicMock
+    ) -> None:
+        captured_prompt = []
+
+        async def capturing_gen(prompt, **kwargs):
+            captured_prompt.append(prompt)
+            for e in self._simple_events():
+                yield e
+
+        runner.run = capturing_gen
+
+        await run_claude_in_thread(thread, runner, repo, "write a reply draft", None)
+
+        assert captured_prompt == ["write a reply draft"]
+        runner.clone.assert_called_once()
+        system_prompt = runner.clone.call_args.kwargs.get("append_system_prompt", "")
+        assert "substantial written deliverable" in system_prompt
+        assert "Markdown file" in system_prompt
+
+    @pytest.mark.asyncio
+    @pytest.mark.real_system_context
     async def test_session_registered_during_run(
         self, thread: MagicMock, runner: MagicMock, repo: MagicMock
     ) -> None:

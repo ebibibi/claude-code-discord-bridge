@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from ..discord_ui.file_sender import send_file_blobs
+
 if TYPE_CHECKING:
     import discord
     from discord.ext.commands import Bot
@@ -1094,7 +1096,14 @@ class ApiServer:
                     await ingest_repo.set_error(captured_id, error)
                     body = "⚠️ セッションがエラーで終了しました。"
                 else:
-                    await ingest_repo.set_result(captured_id, text or "")
+                    answer = text or ""
+                    await ingest_repo.set_result(captured_id, answer)
+                    if answer and spawned_thread:
+                        await send_file_blobs(
+                            spawned_thread[0],
+                            [("ccdb-answer.md", answer.encode("utf-8"))],
+                            content="-# 📎 Answer attached",
+                        )
                     body = "✅ 回答ができました（このスレッドの最新メッセージ）。"
                 # Ping the owner so a long-running result is delivered over
                 # Discord without anyone watching a foreground poller.
@@ -1117,9 +1126,12 @@ class ApiServer:
                 await self.ingest_repo.set_error(result_id, str(exc))
             return web.json_response({"error": str(exc)}, status=500)
 
-        # Attach thread info for traceability. Safe from races: spawn_session
-        # returns immediately after scheduling the background run, long before
-        # the session could complete and trigger the sink.
+        if result_sink is not None:
+            spawned_thread.append(thread)
+
+        # Attach thread info for traceability. The completion sink already has
+        # the thread reference above, before this await can yield to the session
+        # task.
         if result_id is not None and self.ingest_repo is not None:
             await self.ingest_repo.set_thread(result_id, str(thread.id), thread.name)
 
@@ -1127,7 +1139,6 @@ class ApiServer:
         # unattended session is visible and they're notified again on completion
         # (via the result sink). Only when a session actually started.
         if result_sink is not None:
-            spawned_thread.append(thread)
             await self._ingest_add_owner(thread)
             await self._ingest_notify_owner(
                 thread,

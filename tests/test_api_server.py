@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -1197,6 +1197,43 @@ class TestIngestResult:
         rec2 = await ingest_repo.get(result_id)
         assert rec2["status"] == "error"
         assert rec2["error"] == "kaboom"
+
+    @pytest.mark.asyncio
+    async def test_sink_attaches_answer_markdown_to_thread(
+        self, result_client: TestClient, mock_cog: MagicMock, ingest_repo
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        result_id = (await resp.json())["result_id"]
+        sink = mock_cog.spawn_session.call_args.kwargs["result_sink"]
+
+        with patch(
+            "claude_discord.ext.api_server.send_file_blobs",
+            new_callable=AsyncMock,
+        ) as send_file_blobs:
+            await sink("answer via sink", None)
+
+        rec = await ingest_repo.get(result_id)
+        assert rec["result"] == "answer via sink"
+        send_file_blobs.assert_awaited_once()
+        thread, blobs = send_file_blobs.await_args.args[:2]
+        assert thread.id == 111222333
+        assert blobs == [("ccdb-answer.md", b"answer via sink")]
+
+    @pytest.mark.asyncio
+    async def test_sink_does_not_attach_on_error(
+        self, result_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        assert resp.status == 201
+        sink = mock_cog.spawn_session.call_args.kwargs["result_sink"]
+
+        with patch(
+            "claude_discord.ext.api_server.send_file_blobs",
+            new_callable=AsyncMock,
+        ) as send_file_blobs:
+            await sink(None, "kaboom")
+
+        send_file_blobs.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_get_unknown_result_404(self, result_client: TestClient) -> None:
