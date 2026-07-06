@@ -624,10 +624,14 @@ class EventProcessor:
                 # No streamer content — post the full text block directly.
                 # (Current CLI delivers each text block complete, so this is the
                 # normal path; capture the last message URL for inbox linking.)
-                for chunk in chunk_message(event.text):
-                    sent = await self._config.thread.send(chunk)
-                    if sent is not None:
-                        self._state.last_assistant_url = sent.jump_url
+                try:
+                    for chunk in chunk_message(event.text):
+                        sent = await self._config.thread.send(chunk)
+                        if sent is not None:
+                            self._state.last_assistant_url = sent.jump_url
+                except Exception:
+                    logger.warning("Failed to send assistant text", exc_info=True)
+                    return
             self._state.partial_text = ""
             self._state.accumulated_text = event.text
             self._assistant_text_sent = True

@@ -565,6 +565,19 @@ class TestConnectionErrorResilience:
         assert "t1" not in p._state.active_timers
 
     @pytest.mark.asyncio
+    async def test_assistant_text_send_failure_does_not_raise(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """If the thread disappears, assistant text delivery should not crash the session."""
+        thread.send.side_effect = discord.NotFound(MagicMock(), "Unknown Channel")
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.ASSISTANT, text="Hello"))
+
+        assert p.assistant_text_sent is False
+
+    @pytest.mark.asyncio
     async def test_tool_result_edit_failure_does_not_raise(
         self, thread: MagicMock, runner: MagicMock
     ) -> None:
