@@ -167,7 +167,10 @@ async def _build_system_context(config: RunConfig) -> str | None:
         f"  {wd}/{marker}\n"
         f"Example: `echo /absolute/path/to/file >> {wd}/{marker}`\n"
         "The bot will attach those files when this session ends.\n"
-        "Only include files the user explicitly asked to receive."
+        "When local instructions require Discord attachment for a substantial "
+        "written deliverable, save the final text as a Markdown file and append "
+        "that file path here. Otherwise, only include files the user explicitly "
+        "asked to receive."
     )
 
     # Post-compact guardrail: prevent auto-execution of "pending tasks" from summary.
