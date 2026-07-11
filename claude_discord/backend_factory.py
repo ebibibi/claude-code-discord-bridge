@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 #
 # ``codex`` is intentionally ``None``: when no model is configured we omit
 # ``--model`` entirely so the Codex CLI uses its own default (the ``model``
-# key in ~/.codex/config.toml, currently gpt-5.5). Hard-coding a version here
-# only goes stale — the console default already moved from gpt-5.4 to gpt-5.5.
+# key in ~/.codex/config.toml, currently gpt-5.6-sol). Hard-coding a version
+# here only goes stale as the Codex console default moves.
 DEFAULT_MODEL: dict[str, str | None] = {"claude": "sonnet", "codex": None}
 DEFAULT_COMMAND = {"claude": "claude", "codex": "codex"}
 

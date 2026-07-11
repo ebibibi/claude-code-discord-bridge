@@ -179,7 +179,7 @@ ccdb 3.0 では、Bot を再起動せずにどの AI が次のセッションを
 
 - **Claude セッション** は "🤖 Claude Code session started" というタイトルのブルーパープル embed で開始。
 - **Codex セッション** は "🌀 OpenAI Codex session started" というタイトルの OpenAI ティール embed で開始。
-- 完了 embed には通常の実行時間 / コスト / トークン / コンテキストメトリクスと並んで `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.4` チップが表示されます。
+- 完了 embed には通常の実行時間 / コスト / トークン / コンテキストメトリクスと並んで `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.6-sol` チップが表示されます。
 
 使用例:
 

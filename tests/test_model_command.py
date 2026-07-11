@@ -102,6 +102,16 @@ class TestModelAutocomplete:
         # No Claude models leaked in.
         assert "sonnet" not in values
 
+    async def test_codex_backend_suggests_latest_codex_model_first(self) -> None:
+        settings = await _settings()
+        await settings.set_backend("codex")
+        cog = _make_cog(settings)
+        interaction = _channel_interaction()
+
+        choices = await cog._model_name_autocomplete(interaction, "")
+
+        assert choices[0].value == "gpt-5.6-sol"
+
     async def test_filters_by_current_substring(self) -> None:
         settings = await _settings()
         cog = _make_cog(settings)
