@@ -67,9 +67,9 @@ SUGGESTED_MODELS: dict[str, list[tuple[str, str]]] = {
         ("fable", "Fable 5 (state-of-the-art, token-efficient)"),
     ],
     "codex": [
-        ("gpt-5.5", "GPT-5.5 (current Codex console default)"),
+        ("gpt-5.6-sol", "GPT-5.6 SOL (current Codex console default)"),
+        ("gpt-5.5", "GPT-5.5 (previous default)"),
         ("gpt-5.5-codex", "GPT-5.5 Codex"),
-        ("gpt-5.4", "GPT-5.4 (previous default)"),
         ("o4-mini", "o4-mini (fast)"),
     ],
 }
@@ -277,7 +277,7 @@ class BackendCommandCog(commands.Cog):
     )
     @app_commands.autocomplete(name=_model_name_autocomplete)
     @app_commands.describe(
-        name="Model id (e.g. sonnet, opus, gpt-5.4, o4-mini). Omit to show current.",
+        name="Model id (e.g. sonnet, opus, gpt-5.6-sol, o4-mini). Omit to show current.",
         scope=(
             "thread: only this thread; global: server-wide. "
             "Default: thread when in thread, else global."

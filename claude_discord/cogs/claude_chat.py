@@ -309,9 +309,9 @@ class ClaudeChatCog(commands.Cog):
         #    Honoured only when the current backend is claude. Passing a
         #    Claude model id to Codex would cause `codex exec` to fail
         #    with an unknown model error.
-        # 3. Env-derived per-backend default, then the factory's hard-coded
-        #    default (sonnet for claude, gpt-5.4 for codex). Returned as
-        #    None here so factory.build() picks the right one.
+        # 3. Env-derived per-backend default, then the factory's backend default
+        #    (sonnet for claude, CLI default for codex). Returned as None here
+        #    so factory.build() picks the right one.
         explicit_model = await self._backend_settings.explicit_model(backend, thread_id)
         model: str | None
         if explicit_model:

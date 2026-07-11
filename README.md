@@ -177,7 +177,7 @@ Visual cues so you never forget which one you're talking to:
 
 - **Claude sessions** open with a blurple embed titled "🤖 Claude Code session started".
 - **Codex sessions** open with an OpenAI-teal embed titled "🌀 OpenAI Codex session started".
-- The completion embed prepends a `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.5` chip alongside the usual duration / cost / token / context metrics. (When a backend's model is left at the CLI default, the chip shows just the backend name.)
+- The completion embed prepends a `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.6-sol` chip alongside the usual duration / cost / token / context metrics. (When a backend's model is left at the CLI default, the chip shows just the backend name.)
 
 Concrete example:
 

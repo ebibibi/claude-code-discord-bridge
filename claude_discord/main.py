@@ -47,7 +47,7 @@ def load_config() -> dict[str, str]:
     backend = os.getenv("CCDB_BACKEND", "claude")
     # Default model is backend-specific: Claude needs an explicit alias
     # ("sonnet"), but Codex defers to its own config.toml default when left
-    # empty (so we never pin a stale version like gpt-5.4).
+    # empty (so we never pin a stale Codex model version).
     default_model = "" if backend == "codex" else "sonnet"
 
     return {
