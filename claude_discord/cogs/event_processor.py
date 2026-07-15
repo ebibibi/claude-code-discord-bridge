@@ -266,6 +266,17 @@ class EventProcessor:
         """Shorthand for the chat_only flag on the config."""
         return self._config.chat_only
 
+    async def _send_thread_message(self, *args: object, **kwargs: object) -> discord.Message | None:
+        """Send a Discord message, treating a deleted thread as non-fatal."""
+        try:
+            return await self._config.thread.send(*args, **kwargs)
+        except discord.NotFound:
+            logger.info(
+                "Discord thread %d disappeared before completion delivery",
+                self._config.thread.id,
+            )
+            return None
+
     async def _on_system(self, event: StreamEvent) -> None:
         """Handle SYSTEM events — capture session_id, post start embed, compact notification."""
         # Context compaction notification (skip display in chat_only mode)
@@ -486,7 +497,7 @@ class EventProcessor:
             # error field, not a raised exception). Capture it so result_sink
             # consumers report a real error instead of an empty "done".
             self._final_error = event.error
-            await self._config.thread.send(embed=_make_error_embed(event.error))
+            await self._send_thread_message(embed=_make_error_embed(event.error))
             if self._config.status:
                 await self._config.status.set_error()
         else:
@@ -495,7 +506,7 @@ class EventProcessor:
             if response_text and not self._assistant_text_sent:
                 last_sent: discord.Message | None = None
                 for chunk in chunk_message(response_text):
-                    last_sent = await self._config.thread.send(chunk)
+                    last_sent = await self._send_thread_message(chunk)
                 if last_sent is not None:
                     last_assistant_url = last_sent.jump_url
                 last_assistant_text = response_text
@@ -517,7 +528,7 @@ class EventProcessor:
                 if self._config.status:
                     await self._config.status.set_done()
             else:
-                await self._config.thread.send(
+                await self._send_thread_message(
                     embed=session_complete_embed(
                         event.cost_usd,
                         event.duration_ms,

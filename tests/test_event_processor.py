@@ -500,6 +500,31 @@ class TestOnComplete:
         assert len(embed_sends) >= 1
 
     @pytest.mark.asyncio
+    async def test_complete_send_not_found_does_not_raise(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """If the Discord thread disappears, completion delivery is non-fatal."""
+        thread.send.side_effect = discord.NotFound(MagicMock(), "Unknown Channel")
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        await p.process(_make_result_event(session_id="s1"))
+
+        assert p.session_id == "s1"
+
+    @pytest.mark.asyncio
+    async def test_complete_send_unexpected_error_still_raises(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """Unexpected delivery failures must not be hidden as missing channels."""
+        thread.send.side_effect = RuntimeError("unexpected delivery failure")
+        config = _make_config(thread, runner)
+        p = EventProcessor(config)
+
+        with pytest.raises(RuntimeError, match="unexpected delivery failure"):
+            await p.process(_make_result_event(session_id="s1"))
+
+    @pytest.mark.asyncio
     async def test_error_sends_error_embed(self, thread: MagicMock, runner: MagicMock) -> None:
         config = _make_config(thread, runner)
         p = EventProcessor(config)
