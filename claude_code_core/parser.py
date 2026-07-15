@@ -310,23 +310,44 @@ def _parse_rate_limit_event(data: dict[str, Any], event: StreamEvent) -> None:
 
 
 def _parse_ask_questions(tool_input: dict[str, Any]) -> list[AskQuestion]:
-    """Parse AskUserQuestion tool input into a list of AskQuestion objects."""
-    questions_raw = tool_input.get("questions", [])
+    """Parse AskUserQuestion input, including JSON-encoded nested values."""
+
+    def _as_list(value: Any) -> list[Any]:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                return []
+        return value if isinstance(value, list) else []
+
+    def _as_dict(value: Any) -> dict[str, Any] | None:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                return None
+        return value if isinstance(value, dict) else None
+
     result: list[AskQuestion] = []
-    for q in questions_raw:
+    for raw_question in _as_list(tool_input.get("questions", [])):
+        question = _as_dict(raw_question)
+        if question is None:
+            continue
         options = [
             AskOption(
-                label=o.get("label", ""),
-                description=o.get("description", ""),
+                label=option.get("label", ""),
+                description=option.get("description", ""),
             )
-            for o in q.get("options", [])
-            if o.get("label")
+            for option in (
+                _as_dict(raw_option) for raw_option in _as_list(question.get("options", []))
+            )
+            if option is not None and option.get("label")
         ]
         result.append(
             AskQuestion(
-                question=q.get("question", ""),
-                header=q.get("header", ""),
-                multi_select=bool(q.get("multiSelect", False)),
+                question=question.get("question", ""),
+                header=question.get("header", ""),
+                multi_select=bool(question.get("multiSelect", False)),
                 options=options,
             )
         )
