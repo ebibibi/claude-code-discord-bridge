@@ -37,6 +37,9 @@ class _FakeProcess:
     ) -> None:
         self.stdout = _FakeStream(stdout_lines)
         self.stderr = _FakeStream(read_data=stderr)
+        self.stdin = MagicMock()
+        self.stdin.drain = AsyncMock()
+        self.stdin.wait_closed = AsyncMock()
         self.returncode = returncode
         self.pid = pid
 
