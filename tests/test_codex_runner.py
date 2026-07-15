@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -36,6 +37,9 @@ class _FakeProcess:
     ) -> None:
         self.stdout = _FakeStream(stdout_lines)
         self.stderr = _FakeStream(read_data=stderr)
+        self.stdin = MagicMock()
+        self.stdin.drain = AsyncMock()
+        self.stdin.wait_closed = AsyncMock()
         self.returncode = returncode
         self.pid = pid
 
@@ -91,10 +95,18 @@ class TestCodexRunnerBuildArgs:
         assert "--cd" in args or "-C" in args
         assert "/tmp/work" in args
 
-    def test_prompt_is_last_arg(self) -> None:
+    def test_prompt_is_not_in_args(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini")
         args = runner._build_args("hello world", session_id=None)
-        assert args[-1] == "hello world"
+        assert "hello world" not in args
+        assert args[-1] == "-"
+
+    def test_large_prompt_is_not_in_args(self) -> None:
+        runner = CodexRunner(command="codex", model="o4-mini")
+        large_prompt = "x" * 200_000
+        args = runner._build_args(large_prompt, session_id=None)
+        assert large_prompt not in args
+        assert args[-1] == "-"
 
     def test_session_id_validation(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini")
@@ -482,23 +494,26 @@ class TestCodexRunnerArgvStructure:
         assert "--cd" in args
         assert "/work" in args
 
-    def test_resume_session_id_before_prompt(self) -> None:
+    def test_resume_session_id_before_stdin_marker(self) -> None:
         sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
         runner = CodexRunner(command="codex", model="gpt-5.4")
         args = runner._build_args("hello-prompt", session_id=sid)
-        # SESSION_ID must come BEFORE PROMPT in `codex exec resume`.
-        assert args.index(sid) < args.index("hello-prompt"), (
-            "SESSION_ID must precede PROMPT in codex exec resume"
+        # SESSION_ID must come BEFORE the stdin marker in `codex exec resume`.
+        assert "hello-prompt" not in args
+        assert args.index(sid) < args.index("-"), (
+            "SESSION_ID must precede stdin marker in codex exec resume"
         )
 
-    def test_prompt_is_always_last(self) -> None:
+    def test_stdin_marker_is_always_last(self) -> None:
         runner = CodexRunner(command="codex", model="gpt-5.4")
         # New session
         args = runner._build_args("the-prompt", session_id=None)
-        assert args[-1] == "the-prompt"
+        assert "the-prompt" not in args
+        assert args[-1] == "-"
         # Resume
         args = runner._build_args("the-prompt", session_id="019e29a0-d5b0-71f0-bdc0-46f09a06fdaf")
-        assert args[-1] == "the-prompt"
+        assert "the-prompt" not in args
+        assert args[-1] == "-"
 
     def test_dangerously_bypass_flag_for_resume(self) -> None:
         sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
@@ -523,3 +538,53 @@ class TestCodexRunnerArgvStructure:
             assert args.index("resume") == 2, (
                 f"resume must follow exec at index 2, got index {args.index('resume')}"
             )
+
+
+class TestCodexRunnerStdin:
+    """Prompt delivery tests for CodexRunner.
+
+    Codex CLI reads instructions from stdin when the prompt positional is "-".
+    This keeps large Discord attachment prompts out of argv and avoids E2BIG.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_writes_prompt_to_stdin(self) -> None:
+        import asyncio as _asyncio
+
+        runner = CodexRunner(command="codex")
+        large_prompt = "x" * 200_000
+
+        written: list[bytes] = []
+
+        def capture_write(data: bytes) -> None:
+            written.append(data)
+
+        mock_stdin = MagicMock()
+        mock_stdin.write = capture_write
+        mock_stdin.drain = AsyncMock()
+        mock_stdin.close = MagicMock()
+        mock_stdin.wait_closed = AsyncMock()
+
+        mock_process = AsyncMock()
+        mock_process.pid = 42
+        mock_process.returncode = None
+        mock_process.stdout = AsyncMock()
+        mock_process.stdout.readline = AsyncMock(return_value=b"")
+        mock_process.stderr = AsyncMock()
+        mock_process.stderr.read = AsyncMock(return_value=b"")
+        mock_process.stdin = mock_stdin
+        mock_process.wait = AsyncMock(return_value=0)
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_process) as mock_exec,
+            patch.object(runner, "_cleanup", new_callable=AsyncMock),
+        ):
+            _ = [event async for event in runner.run(large_prompt)]
+
+        call_args = mock_exec.call_args.args
+        call_kwargs = mock_exec.call_args.kwargs
+        assert large_prompt not in call_args
+        assert call_args[-1] == "-"
+        assert call_kwargs["stdin"] == _asyncio.subprocess.PIPE
+        assert written == [large_prompt.encode()]
+        mock_stdin.close.assert_called_once()
