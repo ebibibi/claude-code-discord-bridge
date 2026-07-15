@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-code-discord-bridge"
-version = "3.1.14"
+version = "3.1.15"
 description = "Claude & Codex Discord Bridge — drive both Claude Code and OpenAI Codex from Discord with interactive chat, parallel sessions, and CI/CD automation"
 readme = "README.md"
 license = {text = "MIT"}
