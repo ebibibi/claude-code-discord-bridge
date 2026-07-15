@@ -168,28 +168,31 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 
 ### バックエンド切り替え — Claude / Codex をオンデマンドで
 
-ccdb 3.0 では、Bot を再起動せずにどの AI が次のセッションを処理するかを切り替える 2 つのスラッシュコマンドが追加されました:
+ccdb 3.0 では、Bot を再起動せずにどの AI が次のセッションを処理するかを切り替える 3 つのスラッシュコマンドが追加されました:
 
 - `/backend [name] [scope]` — バックエンドの表示または切り替え。`name` は `claude` または `codex`。`scope` は `thread`（このスレッドのみ）または `global`（サーバー全体のデフォルト）。`scope` を省略すると自動解決: スレッド内ではそのスレッドにスコープ、それ以外ではグローバルデフォルトを設定。
-- `/model [name] [scope]` — **現在の**バックエンドで使用するモデルの表示または切り替え。各バックエンドは独自のモデル設定を記憶するため、バックエンドを切り替えても好みのモデルが保持されます。
+- `/model [name] [scope]` — **現在の**バックエンドで使用するモデルの表示または切り替え。各バックエンドは独自のモデル設定を記憶するため、バックエンドを切り替えても好みのモデルが保持されます。バックエンドのモデルを未設定にすると、その CLI 自身のデフォルトに委ねられます（たとえば Codex は `~/.codex/config.toml` の `model` を使用するため、ccdb が特定バージョンに固定せずコンソールのデフォルトに追従します）。
+- `/effort [level] [scope]` — 現在のバックエンドで使用する**推論の強度**の表示または切り替え。有効なレベルはバックエンドごとに異なり、Claude は `low/medium/high/max`、Codex は `minimal/low/medium/high/xhigh`（CLI の `model_reasoning_effort` にマッピング）を受け付けます。未設定にすると CLI のデフォルトに委ねられます。
 
-両コマンドとも `SettingsRepository` 経由で SQLite に永続化されるため、Bot を再起動しても設定が保持されます。引数なしで `/backend` を呼び出すと、現在のグローバルデフォルトとスレッドごとのオーバーライドを表示します。
+3 つのコマンドはいずれも `SettingsRepository` 経由で SQLite に永続化されるため、Bot を再起動しても設定が保持されます。引数なしで呼び出すと、現在のグローバルデフォルトとスレッドごとのオーバーライドを表示します。
 
 どちらの AI と話しているかを常に把握できるビジュアルキュー:
 
 - **Claude セッション** は "🤖 Claude Code session started" というタイトルのブルーパープル embed で開始。
 - **Codex セッション** は "🌀 OpenAI Codex session started" というタイトルの OpenAI ティール embed で開始。
-- 完了 embed には通常の実行時間 / コスト / トークン / コンテキストメトリクスと並んで `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.6-sol` チップが表示されます。
+- 完了 embed には通常の実行時間 / コスト / トークン / コンテキストメトリクスと並んで `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.6-sol` チップが表示されます（バックエンドのモデルを CLI デフォルトのままにした場合、チップにはバックエンド名だけが表示されます）。
 
 使用例:
 
 ```text
-/backend codex                        # global → codex（次の新規セッションから codex を使用）
-/model gpt-5-codex                    # global → codex は gpt-5-codex を使用
-                                       # …スレッドを開いてメッセージを送る…
-/backend claude scope:thread          # このスレッドのみ → claude に切り替え
-/model opus scope:thread              # このスレッドのみ → claude/opus を使用
-                                       # 他のスレッドはグローバルの codex+gpt-5-codex のまま
+/backend codex                        # global → codex (next new sessions use codex)
+/model gpt-5-codex                    # global → codex uses gpt-5-codex
+/effort xhigh                          # global → codex reasons at xhigh effort
+                                       # …open a thread, send a message…
+/backend claude scope:thread          # this thread only → switch back to claude
+/model opus scope:thread              # this thread only → claude/opus
+/effort max scope:thread              # this thread only → claude reasons at max
+                                       # other threads keep the global codex defaults
 ```
 
 内部の仕組み:
