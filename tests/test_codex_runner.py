@@ -251,6 +251,161 @@ class TestCodexRunnerRun:
         assert events[0].error is not None
         assert "CLI exited with code 1" in events[0].error
 
+    @pytest.mark.asyncio
+    async def test_resume_stream_disconnect_rolls_over_with_text_context(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Image-heavy Codex sessions must not leave a thread permanently stuck."""
+        stale_session = "019f68db-1a72-7bc1-a222-af76b9dd4cdb"
+        sessions_dir = tmp_path / "sessions" / "2026" / "07" / "16"
+        sessions_dir.mkdir(parents=True)
+        rollout = sessions_dir / f"rollout-2026-07-16T11-56-57-{stale_session}.jsonl"
+        records = [
+            {
+                "type": "event_msg",
+                "payload": {"type": "user_message", "message": "Design a dashboard"},
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "output": [
+                        {"type": "input_image", "image_url": "data:image/png;base64,SECRET"}
+                    ],
+                },
+            },
+            {
+                "type": "event_msg",
+                "payload": {
+                    "type": "agent_message",
+                    "message": "I generated three variants and updated the files.",
+                },
+            },
+        ]
+        rollout.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+
+        disconnect_line = json.dumps(
+            {
+                "type": "error",
+                "message": (
+                    "stream disconnected before completion: "
+                    "websocket closed by server before response.completed"
+                ),
+            }
+        ).encode()
+        started_line = json.dumps(
+            {"type": "thread.started", "thread_id": "019f-replacement-session"}
+        ).encode()
+        completed_line = json.dumps({"type": "turn.completed", "usage": {}}).encode()
+        first_process = _FakeProcess(stdout_lines=[disconnect_line + b"\n"], pid=100)
+        replacement_process = _FakeProcess(
+            stdout_lines=[started_line + b"\n", completed_line + b"\n"],
+            pid=101,
+        )
+        processes = [first_process, replacement_process]
+        calls: list[tuple[str, ...]] = []
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            calls.append(args)
+            return processes.pop(0)
+
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+        monkeypatch.setattr(
+            "claude_code_core.codex_runner.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+        runner = CodexRunner(command="codex", working_dir="/work")
+
+        events = [event async for event in runner.run("continue", session_id=stale_session)]
+
+        assert len(calls) == 2
+        assert calls[0][:3] == ("codex", "exec", "resume")
+        assert "resume" not in calls[1]
+        assert [event.error for event in events if event.error] == []
+        assert events[0].session_id == "019f-replacement-session"
+        replacement_process.stdin.write.assert_called_once()
+        recovery_prompt = replacement_process.stdin.write.call_args.args[0].decode()
+        assert "Design a dashboard" in recovery_prompt
+        assert "I generated three variants and updated the files." in recovery_prompt
+        assert "Current user message:\ncontinue" in recovery_prompt
+        assert "data:image" not in recovery_prompt
+        # Subprocess argv must still never contain prompt text.
+        assert all("Design a dashboard" not in arg for call in calls for arg in call)
+
+    @pytest.mark.asyncio
+    async def test_new_session_stream_disconnect_does_not_retry(self, monkeypatch) -> None:
+        disconnect_line = json.dumps(
+            {
+                "type": "error",
+                "message": (
+                    "stream disconnected before completion: "
+                    "websocket closed by server before response.completed"
+                ),
+            }
+        ).encode()
+        process = _FakeProcess(stdout_lines=[disconnect_line + b"\n"])
+        calls = 0
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return process
+
+        monkeypatch.setattr(
+            "claude_code_core.codex_runner.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+        runner = CodexRunner(command="codex")
+
+        events = [event async for event in runner.run("hello")]
+
+        assert calls == 1
+        assert len(events) == 1
+        assert events[0].error is not None
+        assert "websocket closed" in events[0].error
+
+    @pytest.mark.asyncio
+    async def test_resume_disconnect_after_output_does_not_retry(self, monkeypatch) -> None:
+        message_line = json.dumps(
+            {
+                "type": "item.completed",
+                "item": {"id": "msg-1", "type": "agent_message", "text": "Partial output"},
+            }
+        ).encode()
+        disconnect_line = json.dumps(
+            {
+                "type": "error",
+                "message": (
+                    "stream disconnected before completion: "
+                    "websocket closed by server before response.completed"
+                ),
+            }
+        ).encode()
+        process = _FakeProcess(stdout_lines=[message_line + b"\n", disconnect_line + b"\n"])
+        calls = 0
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return process
+
+        monkeypatch.setattr(
+            "claude_code_core.codex_runner.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+        runner = CodexRunner(command="codex")
+
+        events = [
+            event
+            async for event in runner.run(
+                "continue", session_id="019f68db-1a72-7bc1-a222-af76b9dd4cdb"
+            )
+        ]
+
+        assert calls == 1
+        assert [event.text for event in events if event.text] == ["Partial output"]
+        assert len([event for event in events if event.error]) == 1
+
 
 class TestParseCodexLine:
     """Tests for parse_codex_line() — Codex JSONL → StreamEvent."""
