@@ -13,6 +13,7 @@ import os
 import re
 import signal
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from urllib.parse import urlparse
 
 from .types import (
@@ -137,6 +138,14 @@ def parse_codex_line(line: str) -> StreamEvent | None:
 # accumulate forever — we synthesize a completion to close it immediately.
 _ATOMIC_ITEM_TYPES: frozenset[str] = frozenset({"file_changes"})
 _MISSING_ROLLOUT_PATTERN = re.compile(r"no rollout found for thread id", re.IGNORECASE)
+_RESUME_STREAM_DISCONNECT_PATTERN = re.compile(
+    r"stream disconnected before completion:.*"
+    r"websocket closed by server before response\.completed",
+    re.IGNORECASE,
+)
+_RECOVERY_MESSAGE_LIMIT = 12
+_RECOVERY_MESSAGE_CHARS = 4_000
+_RECOVERY_TRANSCRIPT_CHARS = 24_000
 
 
 def _atomic_tool_completion(event: StreamEvent) -> StreamEvent | None:
@@ -161,6 +170,82 @@ def _atomic_tool_completion(event: StreamEvent) -> StreamEvent | None:
 def _is_missing_rollout_error(error: str | None) -> bool:
     """Return True when Codex cannot resume because local rollout history is gone."""
     return bool(error and _MISSING_ROLLOUT_PATTERN.search(error))
+
+
+def _is_resume_stream_disconnect(error: str | None) -> bool:
+    """Return True for the persistent Codex Responses WebSocket failure."""
+    return bool(error and _RESUME_STREAM_DISCONNECT_PATTERN.search(error))
+
+
+def _find_rollout(session_id: str, env: dict[str, str]) -> Path | None:
+    """Find Codex's local rollout for a validated session ID."""
+    codex_home = Path(env.get("CODEX_HOME") or Path.home() / ".codex")
+    sessions_dir = codex_home / "sessions"
+    if not sessions_dir.is_dir():
+        return None
+    return next(sessions_dir.rglob(f"*-{session_id}.jsonl"), None)
+
+
+def _text_transcript_from_rollout(session_id: str, env: dict[str, str]) -> str:
+    """Extract bounded user/assistant text without loading image/tool payloads.
+
+    Failed resume attempts append user messages without a matching assistant
+    response. Trim that incomplete tail because the current prompt is included
+    separately in the recovery request.
+    """
+    rollout = _find_rollout(session_id, env)
+    if rollout is None:
+        return ""
+
+    messages: list[tuple[str, str]] = []
+    last_assistant_index: int | None = None
+    try:
+        with rollout.open(encoding="utf-8") as stream:
+            for line in stream:
+                # Image/tool records can be several megabytes. Reject them
+                # before JSON parsing and retain only lightweight event_msg text.
+                if '"event_msg"' not in line:
+                    continue
+                if '"user_message"' not in line and '"agent_message"' not in line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = record.get("payload", {})
+                event_type = payload.get("type")
+                message = payload.get("message")
+                if event_type not in {"user_message", "agent_message"} or not isinstance(
+                    message, str
+                ):
+                    continue
+                role = "User" if event_type == "user_message" else "Assistant"
+                messages.append((role, message[:_RECOVERY_MESSAGE_CHARS]))
+                if role == "Assistant":
+                    last_assistant_index = len(messages) - 1
+    except OSError:
+        logger.warning("Could not read Codex rollout for recovery", exc_info=True)
+        return ""
+
+    if last_assistant_index is not None:
+        messages = messages[: last_assistant_index + 1]
+    messages = messages[-_RECOVERY_MESSAGE_LIMIT:]
+    transcript = "\n\n".join(f"{role}:\n{text}" for role, text in messages)
+    return transcript[-_RECOVERY_TRANSCRIPT_CHARS:]
+
+
+def _build_resume_recovery_prompt(prompt: str, session_id: str, env: dict[str, str]) -> str:
+    """Build a text-only handoff when a Codex resume is permanently stuck."""
+    transcript = _text_transcript_from_rollout(session_id, env)
+    context = transcript or "(No prior text transcript was available.)"
+    return (
+        "A previous Codex session could not be resumed after exhausting its transport retries. "
+        "Continue the same task in this replacement session. Use the text-only transcript below "
+        "for intent, inspect the current workspace for the authoritative work state, and do not "
+        "repeat completed work.\n\n"
+        f"Previous text transcript:\n{context}\n\n"
+        f"Current user message:\n{prompt}"
+    )
 
 
 class CodexRunner:
@@ -209,13 +294,15 @@ class CodexRunner:
     ) -> AsyncGenerator[StreamEvent, None]:
         """Run Codex CLI and yield stream events."""
         attempt_session_id = session_id
+        attempt_prompt = prompt
         retried_without_resume = False
 
         while True:
-            args = self._build_args(prompt, attempt_session_id)
+            args = self._build_args(attempt_prompt, attempt_session_id)
             env = self._build_env()
             cwd = self.working_dir or os.getcwd()
             should_retry_without_resume = False
+            saw_progress = False
 
             logger.info("Starting Codex CLI: %s (cwd=%s)", " ".join(args[:6]) + " ...", cwd)
 
@@ -232,7 +319,7 @@ class CodexRunner:
             logger.info("Codex CLI started: pid=%s", self._process.pid)
 
             if self._process.stdin is not None:
-                await self._send_prompt(prompt)
+                await self._send_prompt(attempt_prompt)
 
             try:
                 async for event in self._read_stream():
@@ -249,6 +336,25 @@ class CodexRunner:
                         should_retry_without_resume = True
                         retried_without_resume = True
                         break
+                    if (
+                        attempt_session_id
+                        and not retried_without_resume
+                        and not saw_progress
+                        and _is_resume_stream_disconnect(event.error)
+                    ):
+                        logger.warning(
+                            "Codex session %s could not resume after WebSocket retries; "
+                            "rolling over to a text-only recovery session",
+                            attempt_session_id,
+                        )
+                        attempt_prompt = _build_resume_recovery_prompt(
+                            prompt, attempt_session_id, env
+                        )
+                        should_retry_without_resume = True
+                        retried_without_resume = True
+                        break
+                    if event.text or event.tool_use is not None or event.tool_result_id:
+                        saw_progress = True
                     yield event
             except TimeoutError:
                 logger.warning("Codex CLI timed out after %ds", self.timeout_seconds)
