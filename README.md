@@ -211,6 +211,7 @@ Behind the scenes:
 - **Thread = Session** — 1:1 mapping between Discord thread and Claude Code session
 - **Goal tracking** — `/goal <condition>` sets a completion condition; Claude keeps working until the condition is met. Omit the condition to check status; pass `clear` to cancel
 - **Session persistence** — Resume conversations across messages via `--resume`
+- **Automatic Codex resume recovery** — If a resumed Codex session repeatedly loses its WebSocket before producing output, ccdb starts a replacement session with a bounded, text-only transcript of the prior conversation; image and tool payloads are excluded
 - **Concurrent sessions** — Multiple parallel sessions with configurable limit
 - **Stop without clearing** — `/stop` halts a session while preserving it for resume
 - **Session interrupt** — Sending a new message to an active thread sends SIGINT to the running session and starts fresh with the new instruction; no manual `/stop` needed
