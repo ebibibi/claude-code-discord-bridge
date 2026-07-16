@@ -33,7 +33,8 @@ PIPELINE_SCRIPT = "/home/ubuntu/ec-automation-system/scripts/shuppin_pipeline.py
 PIPELINE_PROJECT_ROOT = os.path.dirname(os.path.dirname(PIPELINE_SCRIPT))
 PREVIEW_TIMEOUT = 60
 UNLISTED_PREVIEW_TIMEOUT = 30   # 未出品件数取得（読み取り専用サブプロセス）
-SUBMIT_TIMEOUT_BASE = 600       # 単一モール×1JAN (10分)
+SUBMIT_TIMEOUT_BASE = 2200      # 単一モール×1JAN。最悪ケース=amazon 2アカ×840秒+マージン。
+                                 # 下位層(pipeline)が先に構造化エラーで切れる設計
 SUBMIT_TIMEOUT_ALL_BASE = 1500  # 全モール×1JAN (25分, Yahoo実測5分ベース)
 SUBMIT_TIMEOUT_PER_JAN = 1500   # 追加JAN毎 (25分/JAN)
 SUBMIT_TIMEOUT_MAX = 3600       # 上限1時間
