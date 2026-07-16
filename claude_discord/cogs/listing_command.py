@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import discord
@@ -29,12 +30,15 @@ logger = logging.getLogger(__name__)
 
 # バックエンドスクリプト
 PIPELINE_SCRIPT = "/home/ubuntu/ec-automation-system/scripts/shuppin_pipeline.py"
+PIPELINE_PROJECT_ROOT = os.path.dirname(os.path.dirname(PIPELINE_SCRIPT))
 PREVIEW_TIMEOUT = 60
+UNLISTED_PREVIEW_TIMEOUT = 30   # 未出品件数取得（読み取り専用サブプロセス）
 SUBMIT_TIMEOUT_BASE = 600       # 単一モール×1JAN (10分)
 SUBMIT_TIMEOUT_ALL_BASE = 1500  # 全モール×1JAN (25分, Yahoo実測5分ベース)
 SUBMIT_TIMEOUT_PER_JAN = 1500   # 追加JAN毎 (25分/JAN)
 SUBMIT_TIMEOUT_MAX = 3600       # 上限1時間
 MAX_JANS = 5                    # 複数JAN指定時の上限
+PROC_KILL_WAIT = 5              # タイムアウト後のプロセス停止待ち上限(秒)
 
 # Embed カラー
 COLOR_PREVIEW = 0x3498DB   # 青
@@ -43,8 +47,90 @@ COLOR_ERROR = 0xE74C3C     # 赤
 COLOR_CANCEL = 0x95A5A6    # グレー
 COLOR_WORKING = 0xF39C12   # オレンジ
 
-# 1人1ロック
-_active_locks: dict[int, str] = {}
+# コマンドグローバル1本ロック（別ユーザーの同時実行による同一JAN二重submitを防ぐ）
+_global_lock: dict[str, object] | None = None
+
+
+def _extract_inner_json(text: str) -> dict | None:
+    """subprocess stdoutの末尾からJSON行を探してパースする.
+
+    listing.py --json-output はコンパクトな1行JSONを標準出力の最後に出す
+    （shuppin_pipeline.py はそれをさらに `submit.stdout` として包む）。
+    ログ行と混在しているため、末尾から走査して最初に見つかった正当な
+    JSONオブジェクト行を返す。見つからなければNone。
+    """
+    if not text:
+        return None
+    for line in reversed(text.strip().split("\n")):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                parsed = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def _mall_status_lines(mall_results: dict) -> list[str]:
+    """{mall: {"ok": bool}, ...} → 'OK | mall' 形式の行リストに変換する."""
+    lines = []
+    for mall_name, info in mall_results.items():
+        ok = bool(info.get("ok")) if isinstance(info, dict) else bool(info)
+        lines.append(f"{'OK' if ok else 'NG'} | {mall_name}")
+    return lines
+
+
+def _truncate_field(text: str, limit: int = 1024) -> str:
+    """Embed field値をDiscordの上限（既定1024字）以内に切り詰める（コードフェンス込み）."""
+    if not text:
+        return text or ""
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    marker = f"\n…({omitted}字省略)"
+    cut = max(limit - len(marker), 0)
+    return text[:cut] + marker
+
+
+def _embed_to_plain_text(embed: discord.Embed | None, content: str | None = None) -> str:
+    """edit_original_response失敗時のプレーンテキストフォールバック文面を作る."""
+    parts: list[str] = []
+    if content:
+        parts.append(content)
+    if embed is not None:
+        if embed.title:
+            parts.append(f"**{embed.title}**")
+        if embed.description:
+            parts.append(str(embed.description))
+        for f in embed.fields:
+            parts.append(f"**{f.name}**\n{f.value}")
+    text = "\n\n".join(p for p in parts if p)
+    if not text:
+        text = "(表示に失敗しました。詳細はログを確認してください)"
+    if len(text) > 1900:
+        omitted = len(text) - 1900
+        text = text[:1900] + f"\n…({omitted}字省略)"
+    return text
+
+
+async def _safe_edit_response(interaction: discord.Interaction, **kwargs) -> None:
+    """edit_original_responseをtry/exceptで保護し、失敗時はプレーンテキストで通知する.
+
+    Discordの1024字/6000字などのペイロード制限超過やトークン失効など、
+    edit_original_response自体が例外を投げるケースでコマンド全体がクラッシュ
+    (＝結果が何も表示されない)のを防ぐ。
+    """
+    try:
+        await interaction.edit_original_response(**kwargs)
+    except Exception:
+        logger.exception("/shuppin: edit_original_response failed. falling back to plain text")
+        fallback = _embed_to_plain_text(kwargs.get("embed"), kwargs.get("content"))
+        try:
+            await interaction.followup.send(content=fallback)
+        except Exception:
+            logger.exception("/shuppin: plain text fallback also failed")
 
 
 def _load_allowed_user_ids() -> set[int] | None:
@@ -152,6 +238,7 @@ class ListingCommandCog(commands.Cog):
         jan: str = "",
     ) -> None:
         """SS-17ベースでモール出品."""
+        global _global_lock
         user_id = interaction.user.id
 
         # ユーザー権限チェック
@@ -185,11 +272,15 @@ class ListingCommandCog(commands.Cog):
         # カンマ区切りを正規化（pipeline側に渡す文字列）
         jan_str = ",".join(jan_list) if jan_list else ""
 
-        # 1ロックチェック
-        if user_id in _active_locks:
-            locked = _active_locks[user_id]
+        # コマンドグローバル1本ロック（誰か1人が実行中なら他ユーザーも待たせる）
+        if _global_lock is not None:
+            started_at: datetime = _global_lock["started_at"]  # type: ignore[assignment]
+            started_ts = int(started_at.timestamp())
             await interaction.response.send_message(
-                f"前の出品処理（{locked}）が進行中です。\n"
+                f"他の出品処理が進行中です。\n"
+                f"実行者: {_global_lock['user_name']} / "
+                f"開始: <t:{started_ts}:T> (<t:{started_ts}:R>)\n"
+                f"内容: {_global_lock['label']}\n"
                 "完了またはキャンセルしてから次を入力してください。",
                 ephemeral=True,
             )
@@ -200,12 +291,61 @@ class ListingCommandCog(commands.Cog):
             lock_label += f" JAN:{len(jan_list)}件" if len(jan_list) > 1 else f" JAN:{jan_list[0]}"
         else:
             lock_label += " 未出品全部"
-        _active_locks[user_id] = lock_label
+
+        _global_lock = {
+            "user_id": user_id,
+            "user_name": str(interaction.user),
+            "label": lock_label,
+            "started_at": datetime.now(timezone.utc),
+        }
 
         try:
             await self._process_listing(interaction, mall, jan_str or None, user_id, len(jan_list))
         finally:
-            _active_locks.pop(user_id, None)
+            _global_lock = None
+
+    async def _fetch_unlisted_summary(self, mall: str) -> dict | None:
+        """未出品JANの件数と先頭5件を取得する（読み取り専用）.
+
+        listing.py の read_tracking()/get_unlisted_jans() をそのまま呼び出す軽量
+        サブプロセス。SS-17「他モール出品」シートを読むだけで、出品・書込は
+        一切行わない。取得に失敗した場合はNoneを返し、呼び出し側は件数不明の
+        まま処理を続行する（プレビュー表示の劣化はしても処理は止めない）。
+        """
+        script = (
+            "import sys, json\n"
+            f"sys.path.insert(0, {PIPELINE_PROJECT_ROOT!r})\n"
+            "from scripts.listing import read_tracking, get_unlisted_jans, SUPPORTED_MALLS\n"
+            "mall = sys.argv[1]\n"
+            "tracking = read_tracking()\n"
+            "malls = SUPPORTED_MALLS if mall == 'all' else [mall]\n"
+            "unlisted = set()\n"
+            "for m in malls:\n"
+            "    unlisted.update(get_unlisted_jans(tracking, m))\n"
+            "result = sorted(unlisted)\n"
+            "print(json.dumps({'count': len(result), 'sample': result[:5]}, ensure_ascii=False))\n"
+        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "python3", "-c", script, mall,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=UNLISTED_PREVIEW_TIMEOUT
+            )
+            if proc.returncode != 0:
+                return None
+            data = json.loads(stdout.decode("utf-8"))
+            if not isinstance(data, dict) or "count" not in data:
+                return None
+            return data
+        except asyncio.TimeoutError:
+            logger.warning("/shuppin: 未出品件数の取得がタイムアウトしました")
+            return None
+        except (json.JSONDecodeError, ValueError, OSError):
+            logger.exception("/shuppin: 未出品件数の取得に失敗しました")
+            return None
 
     async def _process_listing(
         self,
@@ -320,12 +460,29 @@ class ListingCommandCog(commands.Cog):
                         color=COLOR_PREVIEW,
                     )
         else:
+            # JAN未指定 = 未出品JAN全部が対象。件数不明のまま確定させない。
+            unlisted = await self._fetch_unlisted_summary(mall)
+            if unlisted is None:
+                unlisted_desc = (
+                    "未出品JAN件数の取得に失敗しました（SS-17参照エラーの可能性）。\n"
+                    "件数は出品実行時に確定します。"
+                )
+            elif unlisted["count"] == 0:
+                unlisted_desc = "未出品のJANはありません（対象0件）。"
+            else:
+                sample = unlisted["sample"]
+                sample_text = "\n".join(f"`{j}`" for j in sample)
+                rest = unlisted["count"] - len(sample)
+                if rest > 0:
+                    sample_text += f"\n...他{rest}件"
+                unlisted_desc = f"**未出品JAN: {unlisted['count']}件**\n{sample_text}"
+
             if mall == "all":
                 embed = discord.Embed(
                     title="ALL SHOP 全モール一括出品",
                     description=(
-                        "**全6モール**に未出品のJANを一括出品します。\n"
-                        "Amazon / Yahoo / Qoo10 / auPAY / Temu / メルカリ\n\n"
+                        "**全6モール**が対象。Amazon / Yahoo / Qoo10 / auPAY / Temu / メルカリ\n\n"
+                        f"{unlisted_desc}\n\n"
                         "データ不備のモールは自動スキップされます。"
                     ),
                     color=COLOR_PREVIEW,
@@ -333,7 +490,7 @@ class ListingCommandCog(commands.Cog):
             else:
                 embed = discord.Embed(
                     title=f"{mall.upper()} 一括出品",
-                    description="SS-17「他モール出品」で未出品のJANを全て出品します。",
+                    description=f"SS-17「他モール出品」で未出品のJANを出品します。\n\n{unlisted_desc}",
                     color=COLOR_PREVIEW,
                 )
 
@@ -342,7 +499,7 @@ class ListingCommandCog(commands.Cog):
 
         # Step 3: 確認ボタン
         view = ListingConfirmView(user_id, mall, jan)
-        await interaction.edit_original_response(embed=embed, view=view)
+        await _safe_edit_response(interaction, embed=embed, view=view)
 
         await view.wait()
 
@@ -352,7 +509,7 @@ class ListingCommandCog(commands.Cog):
                 description=f"モール: {mall.upper()}",
                 color=COLOR_CANCEL,
             )
-            await interaction.edit_original_response(embed=embed, view=None)
+            await _safe_edit_response(interaction, embed=embed, view=None)
             return
 
         if view.result == "timeout":
@@ -361,7 +518,7 @@ class ListingCommandCog(commands.Cog):
                 description="5分以内にボタンが押されなかったため、キャンセルしました。",
                 color=COLOR_CANCEL,
             )
-            await interaction.edit_original_response(embed=embed, view=None)
+            await _safe_edit_response(interaction, embed=embed, view=None)
             return
 
         # Step 4: 出品実行
@@ -386,7 +543,7 @@ class ListingCommandCog(commands.Cog):
             description=progress_desc,
             color=COLOR_WORKING,
         )
-        await interaction.edit_original_response(embed=progress_embed, view=None)
+        await _safe_edit_response(interaction, embed=progress_embed, view=None)
 
         try:
             cmd = [
@@ -407,12 +564,23 @@ class ListingCommandCog(commands.Cog):
                 proc.communicate(), timeout=timeout
             )
         except asyncio.TimeoutError:
+            # タイムアウトしたプロセスを確実に止める（表示の裏で出品が続行する事故を防ぐ）
+            try:
+                proc.kill()
+                await asyncio.wait_for(proc.wait(), timeout=PROC_KILL_WAIT)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                logger.exception("/shuppin: タイムアウト後のプロセス停止に失敗しました")
             embed = discord.Embed(
                 title="タイムアウト",
-                description=f"出品処理がタイムアウトしました（{timeout // 60}分）。\n手動で確認してください。",
+                description=(
+                    f"出品処理がタイムアウトしました（{timeout // 60}分）。\n"
+                    "プロセスは停止済みです。手動で状況を確認してください。"
+                ),
                 color=COLOR_ERROR,
             )
-            await interaction.edit_original_response(embed=embed)
+            await _safe_edit_response(interaction, embed=embed)
             return
         except Exception as e:
             logger.exception("shuppin submit failed")
@@ -421,7 +589,7 @@ class ListingCommandCog(commands.Cog):
                 description=f"```\n{e}\n```",
                 color=COLOR_ERROR,
             )
-            await interaction.edit_original_response(embed=embed)
+            await _safe_edit_response(interaction, embed=embed)
             return
 
         # Step 5: 結果表示
@@ -433,95 +601,157 @@ class ListingCommandCog(commands.Cog):
         except (json.JSONDecodeError, ValueError):
             result_data = None
 
-        if proc.returncode == 0:
-            # 複数JAN結果の場合
-            if result_data and result_data.get("multi"):
-                jan_results = result_data.get("results", [])
-                ok_count = sum(1 for r in jan_results if r.get("ok"))
-                ng_count = len(jan_results) - ok_count
+        # returncodeだけでなく、内側JSON（shuppin_pipelineのstdout）のokを正とする。
+        # listing.py/shuppin_pipeline.pyはモールが一部失敗してもexit 0を返すことがある
+        # ため、JSONが取れていればreturncode≠0でもそちらを解釈する（将来listing.py側が
+        # exit1化しても両建てで正しく動く）。
+        if result_data is not None and "ok" in result_data:
+            overall_ok = bool(result_data["ok"])
+        else:
+            overall_ok = proc.returncode == 0
 
-                result_embed = discord.Embed(
-                    title=f"{mode_label}完了",
-                    description=(
-                        f"モール: **{mall_display}**\n"
-                        f"JAN: {len(jan_results)}件 (成功: {ok_count} / 失敗: {ng_count})"
-                    ),
-                    color=COLOR_SUCCESS if ng_count == 0 else COLOR_WORKING,
+        if result_data is not None and result_data.get("multi"):
+            # 複数JAN結果
+            jan_results = result_data.get("results", [])
+            ok_count = sum(1 for r in jan_results if r.get("ok"))
+            ng_count = len(jan_results) - ok_count
+
+            if ng_count == 0:
+                title, color = f"{mode_label}完了", COLOR_SUCCESS
+            elif ok_count == 0:
+                title, color = f"{mode_label}失敗", COLOR_ERROR
+            else:
+                title, color = f"{mode_label}一部失敗", COLOR_WORKING
+
+            result_embed = discord.Embed(
+                title=title,
+                description=(
+                    f"モール: **{mall_display}**\n"
+                    f"JAN: {len(jan_results)}件 (成功: {ok_count} / 失敗: {ng_count})"
+                ),
+                color=color,
+            )
+
+            # JAN毎の結果サマリー（内側JSONからモール別内訳が取れれば併記）
+            lines = []
+            for r in jan_results:
+                status = "OK" if r.get("ok") else "NG"
+                line = f"{status} | `{r.get('jan', '?')}`"
+                inner = _extract_inner_json(r.get("stdout", ""))
+                mall_results = inner.get("results") if inner else None
+                if mall_results:
+                    bits = ", ".join(
+                        f"{m}:{'OK' if v.get('ok') else 'NG'}" for m, v in mall_results.items()
+                    )
+                    line += f" ({bits})"
+                lines.append(line)
+            if lines:
+                result_embed.add_field(
+                    name="JAN毎の結果",
+                    value=_truncate_field("\n".join(lines[:10])),
+                    inline=False,
                 )
+            result_embed.set_footer(text="/shuppin mall:モール名 で次の出品へ")
+            await _safe_edit_response(interaction, embed=result_embed)
 
-                # JAN毎の結果サマリー
-                lines = []
-                for r in jan_results:
-                    status = "OK" if r.get("ok") else "NG"
-                    lines.append(f"{status} | `{r.get('jan', '?')}`")
-                if lines:
+        elif result_data is not None:
+            # 単一JAN or JAN未指定
+            submit_info = result_data.get("submit", {}) or {}
+            submit_ok = bool(submit_info.get("ok", overall_ok))
+            submit_stdout = submit_info.get("stdout", stdout_text)
+            # listing.py --json-output が出す内側JSON（モール別ok）を解釈する
+            inner = _extract_inner_json(submit_stdout)
+            mall_results = inner.get("results") if inner else None
+            mall_ok_count = (
+                sum(1 for v in mall_results.values() if v.get("ok")) if mall_results else None
+            )
+
+            if not submit_ok:
+                title, color = f"{mode_label}失敗", COLOR_ERROR
+            elif mall_results and 0 < mall_ok_count < len(mall_results):
+                title, color = f"{mode_label}一部失敗", COLOR_WORKING
+            else:
+                title, color = f"{mode_label}完了", COLOR_SUCCESS
+
+            result_embed = discord.Embed(
+                title=title,
+                description=f"モール: **{mall_display}**",
+                color=color,
+            )
+
+            if mall_results:
+                result_embed.add_field(
+                    name="モール別結果",
+                    value=_truncate_field("\n".join(_mall_status_lines(mall_results))),
+                    inline=False,
+                )
+            else:
+                # モール別内訳が取れない場合は error/message を拾って表示
+                notice = (
+                    result_data.get("error")
+                    or (inner.get("message") if inner else None)
+                    or (inner.get("error") if inner else None)
+                )
+                if notice:
                     result_embed.add_field(
-                        name="JAN毎の結果",
-                        value="\n".join(lines[:10]),
+                        name="エラー" if not submit_ok else "結果",
+                        value=_truncate_field(str(notice)),
                         inline=False,
                     )
-            else:
-                # 単一JAN or JAN未指定（従来ロジック）
-                submit_info = result_data.get("submit", {}) if result_data else {}
-                submit_stdout = submit_info.get("stdout", stdout_text)
 
-                result_embed = discord.Embed(
-                    title=f"{mode_label}完了",
-                    description=f"モール: **{mall_display}**",
-                    color=COLOR_SUCCESS,
+            if submit_stdout:
+                lines = submit_stdout.strip().split("\n")
+                summary_lines = [ln for ln in lines[-15:] if ln.strip()]
+                if summary_lines:
+                    result_embed.add_field(
+                        name="ログ抜粋",
+                        value=_truncate_field(f"```\n{chr(10).join(summary_lines[-10:])}\n```"),
+                        inline=False,
+                    )
+
+            skip_list = inner.get("skipped") if inner else None
+            if skip_list:
+                result_embed.add_field(
+                    name="スキップ（データ不備）",
+                    value=_truncate_field(", ".join(skip_list)),
+                    inline=False,
                 )
 
-                if submit_stdout:
-                    lines = submit_stdout.strip().split("\n")
-                    summary_lines = [ln for ln in lines[-15:] if ln.strip()]
+            result_embed.set_footer(text="/shuppin mall:モール名 で次の出品へ")
+            await _safe_edit_response(interaction, embed=result_embed)
+
+        else:
+            # JSONパース失敗（想定外の出力形式）— returncodeベースにフォールバック
+            if overall_ok:
+                result_embed = discord.Embed(
+                    title=f"{mode_label}完了（詳細不明）",
+                    description=(
+                        f"モール: **{mall_display}**\n"
+                        "JSON出力の解析に失敗しました。ログ抜粋を確認してください。"
+                    ),
+                    color=COLOR_WORKING,
+                )
+                if stdout_text:
+                    tail_lines = stdout_text.strip().split("\n")[-15:]
+                    summary_lines = [ln for ln in tail_lines if ln.strip()]
                     if summary_lines:
                         result_embed.add_field(
-                            name="結果",
-                            value=f"```\n{chr(10).join(summary_lines[-10:])}\n```",
+                            name="ログ抜粋",
+                            value=_truncate_field(f"```\n{chr(10).join(summary_lines[-10:])}\n```"),
                             inline=False,
                         )
-
-                # スキップされたモールがあれば表示
-                if result_data:
-                    skip_list = []
-                    try:
-                        inner_stdout = result_data.get("submit", {}).get("stdout", "")
-                        for line in reversed(inner_stdout.strip().split("\n")):
-                            line = line.strip()
-                            if line.startswith("{"):
-                                inner = json.loads(line)
-                                skip_list = inner.get("skipped", [])
-                                break
-                    except (json.JSONDecodeError, ValueError, AttributeError):
-                        pass
-                    if skip_list:
-                        result_embed.add_field(
-                            name="スキップ（データ不備）",
-                            value=", ".join(skip_list),
-                            inline=False,
-                        )
-
-            result_embed.set_footer(text="/shuppin mall:モール名 で次の出品へ")
-            await interaction.edit_original_response(embed=result_embed)
-        else:
-            err_msg = ""
-            if result_data:
-                err_msg = result_data.get("error", "")
-                submit_info = result_data.get("submit", {})
-                if not err_msg and submit_info.get("stderr"):
-                    err_msg = submit_info["stderr"]
-            if not err_msg:
+                await _safe_edit_response(interaction, embed=result_embed)
+            else:
                 err_msg = stderr_text[:800] if stderr_text else "不明なエラー"
-
-            embed = discord.Embed(
-                title="出品エラー",
-                description=f"```\n{err_msg[:1000]}\n```",
-                color=COLOR_ERROR,
-            )
-            await interaction.edit_original_response(embed=embed)
+                embed = discord.Embed(
+                    title="出品エラー",
+                    description=f"```\n{err_msg}\n```",
+                    color=COLOR_ERROR,
+                )
+                await _safe_edit_response(interaction, embed=embed)
 
         logger.info(
-            "/shuppin by %s: mall=%s, jan=%s, jan_count=%d, result=%s",
+            "/shuppin by %s: mall=%s, jan=%s, jan_count=%d, result=%s, ok=%s",
             interaction.user.name, mall, jan or "all-unlisted",
-            n_jans, view.result,
+            n_jans, view.result, overall_ok,
         )
