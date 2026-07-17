@@ -143,6 +143,32 @@ class TestCodexRunnerBuildArgs:
         with pytest.raises(ValueError, match="Invalid Codex effort"):
             runner._build_args("hello", session_id=None)
 
+    @pytest.mark.parametrize(
+        "session_id",
+        [None, "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"],
+    )
+    def test_append_system_prompt_becomes_developer_instructions(
+        self, session_id: str | None
+    ) -> None:
+        context = 'AI Lounge says: "check the other thread" 🎉\nThen announce your work.'
+        runner = CodexRunner(command="codex", append_system_prompt=context)
+
+        args = runner._build_args("user prompt stays on stdin", session_id=session_id)
+
+        expected = f"developer_instructions={json.dumps(context, ensure_ascii=False)}"
+        assert expected in args
+        config_index = args.index(expected)
+        assert args[config_index - 1] == "-c"
+        assert "user prompt stays on stdin" not in args
+        assert config_index < args.index("-")
+
+    def test_no_system_prompt_omits_developer_instructions(self) -> None:
+        runner = CodexRunner(command="codex")
+
+        args = runner._build_args("hello", session_id=None)
+
+        assert not any(arg.startswith("developer_instructions=") for arg in args)
+
 
 class TestCodexRunnerClone:
     """Tests for clone() — creating a new runner with overrides."""
@@ -178,6 +204,20 @@ class TestCodexRunnerClone:
         runner = CodexRunner(command="codex", model="gpt-5.5", effort="high")
         cloned = runner.clone(effort="low")
         assert cloned.effort == "low"
+
+    def test_clone_preserves_append_system_prompt(self) -> None:
+        runner = CodexRunner(command="codex", append_system_prompt="existing context")
+
+        cloned = runner.clone()
+
+        assert cloned.append_system_prompt == "existing context"
+
+    def test_clone_overrides_append_system_prompt(self) -> None:
+        runner = CodexRunner(command="codex", append_system_prompt="old context")
+
+        cloned = runner.clone(append_system_prompt="fresh lounge context")
+
+        assert cloned.append_system_prompt == "fresh lounge context"
 
 
 class TestCodexRunnerRun:

@@ -119,10 +119,10 @@ def _truncate_result(content: str) -> str:
 async def _build_system_context(config: RunConfig) -> str | None:
     """Build ephemeral system context from AI Lounge and concurrency notice.
 
-    Returns a string to inject via --append-system-prompt, or None if no context
-    is available. Injecting as a system prompt (rather than prepending to the user
-    message) prevents this ephemeral metadata from accumulating in session history,
-    which would otherwise cause "Prompt is too long" errors over long conversations.
+    Returns a string to inject as backend-specific developer/system instructions, or
+    None if no context is available. Keeping it separate from the user message prevents
+    this ephemeral metadata from accumulating in session history, which would otherwise
+    cause "Prompt is too long" errors over long conversations.
     """
     parts: list[str] = []
 
