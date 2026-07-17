@@ -263,6 +263,7 @@ class CodexRunner:
         api_port: int | None = None,
         api_secret: str | None = None,
         thread_id: int | None = None,
+        append_system_prompt: str | None = None,
         images: list[ImageData] | None = None,
         effort: str | None = None,
         **_kwargs: object,
@@ -284,6 +285,7 @@ class CodexRunner:
         self.api_port = api_port
         self.api_secret = api_secret
         self.thread_id = thread_id
+        self.append_system_prompt = append_system_prompt
         self.images = images
         self._process: asyncio.subprocess.Process | None = None
 
@@ -378,6 +380,7 @@ class CodexRunner:
         working_dir: str | None | object = _UNSET,
         thread_id: int | None = None,
         effort: str | None | object = _UNSET,
+        append_system_prompt: str | None = None,
         **_kwargs: object,
     ) -> CodexRunner:
         """Create a fresh runner with the same configuration but no active process."""
@@ -394,6 +397,11 @@ class CodexRunner:
             api_port=self.api_port,
             api_secret=self.api_secret,
             thread_id=thread_id if thread_id is not None else self.thread_id,
+            append_system_prompt=(
+                append_system_prompt
+                if append_system_prompt is not None
+                else self.append_system_prompt
+            ),
             images=self.images,
             effort=self.effort if effort is _UNSET else effort,  # type: ignore[arg-type]
         )
@@ -473,6 +481,9 @@ class CodexRunner:
                     f"choose one of {', '.join(sorted(VALID_CODEX_EFFORTS))}"
                 )
             args.extend(["-c", f"model_reasoning_effort={self.effort}"])
+        if self.append_system_prompt:
+            encoded_prompt = json.dumps(self.append_system_prompt, ensure_ascii=False)
+            args.extend(["-c", f"developer_instructions={encoded_prompt}"])
 
         if self.dangerously_skip_permissions:
             args.append("--dangerously-bypass-approvals-and-sandbox")
