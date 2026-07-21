@@ -16,8 +16,6 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
-from claude_code_core.backend import create_backend
-
 from .bot import ClaudeDiscordBot
 from .cog_loader import load_custom_cogs
 from .setup import setup_bridge
@@ -105,8 +103,6 @@ async def main() -> None:
 
     # Create runner via backend factory (CCDB_BACKEND=claude|codex)
     backend_name = config["backend"]
-    default_command = "codex" if backend_name == "codex" else "claude"
-
     # BackendFactory is the runtime authority for building Claude/Codex
     # runners on demand (e.g. when the user switches via /backend).
     from .backend_factory import BackendFactory, parse_codex_model_profiles
@@ -131,23 +127,9 @@ async def main() -> None:
         codex_model_profiles=codex_model_profiles,
     )
 
-    runner = create_backend(
+    runner = factory.build(
         backend=backend_name,
-        command=config["command"] or default_command,
-        model=config["model"],
-        permission_mode=config["permission_mode"],
-        working_dir=config["working_dir"] or None,
-        timeout_seconds=int(config["timeout"]),
-        dangerously_skip_permissions=config["dangerously_skip_permissions"].lower()
-        in ("true", "1", "yes"),
-        allowed_tools=allowed_tools,
-        append_system_prompt=config["append_system_prompt"] or None,
-        effort=config["effort"] or None,
-        profile=(
-            codex_model_profiles.get(config["model"])
-            if backend_name == "codex" and config["model"]
-            else None
-        ),
+        model=config["model"] or None,
     )
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None
