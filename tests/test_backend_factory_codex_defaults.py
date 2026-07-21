@@ -7,9 +7,15 @@ not leak into Codex spawns (its valid levels differ).
 
 from __future__ import annotations
 
+import pytest
+
 from claude_code_core.codex_runner import CodexRunner
 from claude_code_core.runner import ClaudeRunner
-from claude_discord.backend_factory import DEFAULT_MODEL, BackendFactory
+from claude_discord.backend_factory import (
+    DEFAULT_MODEL,
+    BackendFactory,
+    parse_codex_model_profiles,
+)
 
 
 def _factory(**overrides: object) -> BackendFactory:
@@ -26,6 +32,36 @@ def _factory(**overrides: object) -> BackendFactory:
     }
     defaults.update(overrides)
     return BackendFactory(**defaults)  # type: ignore[arg-type]
+
+
+def test_parse_codex_model_profiles() -> None:
+    assert parse_codex_model_profiles("fugu=fugu,fugu-ultra=fugu") == {
+        "fugu": "fugu",
+        "fugu-ultra": "fugu",
+    }
+
+
+def test_parse_codex_model_profiles_rejects_invalid_entry() -> None:
+    with pytest.raises(ValueError, match="Invalid CCDB_CODEX_MODEL_PROFILES"):
+        parse_codex_model_profiles("fugu-ultra")
+
+
+def test_factory_selects_profile_for_mapped_codex_model() -> None:
+    factory = _factory(codex_model_profiles={"fugu-ultra": "fugu"})
+
+    runner = factory.build(backend="codex", model="fugu-ultra")
+
+    assert isinstance(runner, CodexRunner)
+    assert runner.profile == "fugu"
+
+
+def test_factory_leaves_unmapped_codex_model_on_default_profile() -> None:
+    factory = _factory(codex_model_profiles={"fugu-ultra": "fugu"})
+
+    runner = factory.build(backend="codex", model="gpt-5.6-sol")
+
+    assert isinstance(runner, CodexRunner)
+    assert runner.profile is None
 
 
 class TestCodexDefaultModel:

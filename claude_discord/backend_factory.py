@@ -9,6 +9,7 @@ a chat message.
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 from claude_code_core.backend import create_backend
@@ -28,6 +29,28 @@ logger = logging.getLogger(__name__)
 # here only goes stale as the Codex console default moves.
 DEFAULT_MODEL: dict[str, str | None] = {"claude": "sonnet", "codex": None}
 DEFAULT_COMMAND = {"claude": "claude", "codex": "codex"}
+_MODEL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
+_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def parse_codex_model_profiles(raw: str) -> dict[str, str]:
+    """Parse ``model=profile`` pairs from CCDB_CODEX_MODEL_PROFILES."""
+    profiles: dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        model, separator, profile = entry.partition("=")
+        model = model.strip()
+        profile = profile.strip()
+        if (
+            not separator
+            or not _MODEL_ID_RE.fullmatch(model)
+            or not _PROFILE_ID_RE.fullmatch(profile)
+        ):
+            raise ValueError(f"Invalid CCDB_CODEX_MODEL_PROFILES entry: {entry!r}")
+        profiles[model] = profile
+    return profiles
 
 
 class BackendFactory:
@@ -45,6 +68,7 @@ class BackendFactory:
         allowed_tools: list[str] | None,
         append_system_prompt: str | None,
         effort: str | None,
+        codex_model_profiles: dict[str, str] | None = None,
         api_port: int | None = None,
         api_secret: str | None = None,
     ) -> None:
@@ -57,6 +81,7 @@ class BackendFactory:
         self.allowed_tools = allowed_tools
         self.append_system_prompt = append_system_prompt
         self.effort = effort
+        self.codex_model_profiles = dict(codex_model_profiles or {})
         self.api_port = api_port
         self.api_secret = api_secret
 
@@ -104,6 +129,10 @@ class BackendFactory:
                 kwargs["append_system_prompt"] = self.append_system_prompt
             if self.effort is not None:
                 kwargs["effort"] = self.effort
+        elif chosen_model is not None:
+            profile = self.codex_model_profiles.get(chosen_model)
+            if profile is not None:
+                kwargs["profile"] = profile
         if self.api_port is not None:
             kwargs["api_port"] = self.api_port
         if self.api_secret is not None:

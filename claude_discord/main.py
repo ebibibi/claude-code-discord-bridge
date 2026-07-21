@@ -59,6 +59,7 @@ def load_config() -> dict[str, str]:
         # the user switches backend at runtime via /backend.
         "claude_command": _env("CCDB_CLAUDE_COMMAND", "CLAUDE_COMMAND", ""),
         "codex_command": os.getenv("CCDB_CODEX_COMMAND", ""),
+        "codex_model_profiles": os.getenv("CCDB_CODEX_MODEL_PROFILES", ""),
         "model": _env("CCDB_MODEL", "CLAUDE_MODEL", default_model),
         "permission_mode": _env("CCDB_PERMISSION_MODE", "CLAUDE_PERMISSION_MODE", "acceptEdits"),
         "working_dir": _env("CCDB_WORKING_DIR", "CLAUDE_WORKING_DIR", ""),
@@ -108,7 +109,9 @@ async def main() -> None:
 
     # BackendFactory is the runtime authority for building Claude/Codex
     # runners on demand (e.g. when the user switches via /backend).
-    from .backend_factory import BackendFactory
+    from .backend_factory import BackendFactory, parse_codex_model_profiles
+
+    codex_model_profiles = parse_codex_model_profiles(config["codex_model_profiles"])
 
     factory = BackendFactory(
         claude_command=config["claude_command"]
@@ -125,6 +128,7 @@ async def main() -> None:
         allowed_tools=allowed_tools,
         append_system_prompt=config["append_system_prompt"] or None,
         effort=config["effort"] or None,
+        codex_model_profiles=codex_model_profiles,
     )
 
     runner = create_backend(
@@ -139,6 +143,11 @@ async def main() -> None:
         allowed_tools=allowed_tools,
         append_system_prompt=config["append_system_prompt"] or None,
         effort=config["effort"] or None,
+        profile=(
+            codex_model_profiles.get(config["model"])
+            if backend_name == "codex" and config["model"]
+            else None
+        ),
     )
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None

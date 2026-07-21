@@ -82,3 +82,7 @@ class TestEnvVarRename:
     def test_ccdb_backend_env(self) -> None:
         config = self._load({"CCDB_BACKEND": "codex"})
         assert config["backend"] == "codex"
+
+    def test_codex_model_profiles_env(self) -> None:
+        config = self._load({"CCDB_CODEX_MODEL_PROFILES": "fugu=fugu,fugu-ultra=fugu"})
+        assert config["codex_model_profiles"] == "fugu=fugu,fugu-ultra=fugu"
