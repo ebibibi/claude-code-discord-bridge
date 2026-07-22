@@ -410,6 +410,21 @@ journalctl -u mybot.service -f
 
 `.env` に `DISCORD_WEBHOOK_URL` を設定すると障害通知が届きます（任意）。
 
+#### ツールチェーンの PATH — `.env` に設定する
+
+systemd はユニットを最小限の `PATH`（通常は `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`）で起動し、`~/.bashrc` や `~/.profile` を一切読み込みません。Bot はその `PATH` を引き継ぎ、Bot が起動する Claude / Codex の各セッションも同じ環境（除去されるシークレットを除く）を継承します。
+
+そのため、ターミナルでは成功するビルドが Discord セッションの中では失敗したり、気づかないうちに古いシステム側のバイナリで実行されたりします。`~/.local/bin` や `~/.npm-global/bin` にインストールしたツールがサービスからは見えないためです。
+
+サービスは `EnvironmentFile=` で `.env` を読み込むため、そこに `PATH` を設定すれば Bot と全セッションを一度に修正できます。
+
+```bash
+# .env — 対話シェルの PATH に合わせる
+PATH=/home/you/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+```
+
+サービスを再起動し（`sudo systemctl restart mybot.service`）、Discord セッションで Claude に `which node && node --version` を実行させて確認してください。
+
 ### カスタム Cog（フォーク不要で機能拡張）
 
 Python ファイルをディレクトリに追加するだけで独自機能を追加できます — フォーク不要、サブクラス不要、パッケージ不要:
@@ -599,6 +614,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CCDB_COMMAND` | CLI バイナリのパスまたは名前（`CLAUDE_COMMAND` より優先）。`CCDB_BACKEND` で選択された初期ランナーに使用され、実行時に `/backend` で切り替えた際は以下の 2 つのバックエンド別変数が優先されます。 | _（自動: `claude` or `codex`）_ |
 | `CCDB_CLAUDE_COMMAND` | Claude CLI バイナリの明示的なパス。`/backend claude` がアクティブなとき `BackendFactory` が使用（`CCDB_BACKEND` の初期値に依存しない）。`CLAUDE_COMMAND`、次に `claude`（PATH）へのフォールバックあり。 | （オプション） |
 | `CCDB_CODEX_COMMAND` | OpenAI Codex CLI バイナリの明示的なパス。systemd 下で Bot を実行する場合に必須（デフォルトのサービス PATH に `~/.npm-global/bin` が含まれない）。`codex`（PATH）へのフォールバックあり。 | （オプション） |
+| `PATH` | Bot **と Bot が起動する全 CLI セッション**のバイナリ検索パス（セッションは Bot の環境を継承）。systemd はユニットを最小限の PATH で起動し `~/.bashrc` / `~/.profile` を読まないため、systemd 運用時は `.env` に設定する。[ツールチェーンの PATH](#ツールチェーンの-path--env-に設定する) 参照 | （親プロセスから継承） |
 | `CCDB_MODEL` | 使用するモデル（`CLAUDE_MODEL` より優先） | `sonnet` |
 | `CCDB_PERMISSION_MODE` | CLI のパーミッションモード（`CLAUDE_PERMISSION_MODE` より優先） | `acceptEdits` |
 | `CCDB_DANGEROUSLY_SKIP_PERMISSIONS` | 全パーミッションチェックをスキップ（`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` より優先） | `false` |
