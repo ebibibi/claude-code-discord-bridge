@@ -104,6 +104,20 @@ curl "$CCDB_API_URL/api/lounge"
 
 The lounge channel doubles as a human-visible activity feed — open it in Discord to see at a glance what every active Claude session is currently doing.
 
+### Cross-Session Observability
+
+A lounge note tells a session *that* another thread exists. These two read-only endpoints let it go and look — so two sessions that started on the same task can discover the overlap instead of both charging ahead.
+
+```bash
+# Who else is alive, where are they working, what did they last announce?
+curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
+
+# Read that thread's actual conversation
+curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
+```
+
+`/api/sessions` merges three sources: the `sessions` table (created_at, working dir, backend), the in-memory registry (what each live session is doing *right now*), and each thread's latest lounge note. A session appears with `"state": "running"` while a turn is in flight — including sessions that never posted to the lounge at all, which is exactly when this matters. Sessions have no Discord token of their own, so the bot performs the read and the endpoints stay on the localhost control plane.
+
 ### Programmatic Session Creation
 
 Spawn new Claude Code sessions from scripts, GitHub Actions, or other Claude sessions — without Discord message interaction.
@@ -886,6 +900,8 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/mark-resume` | Mark a thread for automatic resume on next bot startup |
 | GET | `/api/lounge` | Read recent AI Lounge messages |
 | POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |
+| GET | `/api/sessions` | List every session — live and stored — with state, working dir and latest lounge note (`state=running`, `exclude_thread`, `limit`) |
+| GET | `/api/threads/{thread_id}/messages` | Read another thread's conversation, oldest first (`limit`) |
 
 ```bash
 # Send notification (embed format, default)
