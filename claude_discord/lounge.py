@@ -47,6 +47,23 @@ Before bot restarts, force pushes, DB operations, or anything that affects all s
 3. Only proceed if the coast is clear — report before and after
 
 This is the lounge's most critical use. Read it to make decisions, not just to write.
+
+[LOOK AT WHAT OTHER SESSIONS ARE DOING]
+A lounge note tells you a thread ID. These two endpoints let you go and look:
+
+```bash
+# Who else is alive, where are they working, what did they last announce?
+curl -s "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
+
+# Read another thread's actual conversation (thread_id from the call above)
+curl -s "$CCDB_API_URL/api/threads/<thread_id>/messages?limit=30"
+```
+
+Use them when a lounge note sounds like your task, when you are about to touch a
+shared repo, or when you suspect a session that never posted here. Sessions with
+``"state": "running"`` have a turn in flight right now; ``working_dir`` tells you
+whether you would collide. Reading is free and has no side effects — when in
+doubt, look before you edit.
 """
 
 _RECENT_HEADER = "\nRecent lounge messages:\n"

@@ -61,6 +61,36 @@ _MAX_SPAWN_ATTACHMENTS = 10
 _MAX_SPAWN_TOTAL_BYTES = 25 * 1024 * 1024
 _MAX_DISCORD_THREAD_NAME_LENGTH = 100
 
+# /api/sessions and /api/threads/{id}/messages — cross-session observability.
+# Bounded so one session peeking at another can never pull an unbounded amount
+# of history into its own context window.
+_DEFAULT_SESSION_LIMIT = 20
+_MAX_SESSION_LIMIT = 100
+_DEFAULT_THREAD_MESSAGE_LIMIT = 30
+_MAX_THREAD_MESSAGE_LIMIT = 100
+# How far back to scan the lounge when attaching each thread's latest note.
+_LOUNGE_LOOKBACK = 50
+# Per-message cap; a single Claude reply can be many KB of code.
+_MAX_THREAD_MESSAGE_CHARS = 2000
+
+
+def _serialize_thread_message(message: object) -> dict[str, object]:
+    """Reduce a discord.Message to the fields another session needs."""
+    content = str(getattr(message, "content", "") or "")
+    truncated = len(content) > _MAX_THREAD_MESSAGE_CHARS
+    author = getattr(message, "author", None)
+    created_at = getattr(message, "created_at", None)
+    return {
+        "id": getattr(message, "id", None),
+        "author": str(getattr(author, "display_name", None) or author or "unknown"),
+        "is_bot": bool(getattr(author, "bot", False)),
+        "content": content[:_MAX_THREAD_MESSAGE_CHARS],
+        "truncated": truncated,
+        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else None,
+        "jump_url": getattr(message, "jump_url", None),
+    }
+
+
 # Max accepted request body. aiohttp defaults to 1 MiB, which 413s any real
 # ingest (a full conversation thread plus base64 attachments). Base64 inflates
 # the decoded payload ~4/3, so the body limit must exceed the decoded
@@ -232,6 +262,9 @@ class ApiServer:
         # AI Lounge routes (requires lounge_repo)
         self.app.router.add_get("/api/lounge", self.get_lounge)
         self.app.router.add_post("/api/lounge", self.post_lounge)
+        # Cross-session observability routes (requires session_repo)
+        self.app.router.add_get("/api/sessions", self.list_sessions)
+        self.app.router.add_get("/api/threads/{thread_id}/messages", self.get_thread_messages)
         # Session spawn route
         self.app.router.add_post("/api/spawn", self.spawn)
         # Authenticated external ingest route (browser extension / webhooks)
@@ -740,6 +773,164 @@ class ApiServer:
     # ------------------------------------------------------------------
     # Session spawn endpoint (/api/spawn)
     # ------------------------------------------------------------------
+
+    def _require_session_repo(self) -> web.Response | None:
+        """Return a 503 response if session_repo is not configured."""
+        if self.session_repo is None:
+            return web.json_response(
+                {"error": "session_repo is not configured"},
+                status=503,
+            )
+        return None
+
+    def _running_thread_ids(self) -> set[int]:
+        """Threads with a Claude turn in flight right now.
+
+        Two independent signals agree in practice: the SessionRegistry (entry
+        exists only between turn start and turn end) and ClaudeChatCog's live
+        runner map.  Their union is used so a session is never reported idle
+        while it is actually working.  ``isinstance`` guards keep MagicMock
+        bots (tests, embedded setups) from producing junk.
+        """
+        from ..concurrency import SessionRegistry
+
+        running: set[int] = set()
+
+        registry = getattr(self.bot, "session_registry", None)
+        if isinstance(registry, SessionRegistry):
+            running.update(s.thread_id for s in registry.list_active())
+
+        cog = self.bot.cogs.get("ClaudeChatCog") if hasattr(self.bot, "cogs") else None
+        active_runners = getattr(cog, "_active_runners", None)
+        if isinstance(active_runners, dict):
+            running.update(int(tid) for tid in active_runners)
+
+        return running
+
+    def _active_sessions(self) -> list:
+        """Registry entries describing what each live session is doing."""
+        from ..concurrency import SessionRegistry
+
+        registry = getattr(self.bot, "session_registry", None)
+        if isinstance(registry, SessionRegistry):
+            return registry.list_active()
+        return []
+
+    async def list_sessions(self, request: web.Request) -> web.Response:
+        """GET /api/sessions — what every other Claude session is doing.
+
+        Lets a session discover its peers before touching a shared repository:
+        which threads are alive, where they are working, and what they last
+        announced in the AI Lounge.  Read-only.
+
+        Query params:
+            limit: Max persisted sessions to consider (default 20, max 100).
+                   Live sessions are always included regardless of this cap.
+            state: ``running`` to return only sessions with a turn in flight.
+            exclude_thread: Thread ID to omit (typically the caller's own).
+        """
+        if err := self._require_session_repo():
+            return err
+
+        try:
+            raw_limit = request.rel_url.query.get("limit", str(_DEFAULT_SESSION_LIMIT))
+            limit = max(1, min(_MAX_SESSION_LIMIT, int(raw_limit)))
+        except ValueError:
+            return web.json_response({"error": "limit must be an integer"}, status=400)
+
+        exclude_raw = request.rel_url.query.get("exclude_thread")
+        exclude_thread: int | None = None
+        if exclude_raw:
+            try:
+                exclude_thread = int(exclude_raw)
+            except ValueError:
+                return web.json_response({"error": "exclude_thread must be an integer"}, status=400)
+
+        records = await self.session_repo.list_all(limit=limit)  # type: ignore[union-attr]
+        lounge_messages = (
+            await self.lounge_repo.get_recent(limit=_LOUNGE_LOOKBACK)
+            if self.lounge_repo is not None
+            else []
+        )
+
+        from ..session_view import STATE_RUNNING, build_session_views
+
+        active = self._active_sessions()
+        thread_ids = {r.thread_id for r in records} | {s.thread_id for s in active}
+        views = build_session_views(
+            records=records,
+            active=active,
+            running_thread_ids=self._running_thread_ids(),
+            lounge_messages=lounge_messages,
+            thread_names=self._thread_names(thread_ids),
+        )
+
+        if request.rel_url.query.get("state") == STATE_RUNNING:
+            views = [v for v in views if v["state"] == STATE_RUNNING]
+        if exclude_thread is not None:
+            views = [v for v in views if v["thread_id"] != exclude_thread]
+
+        return web.json_response({"sessions": views})
+
+    def _thread_names(self, thread_ids: set[int]) -> dict[int, str]:
+        """Resolve Discord thread titles from the bot's cache (no API calls)."""
+        names: dict[int, str] = {}
+        for thread_id in thread_ids:
+            channel = self.bot.get_channel(thread_id)
+            name = getattr(channel, "name", None)
+            if isinstance(name, str):
+                names[thread_id] = name
+        return names
+
+    async def get_thread_messages(self, request: web.Request) -> web.Response:
+        """GET /api/threads/{thread_id}/messages — read another thread's conversation.
+
+        The companion to ``/api/sessions``: once a session knows *that* another
+        thread is working on the same thing, this is how it reads *what* that
+        thread actually did.  Sessions have no Discord token of their own, so
+        the bot performs the read and this endpoint stays localhost-only.
+
+        Query params:
+            limit: Number of most recent messages (default 30, max 100).
+
+        Returns messages oldest-first, each truncated to keep responses small.
+        """
+        try:
+            thread_id = int(request.match_info["thread_id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid thread_id"}, status=400)
+
+        try:
+            raw_limit = request.rel_url.query.get("limit", str(_DEFAULT_THREAD_MESSAGE_LIMIT))
+            limit = max(1, min(_MAX_THREAD_MESSAGE_LIMIT, int(raw_limit)))
+        except ValueError:
+            return web.json_response({"error": "limit must be an integer"}, status=400)
+
+        channel = self.bot.get_channel(thread_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(thread_id)
+            except Exception as exc:
+                return web.json_response({"error": str(exc)}, status=404)
+
+        if not hasattr(channel, "history"):
+            return web.json_response(
+                {"error": "Channel does not support message history"}, status=400
+            )
+
+        try:
+            messages = [msg async for msg in channel.history(limit=limit)]
+        except Exception as exc:  # forbidden, deleted thread, transient API error
+            return web.json_response({"error": str(exc)}, status=502)
+
+        messages.reverse()  # Discord returns newest-first; read order is oldest-first
+        return web.json_response(
+            {
+                "thread_id": thread_id,
+                "thread_name": getattr(channel, "name", None),
+                "messages": [_serialize_thread_message(m) for m in messages],
+            }
+        )
 
     async def spawn(self, request: web.Request) -> web.Response:
         """POST /api/spawn — create a new Discord thread and optionally start Claude Code.
