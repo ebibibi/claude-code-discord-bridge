@@ -554,7 +554,12 @@ Or via environment variable (comma-separated channel IDs):
 MENTION_ONLY_CHANNEL_IDS=222,333
 ```
 
-Thread replies are not affected — once a session thread is open, all replies are handled normally regardless of mentions.
+Threads **inherit their parent channel's policy**. A thread that a human creates in a mention-only channel does not start a Claude session — otherwise anyone could bypass the setting just by opening a thread. Claude engages in such a thread only when:
+
+- the bot is explicitly **@mentioned** in the message, or
+- ccdb **already owns the thread** — a session thread the bot created, or one created via `/api/spawn`. Once a session exists, every reply is handled normally without needing a mention.
+
+Threads under channels that are *not* listed in `mention_only_channel_ids` are unaffected and always handled.
 
 #### Inline-Reply Channels
 
@@ -628,7 +633,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `SESSION_TIMEOUT_SECONDS` | Session inactivity timeout | `300` |
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
 | `COORDINATION_CHANNEL_ID` | Channel ID used as default fallback for AI Lounge channel | (optional) |
-| `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot only responds when @mentioned | (optional) |
+| `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot only responds when @mentioned (threads under them inherit the policy) | (optional) |
 | `INLINE_REPLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot replies inline (no thread created) | (optional) |
 | `CHAT_ONLY_CHANNEL_IDS` | Comma-separated channel IDs in chat-only mode — only Claude's text responses are shown; all technical embeds (tools, thinking, session info, todos) are hidden | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
