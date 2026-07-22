@@ -273,6 +273,7 @@ Behind the scenes:
 - **Automatic worktree cleanup** — Session worktrees (`wt-{thread_id}`) are removed automatically at session end and on bot startup; dirty worktrees are never auto-removed (safety invariant)
 - **Active session registry** — In-memory registry; each session sees what the others are doing
 - **AI Lounge** — Shared "breakroom" channel; context injected as backend-specific system/developer instructions (ephemeral, never accumulates in history) so long sessions never hit "Prompt is too long"; sessions post intentions, read each other's status, and check before disruptive operations; humans see it as a live activity feed
+- **Cross-session observability** — `GET /api/sessions` lists every session (live and stored) with its state, working dir and latest lounge note; `GET /api/threads/{thread_id}/messages` reads another thread's conversation. Read-only, so a session can look before it edits — including at sessions that never posted to the lounge
 - **Coordination channel** — `COORDINATION_CHANNEL_ID` env var is used as the default fallback for the AI Lounge channel (no separate bot-side lifecycle events)
 
 ### Scheduled Tasks
@@ -961,6 +962,7 @@ claude_discord/
   protocols.py             # Shared protocols (DrainAware)
   concurrency.py           # Worktree instructions + active session registry
   lounge.py                # AI Lounge prompt builder
+  session_view.py          # Cross-session views for GET /api/sessions (pure merge logic)
   session_sync.py          # CLI session discovery and import
   worktree.py              # WorktreeManager — safe git worktree lifecycle
   cogs/
@@ -1037,7 +1039,7 @@ examples/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-1635+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, backend factory, and cross-backend session ownership.
+1640+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, cross-session observability, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, backend factory, and cross-backend session ownership.
 
 ---
 

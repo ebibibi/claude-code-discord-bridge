@@ -107,6 +107,20 @@ curl "$CCDB_API_URL/api/lounge"
 
 ラウンジチャンネルは人間が見るアクティビティフィードとしても機能します — Discord で開けば、すべてのアクティブな Claude セッションが今何をしているかを一目で確認できます。
 
+### クロスセッション可観測性
+
+ラウンジのメモが伝えられるのは「他のスレッドが存在すること」だけです。この 2 つの読み取り専用エンドポイントを使えば、セッションは実際に見に行けます — 同じ作業を始めてしまった 2 つのセッションが、両方とも突き進む前に重複に気づけるようになります。
+
+```bash
+# 他に誰が動いていて、どこで作業していて、最後に何を宣言したか?
+curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
+
+# そのスレッドの実際の会話を読む
+curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
+```
+
+`/api/sessions` は 3 つの情報源をマージします: `sessions` テーブル（created_at、作業ディレクトリ、バックエンド）、インメモリレジストリ（各ライブセッションが*今まさに*何をしているか）、そして各スレッドの最新のラウンジメモです。ターンの実行中のセッションは `"state": "running"` として現れます — ラウンジに一度も投稿していないセッションも含まれ、まさにそういうときこそこの機能が効きます。セッション自身は Discord トークンを持たないため、読み取りは Bot が代行し、エンドポイントは localhost のコントロールプレーン上に留まります。
+
 ### プログラム的なセッション作成
 
 スクリプト、GitHub Actions、または他の Claude セッションから Discord のメッセージ操作なしで新しい Claude Code セッションを起動できます。
@@ -261,6 +275,7 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 - **Worktree の自動クリーンアップ** — セッション終了時および Bot 起動時に `wt-{thread_id}` ディレクトリを自動削除。未コミットの変更がある場合は絶対に削除しない（安全性保証）
 - **アクティブセッションレジストリ** — インメモリレジストリ。各セッションが他のセッションの状況を把握
 - **AI Lounge** — 共有「控え室」チャンネル。コンテキストはバックエンド固有のシステム／開発者指示として注入（履歴に蓄積しないため長期セッションでも「Prompt is too long」が発生しない）。セッションが意図を投稿し、互いのステータスを確認し、破壊的な操作前にチェックします。人間には live アクティビティフィードとして見えます
+- **クロスセッション可観測性** — `GET /api/sessions` がすべてのセッション（ライブ・保存済みの両方）を状態・作業ディレクトリ・最新のラウンジメモとともに一覧表示。`GET /api/threads/{thread_id}/messages` で他スレッドの会話を読める。読み取り専用なので、編集する前に見に行ける — ラウンジに一度も投稿していないセッションも対象
 - **協調チャンネル** — `COORDINATION_CHANNEL_ID` 環境変数は AI Lounge チャンネルのデフォルトフォールバックとして使用（Bot 側のライフサイクル自動通知は廃止）
 
 ### スケジュールタスク
@@ -888,6 +903,8 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/mark-resume` | 次回 Bot 起動時のスレッド自動リジュームを登録 |
 | GET | `/api/lounge` | AI Lounge の最近のメッセージを取得 |
 | POST | `/api/lounge` | AI Lounge にメッセージを投稿（`label` オプション） |
+| GET | `/api/sessions` | すべてのセッション（ライブ・保存済み）を状態・作業ディレクトリ・最新のラウンジメモ付きで一覧（`state=running`、`exclude_thread`、`limit`） |
+| GET | `/api/threads/{thread_id}/messages` | 他スレッドの会話を古い順に取得（`limit`） |
 
 ```bash
 # 通知の送信（埋め込み形式、デフォルト）
@@ -947,6 +964,7 @@ claude_discord/
   protocols.py             # 共有プロトコル（DrainAware）
   concurrency.py           # Worktree 指示 + アクティブセッションレジストリ
   lounge.py                # AI Lounge プロンプトビルダー
+  session_view.py          # GET /api/sessions 用のクロスセッションビュー（純粋なマージロジック）
   session_sync.py          # CLI セッションの検出とインポート
   worktree.py              # WorktreeManager — git worktree の安全なライフサイクル管理
   cogs/
@@ -1023,7 +1041,7 @@ examples/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-1635 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード（`/upgrade` スラッシュコマンド、スレッド内実行、承認ボタン含む）、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、スタートアップリジューム、モデル切り替え、コンパクト検出、TodoWrite 進捗 embed、カスタム Cog ローダー、許可／Elicitation／Plan Mode イベントパース、スレッドインボックス分類、スレッドごとのロック動作、SessionBackend プロトコル、CodexRunner、バックエンドファクトリー、バックエンドをまたぐセッション所有権をカバーしています。
+1640 件以上のテストがパーサー、チャンカー、リポジトリ、ランナー、ストリーミング、Webhook トリガー、自動アップグレード（`/upgrade` スラッシュコマンド、スレッド内実行、承認ボタン含む）、REST API、AskUserQuestion UI、スレッドダッシュボード、スケジュールタスク、セッション同期、AI Lounge、クロスセッション可観測性、スタートアップリジューム、モデル切り替え、コンパクト検出、TodoWrite 進捗 embed、カスタム Cog ローダー、許可／Elicitation／Plan Mode イベントパース、スレッドインボックス分類、スレッドごとのロック動作、SessionBackend プロトコル、CodexRunner、バックエンドファクトリー、バックエンドをまたぐセッション所有権をカバーしています。
 
 ---
 
