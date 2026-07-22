@@ -1127,13 +1127,14 @@ class TestMentionOnlyChannels:
         self,
         channel_ids: set[int],
         mention_only_channel_ids: set[int] | None = None,
+        session_record: object | None = None,
     ) -> ClaudeChatCog:
         bot = MagicMock()
         bot.channel_id = 999
         bot.user = MagicMock()
         bot.user.id = 1111  # bot's own user ID
         repo = MagicMock()
-        repo.get = AsyncMock(return_value=None)
+        repo.get = AsyncMock(return_value=session_record)
         repo.save = AsyncMock()
         runner = MagicMock()
         runner.clone = MagicMock(return_value=MagicMock())
@@ -1207,30 +1208,91 @@ class TestMentionOnlyChannels:
 
         cog._handle_new_conversation.assert_awaited_once_with(msg)
 
-    @pytest.mark.asyncio
-    async def test_thread_under_mention_only_channel_bypasses_mention_check(self) -> None:
-        """Thread replies are always handled (already in an active session)."""
-        cog = self._make_cog(
-            channel_ids={111, 222},
-            mention_only_channel_ids={222},
-        )
-        cog._handle_thread_reply = AsyncMock()
-
+    @staticmethod
+    def _make_thread_message(parent_id: int, mentions: list | None = None) -> MagicMock:
         msg = MagicMock(spec=discord.Message)
         msg.author = MagicMock()
         msg.author.bot = False
         msg.author.id = 42
         msg.type = discord.MessageType.default
-        msg.mentions = []  # no bot mention in thread reply
+        msg.mentions = mentions or []
         thread = MagicMock(spec=discord.Thread)
         thread.id = 55555
-        thread.parent_id = 222  # parent is mention-only channel
+        thread.parent_id = parent_id
         msg.channel = thread
         msg.content = "reply"
         msg.attachments = []
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_unknown_thread_under_mention_only_channel_is_ignored(self) -> None:
+        """A human-created thread in a mention-only channel must NOT start a session.
+
+        Regression: mention-only channels were only gated on direct channel
+        messages.  Creating a thread there routed straight to
+        ``_handle_thread_reply``, which spawns a fresh session when no session
+        record exists — bypassing the mention gate entirely.
+        """
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+            session_record=None,  # ccdb does not own this thread
+        )
+        cog._handle_thread_reply = AsyncMock()
+
+        await cog.on_message(self._make_thread_message(parent_id=222))
+
+        cog._handle_thread_reply.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unknown_thread_under_mention_only_channel_with_mention_is_handled(
+        self,
+    ) -> None:
+        """An explicit @mention is still an opt-in, even in an unknown thread."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+            session_record=None,
+        )
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_thread_message(parent_id=222, mentions=[cog.bot.user])
         await cog.on_message(msg)
 
         cog._handle_thread_reply.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_known_thread_under_mention_only_channel_continues_without_mention(
+        self,
+    ) -> None:
+        """Threads ccdb already owns keep working without a mention on every reply."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+            session_record=MagicMock(),  # existing session for this thread
+        )
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_thread_message(parent_id=222)
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_thread_under_regular_channel_needs_no_mention(self) -> None:
+        """Non-mention-only parents are unaffected: no session lookup, always handled."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+            session_record=None,
+        )
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_thread_message(parent_id=111)
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_awaited_once_with(msg)
+        cog.repo.get.assert_not_called()
 
     def test_mention_only_channel_ids_default_to_empty_set(self) -> None:
         """Without mention_only_channel_ids, the set is empty (all messages handled)."""
