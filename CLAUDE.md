@@ -74,6 +74,15 @@ uv run ruff format claude_discord/   # format
 
 CI enforces both `ruff check` and `ruff format --check`. Fix all issues before pushing.
 
+### Type Checking
+
+```bash
+uv run pyright claude_discord/    # CI runs this too — a clean ruff run is NOT enough
+```
+
+`getattr(obj, "attr", None)` narrows to `None` for pyright, and discord.py's channel
+union has no common `history()`; annotate such locals as `Any` rather than ignoring.
+
 ### Running (standalone)
 
 ```bash
@@ -173,7 +182,7 @@ If you modify `runner.py`, `_run_helper.py`, or any Cog, the security audit is *
 1. **RED**: Write a failing test → `uv run pytest tests/test_xxx.py -v` → confirm it FAILS
 2. **GREEN**: Write minimal code to pass → confirm it PASSES
 3. **REFACTOR**: Clean up, keeping tests green
-4. **VERIFY**: `uv run ruff check claude_discord/ && uv run pytest tests/ -v --cov=claude_discord`
+4. **VERIFY**: `uv run ruff check claude_discord/ && uv run pyright claude_discord/ && uv run pytest tests/ -v --cov=claude_discord`
 
 See `.claude/skills/tdd/SKILL.md` for detailed patterns per module type.
 
