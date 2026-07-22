@@ -165,13 +165,20 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 
 ### Backend Switching — Claude / Codex on Demand
 
-ccdb 3.0 introduces two slash commands that change which AI handles the next session, with no bot restart:
+ccdb 3.0 introduces three slash commands that change which AI handles the next session, with no bot restart:
 
 - `/backend [name] [scope]` — show or switch backend. `name` is `claude` or `codex`. `scope` is `thread` (this thread only) or `global` (server-wide default). When you omit `scope`, the command auto-resolves: in a thread it scopes to that thread, otherwise it sets the global default.
 - `/model [name] [scope]` — show or switch the model used by the **current** backend. Each backend remembers its own model preference, so flipping backend back and forth keeps your favoured models intact. Leave a backend's model unset to defer to that CLI's own default (e.g. Codex uses the `model` in `~/.codex/config.toml`, so ccdb tracks the console default instead of pinning a version).
 - `/effort [level] [scope]` — show or switch the **reasoning effort** used by the current backend. Valid levels are backend-specific: Claude accepts `low/medium/high/max`; Codex accepts `minimal/low/medium/high/xhigh` (mapped to the CLI's `model_reasoning_effort`). Leave it unset to defer to the CLI default.
 
 All three commands persist to SQLite via `SettingsRepository`, so the choice survives bot restarts. Calling them with no arguments prints the current global default plus any thread override.
+
+**What happens to a thread that already has a session?** Session IDs are not interoperable between the two CLIs — handing a Codex rollout ID to `claude --resume` (or a Claude UUID to `codex exec resume`) fails at the CLI level. ccdb records which backend minted each session ID, so a switch never leaves a thread stranded:
+
+- **Thread-scoped switch** — the stored session ID is dropped so the next message starts fresh in the new backend, *unless* the record is known to belong to the backend you switched **to**. Switching back is therefore a valid way to pick a thread's earlier conversation back up.
+- **Global switch** — per-thread records are deliberately left untouched. If a thread is still holding the other backend's session ID, the next message starts a fresh session and posts a one-line notice explaining why, instead of resuming.
+
+Records written before ccdb tracked backend ownership have no stored backend. A global switch resumes them exactly as it always did; a thread-scoped switch clears them rather than risk a broken resume.
 
 Visual cues so you never forget which one you're talking to:
 
@@ -1014,7 +1021,7 @@ examples/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-1365+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, and backend factory.
+1635+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, backend factory, and cross-backend session ownership.
 
 ---
 
