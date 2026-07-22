@@ -190,14 +190,22 @@ class BackendCommandCog(commands.Cog):
         prev_backend = await self._settings.current_backend(target_thread_id)
         await self._settings.set_backend(name, thread_id=target_thread_id)
 
-        # When the EFFECTIVE backend actually changed, drop any stored
-        # session ID so the next message starts a fresh session in the new
-        # backend. Codex and Claude session stores are not interoperable
-        # (passing a Claude session UUID to `codex exec resume` -- or vice
-        # versa -- fails at the CLI level).
+        # When the EFFECTIVE backend actually changed, drop the stored session
+        # ID unless the NEW backend can still resume it. Codex and Claude
+        # session stores are not interoperable (passing a Claude session UUID
+        # to `codex exec resume` -- or vice versa -- fails at the CLI level),
+        # but switching *back* to the backend that minted the ID is a valid
+        # way to recover a thread, so that case must keep the record.
         if prev_backend != name and target_thread_id is not None:
             try:
-                deleted = await self._chat_cog.repo.delete(target_thread_id)
+                # Keep the record only when it is KNOWN to belong to the new
+                # backend. Unknown (pre-backend-column) records are wiped, as
+                # they always were — an unknown owner is not worth the risk of
+                # a broken resume.
+                record = await self._chat_cog.repo.get(target_thread_id)
+                deleted = False
+                if record is None or record.backend != name:
+                    deleted = await self._chat_cog.repo.delete(target_thread_id)
                 if deleted:
                     logger.info(
                         "Cleared stored session for thread %d on backend switch %s -> %s",

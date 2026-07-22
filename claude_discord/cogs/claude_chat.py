@@ -25,13 +25,13 @@ from discord.ext import commands
 from claude_code_core.backend import SessionBackend
 
 from ..backend_factory import BackendFactory
-from ..backend_settings import BackendSettings
+from ..backend_settings import BackendSettings, session_is_resumable
 from ..claude.rewind import find_session_jsonl, parse_user_turns
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
-from ..database.repository import SessionRepository
+from ..database.repository import SessionRecord, SessionRepository
 from ..database.resume_repo import PendingResumeRepository
 from ..database.settings_repo import SettingsRepository
 from ..discord_ui.chunker import chunk_message
@@ -939,6 +939,8 @@ class ClaudeChatCog(commands.Cog):
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
+        if record is not None and session_id:
+            session_id = await self._session_id_for_current_backend(thread, record)
         prompt, images = await self._build_prompt_and_images(message)
 
         # When there is no session record, this is the first human reply in a
@@ -991,6 +993,40 @@ class ClaudeChatCog(commands.Cog):
             working_dir_override=record.working_dir if record else None,
             chat_only=chat_only,
         )
+
+    async def _session_id_for_current_backend(
+        self, thread: discord.Thread, record: SessionRecord
+    ) -> str | None:
+        """Return the stored session ID, or ``None`` when the backend changed.
+
+        A global ``/backend`` switch does not touch per-thread session records
+        (only a thread-scoped switch does), so a thread can end up holding a
+        Codex rollout ID while the active backend is Claude.  Resuming it makes
+        the CLI exit instantly with "No conversation found with session ID" and
+        the thread looks dead.  Detect the mismatch and start fresh instead.
+        """
+        if self._backend_settings is None:
+            return record.session_id
+
+        current = await self._backend_settings.current_backend(thread.id)
+        if session_is_resumable(record.backend, current):
+            return record.session_id
+
+        logger.info(
+            "Thread %d session %s was created by %s but the active backend is %s "
+            "— starting a fresh session instead of resuming",
+            thread.id,
+            record.session_id,
+            record.backend,
+            current,
+        )
+        with contextlib.suppress(discord.HTTPException):
+            await thread.send(
+                f"-# 🔀 Backend changed (`{record.backend}` → `{current}`). "
+                f"`{current}` cannot resume a `{record.backend}` session, "
+                "so this thread starts a fresh one."
+            )
+        return None
 
     async def _build_prompt_and_images(
         self, message: discord.Message
