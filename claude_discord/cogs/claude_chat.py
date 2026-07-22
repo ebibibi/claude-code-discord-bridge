@@ -264,8 +264,26 @@ class ClaudeChatCog(commands.Cog):
             return
 
         # Check if message is in a thread under one of the configured channels
-        if is_target_thread:
+        if is_target_thread and await self._is_thread_reply_allowed(message):
             await self._handle_thread_reply(message)
+
+    async def _is_thread_reply_allowed(self, message: discord.Message) -> bool:
+        """Return whether a thread message may start/continue a Claude session.
+
+        Threads under a mention-only channel inherit that channel's policy: a
+        thread a human created there is not an invitation to run Claude.  Two
+        escape hatches keep existing behaviour intact:
+
+        * the bot is explicitly @mentioned, or
+        * ccdb already owns the thread (a session record exists), which covers
+          bot-created session threads and ``/api/spawn`` threads.
+        """
+        parent_id = getattr(message.channel, "parent_id", None)
+        if parent_id not in self._mention_only_channel_ids:
+            return True
+        if self.bot.user is not None and self.bot.user in message.mentions:
+            return True
+        return await self.repo.get(message.channel.id) is not None
 
     async def _build_runner_for_thread(
         self,
