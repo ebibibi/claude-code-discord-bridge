@@ -82,6 +82,21 @@ CREATE TABLE IF NOT EXISTS usage_stats (
     is_using_overage INTEGER NOT NULL DEFAULT 0,
     recorded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+-- Advisory resource claims: a session announces "I am working on X" so a
+-- second session asking for the same X is told to step aside *before* it
+-- starts. Advisory only — nothing enforces them. Every claim has a TTL so a
+-- session that dies cannot pin a resource forever.
+CREATE TABLE IF NOT EXISTS resource_claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource TEXT NOT NULL UNIQUE,
+    thread_id INTEGER NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_claims_thread ON resource_claims(thread_id);
 """
 
 # Migrations for existing databases that lack new columns.
@@ -138,6 +153,17 @@ _MIGRATIONS = [
     ),
     # thread_id column on lounge_messages — tracks which Discord thread posted the message
     "ALTER TABLE lounge_messages ADD COLUMN thread_id INTEGER",
+    # resource_claims added in v3.2 — advisory cross-session locks
+    (
+        "CREATE TABLE IF NOT EXISTS resource_claims ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "resource TEXT NOT NULL UNIQUE, "
+        "thread_id INTEGER NOT NULL, "
+        "note TEXT, "
+        "created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')), "
+        "expires_at TEXT NOT NULL)"
+    ),
+    "CREATE INDEX IF NOT EXISTS idx_resource_claims_thread ON resource_claims(thread_id)",
 ]
 
 

@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from .backend_factory import BackendFactory
     from .backend_settings import BackendSettings
+    from .database.claims_repo import ClaimRepository
     from .database.ingest_repo import IngestResultRepository
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
@@ -46,6 +47,7 @@ class BridgeComponents:
     session_repo: SessionRepository
     task_repo: TaskRepository | None = None
     lounge_repo: LoungeRepository | None = None
+    claims_repo: ClaimRepository | None = None
     resume_repo: PendingResumeRepository | None = None
     ingest_repo: IngestResultRepository | None = None
     backend_factory: BackendFactory | None = None
@@ -64,6 +66,8 @@ class BridgeComponents:
             api_server.task_repo = self.task_repo
         if self.lounge_repo is not None:
             api_server.lounge_repo = self.lounge_repo
+        if self.claims_repo is not None:
+            api_server.claims_repo = self.claims_repo
         if self.resume_repo is not None:
             api_server.resume_repo = self.resume_repo
         if self.ingest_repo is not None:
@@ -157,6 +161,7 @@ async def setup_bridge(
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
     from .database.ask_repo import PendingAskRepository
+    from .database.claims_repo import ClaimRepository
     from .database.inbox_repo import ThreadInboxRepository
     from .database.ingest_repo import IngestResultRepository
     from .database.lounge_repo import LoungeRepository
@@ -246,6 +251,7 @@ async def setup_bridge(
     settings_repo = SettingsRepository(session_db_path)
     ask_repo = PendingAskRepository(session_db_path)
     lounge_repo = LoungeRepository(session_db_path)
+    claims_repo = ClaimRepository(session_db_path)
     resume_repo = PendingResumeRepository(session_db_path)
     usage_repo = UsageStatsRepository(session_db_path)
     ingest_repo = IngestResultRepository(session_db_path)
@@ -378,6 +384,7 @@ async def setup_bridge(
         session_repo=session_repo,
         task_repo=task_repo,
         lounge_repo=lounge_repo,
+        claims_repo=claims_repo,
         resume_repo=resume_repo,
         ingest_repo=ingest_repo,
         backend_factory=backend_factory,

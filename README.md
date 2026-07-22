@@ -118,6 +118,29 @@ curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
 
 `/api/sessions` merges three sources: the `sessions` table (created_at, working dir, backend), the in-memory registry (what each live session is doing *right now*), and each thread's latest lounge note. A session appears with `"state": "running"` while a turn is in flight — including sessions that never posted to the lounge at all, which is exactly when this matters. Sessions have no Discord token of their own, so the bot performs the read and the endpoints stay on the localhost control plane.
 
+### Resource Claims
+
+Observability tells a session that a collision *happened*. A claim prevents it — no reading, no negotiating, no LLM round trip. A session claims what it is about to work on; the next session asking for the same thing is refused before it does any work.
+
+```bash
+# Before starting: claim it
+curl -X POST "$CCDB_API_URL/api/claims" \
+  -H "Content-Type: application/json" \
+  -d '{"resource": "repo:ccdb#issue-123", "thread_id": "'$DISCORD_THREAD_ID'", "note": "fixing the parser"}'
+# 201 {"status": "acquired", ...}
+
+# A second session asking for the same resource:
+# 409 {"status": "held", "claim": {"thread_id": ..., "note": "fixing the parser",
+#      "holder_state": "running", "holder_thread_name": "..."}}
+
+# When done
+curl -X DELETE "$CCDB_API_URL/api/claims?resource=repo:ccdb%23issue-123&thread_id=$DISCORD_THREAD_ID"
+```
+
+Claims are **advisory** — nothing enforces them at the git or filesystem level — and every claim carries a TTL (default 2h, max 24h) so a session that dies cannot pin a resource forever. The 409 body reports whether the holder is still running, which is how a caller decides whether to wait, work on something else, or take over with `force=true`. Resource names are free-form and normalized (case and whitespace), so `repo:ccdb` and `Repo: CCDB` are the same claim.
+
+The lounge prompt tells every session to claim before starting and to release when finished.
+
 ### Programmatic Session Creation
 
 Spawn new Claude Code sessions from scripts, GitHub Actions, or other Claude sessions — without Discord message interaction.
@@ -903,6 +926,9 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |
 | GET | `/api/sessions` | List every session — live and stored — with state, working dir and latest lounge note (`state=running`, `exclude_thread`, `limit`) |
 | GET | `/api/threads/{thread_id}/messages` | Read another thread's conversation, oldest first (`limit`) |
+| POST | `/api/claims` | Claim a resource before working on it — 201 when acquired, 409 with the holder when taken |
+| GET | `/api/claims` | List live claims (optional `resource` filter) |
+| DELETE | `/api/claims` | Release a claim (`resource`, `thread_id`, optional `force=true`) |
 
 ```bash
 # Send notification (embed format, default)
