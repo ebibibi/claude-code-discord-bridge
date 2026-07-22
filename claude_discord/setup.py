@@ -156,6 +156,7 @@ async def setup_bridge(
         BridgeComponents with references to initialized repositories.
     """
     from .cogs.claude_chat import ClaudeChatCog
+    from .cogs.collision_watch import CollisionWatchCog
     from .cogs.context_links import ContextLinksCog
     from .cogs.scheduler import SchedulerCog
     from .cogs.session_manage import SessionManageCog
@@ -305,6 +306,16 @@ async def setup_bridge(
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")
+
+    # --- CollisionWatchCog (auto-enabled; no-op until two sessions overlap) ---
+    await bot.add_cog(
+        CollisionWatchCog(
+            bot,
+            lounge_repo=lounge_repo,
+            lounge_channel_id=lounge_channel_id,
+        )
+    )
+    logger.info("Registered CollisionWatchCog")
 
     # --- SessionManageCog ---
     session_manage_cog = SessionManageCog(

@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 from pathlib import Path
 
 import discord
 
-from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent
+from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent, ToolUseEvent
+from ..collision import extract_written_path
 from ..discord_ui.chunker import _wrap_tables_in_fences, chunk_message
 from ..discord_ui.elicitation_view import ElicitationFormView, ElicitationUrlView
 from ..discord_ui.embeds import (
@@ -373,6 +375,11 @@ class EventProcessor:
         if event.tool_use and event.tool_use.tool_name == "ScheduleWakeup":
             self._pending_wakeup = dict(event.tool_use.tool_input)
 
+        # Remember files this session writes so collisions with other live
+        # sessions can be detected from behaviour, not from announcements.
+        if event.tool_use is not None:
+            self._record_file_activity(event.tool_use)
+
         # Tool use — post embed and start live timer. Skip in chat_only mode.
         if event.tool_use:
             if self._chat_only:
@@ -656,6 +663,15 @@ class EventProcessor:
             self._state.accumulated_text = event.text
             self._assistant_text_sent = True
             await self._bump_stop()
+
+    def _record_file_activity(self, tool_use: ToolUseEvent) -> None:
+        """Note a file write for cross-session collision detection (no-op when unwired)."""
+        tracker = self._config.file_activity
+        if tracker is None:
+            return
+        path = extract_written_path(tool_use.tool_name, tool_use.tool_input)
+        if path is not None:
+            tracker.record(self._config.thread.id, path, time.monotonic())
 
     async def _handle_tool_use(self, event: StreamEvent) -> None:
         """Post tool use embed and start the live timer."""
