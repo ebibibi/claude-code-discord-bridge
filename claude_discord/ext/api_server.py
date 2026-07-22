@@ -26,7 +26,7 @@ import zipfile
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
@@ -74,12 +74,12 @@ _LOUNGE_LOOKBACK = 50
 _MAX_THREAD_MESSAGE_CHARS = 2000
 
 
-def _serialize_thread_message(message: object) -> dict[str, object]:
+def _serialize_thread_message(message: Any) -> dict[str, object]:
     """Reduce a discord.Message to the fields another session needs."""
     content = str(getattr(message, "content", "") or "")
     truncated = len(content) > _MAX_THREAD_MESSAGE_CHARS
-    author = getattr(message, "author", None)
-    created_at = getattr(message, "created_at", None)
+    author: Any = getattr(message, "author", None)
+    created_at: Any = getattr(message, "created_at", None)
     return {
         "id": getattr(message, "id", None),
         "author": str(getattr(author, "display_name", None) or author or "unknown"),
@@ -913,13 +913,17 @@ class ApiServer:
             except Exception as exc:
                 return web.json_response({"error": str(exc)}, status=404)
 
-        if not hasattr(channel, "history"):
+        # Threads and text channels expose history(); categories and forums do
+        # not. discord.py's union of channel types has no common protocol for
+        # this, hence the runtime check plus an untyped handle.
+        history = getattr(channel, "history", None)
+        if history is None:
             return web.json_response(
                 {"error": "Channel does not support message history"}, status=400
             )
 
         try:
-            messages = [msg async for msg in channel.history(limit=limit)]
+            messages: list[Any] = [msg async for msg in history(limit=limit)]
         except Exception as exc:  # forbidden, deleted thread, transient API error
             return web.json_response({"error": str(exc)}, status=502)
 
