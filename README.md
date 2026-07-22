@@ -320,6 +320,7 @@ Behind the scenes:
 - **AI Lounge** — Shared "breakroom" channel; context injected as backend-specific system/developer instructions (ephemeral, never accumulates in history) so long sessions never hit "Prompt is too long"; sessions post intentions, read each other's status, and check before disruptive operations; humans see it as a live activity feed
 - **Cross-session observability** — `GET /api/sessions` lists every session (live and stored) with its state, working dir and latest lounge note; `GET /api/threads/{thread_id}/messages` reads another thread's conversation. Read-only, so a session can look before it edits — including at sessions that never posted to the lounge
 - **Resource claims** — `POST /api/claims` reserves a repo, issue or file before work starts; a second session asking for the same resource gets 409 with the holder's thread, note and live state. Advisory and TTL-bound (default 2h, max 24h), so a dead session cannot pin a resource forever
+- **Session-to-session relay** — `POST /api/threads/{thread_id}/message` lets one session speak to another when they have already collided; `queue` waits for the receiver's turn, `interrupt` SIGINTs it. Every relay is posted into the thread (never a back channel), wrapped in a marker so it is not mistaken for the human, and bounded by hop/cooldown/rate limits so two sessions cannot loop
 - **Coordination channel** — `COORDINATION_CHANNEL_ID` env var is used as the default fallback for the AI Lounge channel (no separate bot-side lifecycle events)
 
 ### Scheduled Tasks
@@ -1013,6 +1014,7 @@ claude_discord/
   concurrency.py           # Worktree instructions + active session registry
   lounge.py                # AI Lounge prompt builder
   session_view.py          # Cross-session views for GET /api/sessions (pure merge logic)
+  relay.py                 # RelayGuard + relay prompt wrapper (hop/cooldown/rate limits)
   session_sync.py          # CLI session discovery and import
   worktree.py              # WorktreeManager — safe git worktree lifecycle
   cogs/
@@ -1090,7 +1092,7 @@ examples/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-1670+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, cross-session observability, resource claims, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, backend factory, and cross-backend session ownership.
+1690+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, cross-session observability, resource claims, session-to-session relay, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, backend factory, and cross-backend session ownership.
 
 ---
 
