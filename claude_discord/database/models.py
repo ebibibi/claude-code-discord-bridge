@@ -88,6 +88,8 @@ CREATE TABLE IF NOT EXISTS usage_stats (
 _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'discord'",
     "ALTER TABLE sessions ADD COLUMN summary TEXT",
+    # Which CLI produced this session ID (claude / codex) — see claude_code_core.models.
+    "ALTER TABLE sessions ADD COLUMN backend TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)",
     # Lounge table added in v1.x — safe to run on existing DBs
     (

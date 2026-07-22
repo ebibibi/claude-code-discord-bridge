@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     summary TEXT,
     context_window INTEGER,
     context_used INTEGER,
+    backend TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
     last_used_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -61,6 +62,9 @@ _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN summary TEXT",
     "ALTER TABLE sessions ADD COLUMN context_window INTEGER",
     "ALTER TABLE sessions ADD COLUMN context_used INTEGER",
+    # Which CLI produced this session ID. Claude and Codex session stores are not
+    # interoperable, so a stored ID is only resumable by the backend that made it.
+    "ALTER TABLE sessions ADD COLUMN backend TEXT",
     # Drop UNIQUE constraint on session_id to allow fork (multiple threads, same source session)
     "DROP INDEX IF EXISTS idx_sessions_session_id",
     "CREATE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)",

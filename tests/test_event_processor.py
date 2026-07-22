@@ -112,7 +112,7 @@ class TestOnSystem:
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
 
         repo.save.assert_called_once_with(
-            thread.id, "s1", working_dir=runner.working_dir, summary="test prompt"
+            thread.id, "s1", working_dir=runner.working_dir, summary="test prompt", backend="claude"
         )
 
     @pytest.mark.asyncio
@@ -128,7 +128,7 @@ class TestOnSystem:
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="existing-sess"))
 
         repo.save.assert_called_once_with(
-            thread.id, "existing-sess", working_dir=runner.working_dir
+            thread.id, "existing-sess", working_dir=runner.working_dir, backend="claude"
         )
 
     @pytest.mark.asyncio
@@ -145,7 +145,7 @@ class TestOnSystem:
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
 
         repo.save.assert_called_once_with(
-            thread.id, "s1", working_dir=runner.working_dir, summary="x" * 100
+            thread.id, "s1", working_dir=runner.working_dir, summary="x" * 100, backend="claude"
         )
 
     @pytest.mark.asyncio

@@ -41,6 +41,19 @@ CODEX_STATUS_MODES = ("auto", "on", "off")
 CODEX_STATUS_DEFAULT = "auto"
 
 
+def session_is_resumable(stored_backend: str | None, current_backend: str) -> bool:
+    """Can ``current_backend`` resume a session ID minted by ``stored_backend``?
+
+    Claude and Codex keep separate session stores, so handing a Codex rollout ID
+    to ``claude --resume`` (or vice versa) fails at the CLI level. When the
+    stored backend is unknown (records written before the ``backend`` column
+    existed) we assume it is compatible — the old behaviour.
+    """
+    if not stored_backend:
+        return True
+    return stored_backend == current_backend
+
+
 class BackendSettings:
     """Thin wrapper around SettingsRepository that resolves backend/model."""
 

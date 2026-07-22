@@ -270,9 +270,19 @@ def _parse_result(data: dict[str, Any], event: StreamEvent) -> None:
     #   {"type":"result","subtype":"error","error":"..."} — explicit error subtype
     #   {"type":"result","subtype":"success","is_error":true,"result":"API Error: ..."} — API-level
     #     error reported as a "successful" result with is_error flag (e.g. 400 from Anthropic API)
+    #   {"type":"result","subtype":"error_during_execution","is_error":true,
+    #    "result":"","errors":["No conversation found with session ID: ..."]} — the CLI
+    #     failed before producing any text (e.g. --resume with a session ID that does
+    #     not exist).  There is no `result` text, so the errors[] array is the only
+    #     human-readable signal.  Without this branch the run ends silently and the
+    #     user sees no reply at all.
     subtype = data.get("subtype", "")
+    errors_list = [str(e) for e in data.get("errors", []) if e]
     if subtype == "error":
         event.error = data.get("error", "Unknown error")
+    elif subtype.startswith("error") and not result_text:
+        event.error = "\n".join(errors_list) if errors_list else f"CLI reported {subtype}"
+        event.text = ""
     elif data.get("is_error") and result_text:
         # API-level error (e.g. "API Error: 400 ...") surfaced via is_error flag.
         # Promote it to event.error so the handler shows an error display,
