@@ -408,6 +408,21 @@ The script detects the repository root dynamically (via `readlink -f` on `$0`), 
 
 The script requires the `DISCORD_WEBHOOK_URL` variable in `.env` for failure notifications (optional — the script works without it).
 
+#### Toolchain PATH — set it in `.env`
+
+systemd starts a unit with a minimal default `PATH` (typically `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) and never sources `~/.bashrc` or `~/.profile`. The bot inherits that `PATH`, and so does every Claude/Codex session it spawns — sessions run with the bot's environment minus the stripped secrets.
+
+The result is confusing: a build that works in your terminal fails inside a Discord session, or silently runs against an older system-wide binary, because tools installed under `~/.local/bin` or `~/.npm-global/bin` are invisible to the service.
+
+Since the service loads `.env` via `EnvironmentFile=`, setting `PATH` there fixes the bot and every session at once:
+
+```bash
+# .env — match your interactive shell's PATH
+PATH=/home/you/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+```
+
+Restart the service (`sudo systemctl restart mybot.service`), then confirm from a Discord session by asking Claude to run `which node && node --version`.
+
 ### Custom Cogs (Extend Without Forking)
 
 Add your own features by dropping Python files into a directory — no fork, no subclass, no package needed:
@@ -597,6 +612,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CCDB_COMMAND` | Path or name of the CLI binary (overrides `CLAUDE_COMMAND`). Used by the initial runner picked from `CCDB_BACKEND`; superseded by the two per-backend variables below when `/backend` switches at runtime. | _(auto: `claude` or `codex`)_ |
 | `CCDB_CLAUDE_COMMAND` | Explicit path to the Claude CLI binary. Used by `BackendFactory` whenever `/backend claude` is active, regardless of the initial `CCDB_BACKEND`. Falls back to `CLAUDE_COMMAND`, then `claude` (PATH). | (optional) |
 | `CCDB_CODEX_COMMAND` | Explicit path to the OpenAI Codex CLI binary. Required when running the bot under systemd (default service PATH does not include `~/.npm-global/bin`). Falls back to `codex` (PATH). | (optional) |
+| `PATH` | Binary search path for the bot **and every CLI session it spawns** — sessions inherit the bot's environment. Set it in `.env` when running under systemd, which starts units with a minimal PATH and never reads `~/.bashrc` / `~/.profile`. See [Toolchain PATH](#toolchain-path--set-it-in-env). | (inherited from the parent process) |
 | `CCDB_MODEL` | Model to use (overrides `CLAUDE_MODEL`) | `sonnet` |
 | `CCDB_PERMISSION_MODE` | Permission mode for CLI (overrides `CLAUDE_PERMISSION_MODE`) | `acceptEdits` |
 | `CCDB_DANGEROUSLY_SKIP_PERMISSIONS` | Skip all permission checks — overrides `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | `false` |
