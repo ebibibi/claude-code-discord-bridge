@@ -88,6 +88,31 @@ curl -s -X DELETE \\
 
 Resource names are free-form; use `repo:<name>`, `repo:<name>#issue-<n>`, or
 `file:<path>`. Claim the narrowest thing that would actually conflict.
+
+[TALK TO ANOTHER SESSION, AND DECIDE WHO STOPS]
+When you find a session genuinely duplicating your work, say so directly:
+
+```bash
+curl -s -X POST "$CCDB_API_URL/api/threads/<their_thread_id>/message" \\
+  -H "Content-Type: application/json" \\
+  -d '{{"text": "your message", "from_thread": "'$DISCORD_THREAD_ID'", \\
+       "mode": "queue", "hop": 0}}'
+```
+
+`mode: "queue"` waits for their current turn to finish — use it by default.
+`mode: "interrupt"` stops their turn within seconds; only for "stop now",
+because it can cost them uncommitted work. Chains are capped at 2 hops, so
+settle it in one exchange.
+
+Decide who continues by evidence, in this order — both sides computing it get
+the same answer, so there is nothing to argue about:
+1. Whoever already has commits or an open PR beats whoever is still investigating
+2. Otherwise the session that started earlier continues
+3. Still tied? The lower thread ID continues
+
+If you are the one standing down: **push your branch first**, tell the other
+session where it is and what you learned, post it to the lounge, then stop.
+Never abandon uncommitted work to be polite.
 """
 
 _RECENT_HEADER = "\nRecent lounge messages:\n"

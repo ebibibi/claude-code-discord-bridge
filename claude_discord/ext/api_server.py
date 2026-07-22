@@ -13,6 +13,7 @@ Security:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import contextlib
@@ -21,6 +22,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 import zipfile
 from collections.abc import Awaitable, Callable
@@ -31,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 from aiohttp import web
 
 from ..discord_ui.file_sender import send_file_blobs
+from ..relay import MODE_INTERRUPT, MODE_QUEUE, VALID_MODES, RelayGuard, build_relay_prompt
 from ..session_view import STATE_IDLE, STATE_RUNNING, build_session_views
 
 if TYPE_CHECKING:
@@ -74,6 +77,9 @@ _MAX_THREAD_MESSAGE_LIMIT = 100
 _LOUNGE_LOOKBACK = 50
 # Per-message cap; a single Claude reply can be many KB of code.
 _MAX_THREAD_MESSAGE_CHARS = 2000
+# Cap on a relayed message. A relay is a short coordination note ("I started at
+# 13:02 on branch X, stand down"), not a payload channel.
+_MAX_RELAY_TEXT_CHARS = 4000
 
 
 def _serialize_thread_message(message: Any) -> dict[str, object]:
@@ -234,6 +240,9 @@ class ApiServer:
         self.session_repo = session_repo
         self.ingest_repo = ingest_repo
         self.claims_repo = claims_repo
+        # Loop/rate brake for thread-to-thread relays. Process-local by design:
+        # after a restart there are no in-flight relay chains to protect.
+        self.relay_guard = RelayGuard()
         # Fall back to COORDINATION_CHANNEL_ID so lounge shares the same channel
         if lounge_channel_id is None:
             ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
@@ -273,6 +282,7 @@ class ApiServer:
         # Cross-session observability routes (requires session_repo)
         self.app.router.add_get("/api/sessions", self.list_sessions)
         self.app.router.add_get("/api/threads/{thread_id}/messages", self.get_thread_messages)
+        self.app.router.add_post("/api/threads/{thread_id}/message", self.relay_thread_message)
         # Session spawn route
         self.app.router.add_post("/api/spawn", self.spawn)
         # Authenticated external ingest route (browser extension / webhooks)
@@ -781,6 +791,110 @@ class ApiServer:
     # ------------------------------------------------------------------
     # Session spawn endpoint (/api/spawn)
     # ------------------------------------------------------------------
+
+    async def relay_thread_message(self, request: web.Request) -> web.Response:
+        """POST /api/threads/{thread_id}/message — talk to another live session.
+
+        The write side of cross-session coordination: a session that has seen a
+        peer working on the same task can say so, and ask it to stand down.
+
+        ``on_message`` ignores anything a bot wrote (that guard is what stops
+        the bot from talking to itself), so relays go through this endpoint —
+        the same shape as ``/api/spawn``, which also bypasses it deliberately.
+
+        Body (JSON):
+            text: What to say. Wrapped in a marker so the receiver cannot
+                mistake it for its human's instruction.
+            from_thread: The sending session's thread ID (required — a relay
+                without an origin is not answerable).
+            mode: ``queue`` (default) waits for the receiver's current turn to
+                finish; ``interrupt`` SIGINTs it. Use ``interrupt`` only for
+                "stop now", since it can cost the receiver uncommitted work.
+            hop: Chain depth, 0 for a fresh conversation. A reply passes
+                ``hop + 1``; the guard refuses beyond MAX_HOP.
+
+        Returns 202 when delivered (Claude runs in the background), 429 when
+        the relay guard refuses (loop/cooldown/rate), 404 for unknown threads.
+        """
+        try:
+            thread_id = int(request.match_info["thread_id"])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid thread_id"}, status=400)
+
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        text = str(data.get("text") or "").strip()
+        if not text:
+            return web.json_response({"error": "text is required"}, status=400)
+        if len(text) > _MAX_RELAY_TEXT_CHARS:
+            return web.json_response(
+                {"error": f"text must be at most {_MAX_RELAY_TEXT_CHARS} characters"},
+                status=400,
+            )
+
+        try:
+            from_thread = int(data["from_thread"])
+        except (KeyError, TypeError, ValueError):
+            return web.json_response({"error": "from_thread is required (integer)"}, status=400)
+
+        mode = str(data.get("mode") or MODE_QUEUE).lower()
+        if mode not in VALID_MODES:
+            return web.json_response(
+                {"error": f"mode must be one of {', '.join(VALID_MODES)}"}, status=400
+            )
+
+        try:
+            hop = int(data.get("hop", 0))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "hop must be an integer"}, status=400)
+
+        now = time.monotonic()
+        refusal = self.relay_guard.check(
+            from_thread=from_thread, to_thread=thread_id, hop=hop, now=now
+        )
+        if refusal is not None:
+            logger.info("Relay refused (%s → %s): %s", from_thread, thread_id, refusal)
+            return web.json_response({"error": refusal}, status=429)
+
+        from ..cogs.claude_chat import ClaudeChatCog
+
+        cog: ClaudeChatCog | None = self.bot.cogs.get("ClaudeChatCog")  # type: ignore[assignment]
+        if cog is None:
+            return web.json_response({"error": "ClaudeChatCog is not loaded"}, status=503)
+
+        import discord as _discord
+
+        thread = self.bot.get_channel(thread_id)
+        if thread is None:
+            try:
+                thread = await self.bot.fetch_channel(thread_id)
+            except Exception as exc:
+                return web.json_response({"error": str(exc)}, status=404)
+        if not isinstance(thread, _discord.Thread):
+            return web.json_response({"error": "Target must be a thread"}, status=400)
+
+        prompt = build_relay_prompt(text=text, from_thread=from_thread, hop=hop)
+        self.relay_guard.record(from_thread=from_thread, to_thread=thread_id, now=now)
+
+        # Run in the background so the sender is not blocked for the length of
+        # the receiver's turn.
+        asyncio.create_task(
+            cog.deliver_relayed_message(thread, prompt, interrupt=mode == MODE_INTERRUPT)
+        )
+        logger.info(
+            "Relayed message: thread %s → thread %s (mode=%s, hop=%s)",
+            from_thread,
+            thread_id,
+            mode,
+            hop,
+        )
+        return web.json_response(
+            {"status": "delivered", "thread_id": thread_id, "mode": mode, "hop": hop},
+            status=202,
+        )
 
     def _require_claims_repo(self) -> web.Response | None:
         """Return a 503 response if claims_repo is not configured."""

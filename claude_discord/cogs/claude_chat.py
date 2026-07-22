@@ -812,6 +812,62 @@ class ClaudeChatCog(commands.Cog):
             )
         return thread
 
+    async def deliver_relayed_message(
+        self,
+        thread: discord.Thread,
+        text: str,
+        *,
+        interrupt: bool,
+    ) -> None:
+        """Feed a message from another session into this thread's Claude session.
+
+        The API-initiated equivalent of a human reply, and the sibling of
+        ``spawn_session``: ``on_message`` drops anything a bot wrote, so a
+        relayed message would never reach Claude through the normal path.
+
+        The text is posted into the thread first, so the humans watching see the
+        AI-to-AI exchange — a relay must never become a back channel.
+
+        Args:
+            thread: The receiving thread.
+            text: Already-wrapped message (see ``relay.build_relay_prompt``).
+            interrupt: When True, SIGINT the turn in flight so a "stop, I have
+                this" reaches Claude within seconds. When False, wait for the
+                current turn to finish — the right default, because a message
+                that preempts a turn can cost the receiver uncommitted work.
+        """
+        chunks = chunk_message(text) or [text]
+        seed_message = await thread.send(chunks[0])
+        for chunk in chunks[1:]:
+            seed_message = await thread.send(chunk)
+
+        record = await self.repo.get(thread.id)
+        session_id = record.session_id if record else None
+        if record is not None and session_id:
+            session_id = await self._session_id_for_current_backend(thread, record)
+
+        lock = self._thread_locks.setdefault(thread.id, asyncio.Lock())
+        async with lock:
+            existing_runner = self._active_runners.get(thread.id)
+            existing_task = self._active_tasks.get(thread.id)
+            if existing_runner is not None:
+                if interrupt:
+                    await thread.send("-# ⚡ Interrupted by another session's message...")
+                    await existing_runner.interrupt()
+                if existing_task is not None and not existing_task.done():
+                    with contextlib.suppress(Exception):
+                        await existing_task
+
+        chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
+        await self._run_claude(
+            seed_message,
+            thread,
+            text,
+            session_id=session_id,
+            working_dir_override=record.working_dir if record else None,
+            chat_only=chat_only,
+        )
+
     async def cog_unload(self) -> None:
         """Mark all mid-run Claude sessions for auto-resume on the next bot startup.
 

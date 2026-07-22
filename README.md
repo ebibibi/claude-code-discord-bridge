@@ -141,6 +141,28 @@ Claims are **advisory** — nothing enforces them at the git or filesystem level
 
 The lounge prompt tells every session to claim before starting and to release when finished.
 
+### Session-to-Session Relay
+
+Observability lets a session see a peer; a claim keeps them apart. When two sessions have already collided, they need to actually talk — and one of them needs to stop.
+
+```bash
+curl -X POST "$CCDB_API_URL/api/threads/<their_thread_id>/message" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "I started this at 13:02 on branch fix/parser and already pushed 3 commits.",
+       "from_thread": "'$DISCORD_THREAD_ID'", "mode": "queue", "hop": 0}'
+```
+
+`on_message` ignores anything a bot wrote — that guard is what stops the bot from talking to itself — so relays go through this endpoint instead, the same way `/api/spawn` does.
+
+- **`mode: "queue"`** (default) waits for the receiver's current turn to finish.
+- **`mode: "interrupt"`** SIGINTs the turn in flight, so "stop now" lands within seconds. It can cost the receiver uncommitted work, so it is reserved for real conflicts.
+- The relayed text is **posted into the thread** before it reaches Claude, so the humans watching see the whole AI-to-AI exchange. A relay is never a back channel.
+- Every message is **wrapped in a marker** naming the sending thread and stating that it is not from the human — an unmarked instruction would be obeyed as if the owner had written it.
+
+Loops are the real risk (two sessions answering each other burn tokens and interrupt each other indefinitely), so a guard bounds every chain: **max 2 hops**, a 60s cooldown per thread pair, 5 relays per sender per 10 minutes, and no self-sends. Refusals come back as 429 with the reason.
+
+The lounge prompt also gives sessions a tie-break rule so the conversation converges instead of ending in mutual politeness: whoever has commits or a PR beats whoever is still investigating; otherwise the earlier session continues; ties go to the lower thread ID. Whoever stands down pushes its branch first and hands over what it learned.
+
 ### Programmatic Session Creation
 
 Spawn new Claude Code sessions from scripts, GitHub Actions, or other Claude sessions — without Discord message interaction.
@@ -929,6 +951,7 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/claims` | Claim a resource before working on it — 201 when acquired, 409 with the holder when taken |
 | GET | `/api/claims` | List live claims (optional `resource` filter) |
 | DELETE | `/api/claims` | Release a claim (`resource`, `thread_id`, optional `force=true`) |
+| POST | `/api/threads/{thread_id}/message` | Relay a message from one session to another (`text`, `from_thread`, `mode`, `hop`) |
 
 ```bash
 # Send notification (embed format, default)
