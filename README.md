@@ -29,7 +29,7 @@ When you send tasks to Claude Code or OpenAI Codex in separate Discord threads, 
 
 2. **Active session registry** — Each running session knows about the others. If two sessions are about to touch the same repo, they can coordinate rather than conflict.
 
-3. **AI Lounge** — A session-to-session "breakroom" injected into every prompt. Before starting, each session reads recent lounge messages to see what other sessions are doing. Before disruptive operations (force push, bot restart, DB drop), sessions check the lounge first so they don't stomp on each other's work.
+3. **AI Lounge** — A session-to-session "breakroom" injected into every prompt. Before starting, each session reads recent lounge messages to see what other sessions are doing, and claims the repo, issue or file it is about to touch (see [Resource Claims](#resource-claims)) so a second session is turned away before it duplicates the work. Before disruptive operations (force push, bot restart, DB drop), sessions check the lounge first so they don't stomp on each other's work.
 
 4. **Backend-agnostic surface** — The same Discord UI, slash commands, scheduler, API, and Lounge work the same way whether a thread runs Claude or Codex. Mix backends across threads if you want — e.g. Claude for refactors, Codex for code review — using `/backend` per thread.
 
@@ -297,6 +297,7 @@ Behind the scenes:
 - **Active session registry** — In-memory registry; each session sees what the others are doing
 - **AI Lounge** — Shared "breakroom" channel; context injected as backend-specific system/developer instructions (ephemeral, never accumulates in history) so long sessions never hit "Prompt is too long"; sessions post intentions, read each other's status, and check before disruptive operations; humans see it as a live activity feed
 - **Cross-session observability** — `GET /api/sessions` lists every session (live and stored) with its state, working dir and latest lounge note; `GET /api/threads/{thread_id}/messages` reads another thread's conversation. Read-only, so a session can look before it edits — including at sessions that never posted to the lounge
+- **Resource claims** — `POST /api/claims` reserves a repo, issue or file before work starts; a second session asking for the same resource gets 409 with the holder's thread, note and live state. Advisory and TTL-bound (default 2h, max 24h), so a dead session cannot pin a resource forever
 - **Coordination channel** — `COORDINATION_CHANNEL_ID` env var is used as the default fallback for the AI Lounge channel (no separate bot-side lifecycle events)
 
 ### Scheduled Tasks
@@ -1014,6 +1015,7 @@ claude_discord/
     ask_repo.py            # Pending AskUserQuestion CRUD
     notification_repo.py   # Scheduled notification CRUD
     lounge_repo.py         # AI Lounge message CRUD
+    claims_repo.py         # Advisory resource claim CRUD (TTL-bound)
     resume_repo.py         # Startup resume CRUD (pending resumes across bot restarts)
     settings_repo.py       # Per-guild settings
     inbox_repo.py          # Thread inbox CRUD (THREAD_INBOX_ENABLED)
@@ -1065,7 +1067,7 @@ examples/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-1640+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, cross-session observability, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, backend factory, and cross-backend session ownership.
+1670+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, cross-session observability, resource claims, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, backend factory, and cross-backend session ownership.
 
 ---
 
