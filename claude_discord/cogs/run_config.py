@@ -25,6 +25,7 @@ from ..discord_ui.status import StatusManager
 
 if TYPE_CHECKING:
     from ..backend_settings import BackendSettings
+    from ..collision import FileActivityTracker
     from ..database.inbox_repo import ThreadInboxRepository
     from ..database.repository import UsageStatsRepository
     from ..discord_ui.thread_dashboard import ThreadStatusDashboard
@@ -80,6 +81,9 @@ class RunConfig:
     inbox_repo: ThreadInboxRepository | None = None
     inbox_dashboard: ThreadStatusDashboard | None = None
     usage_repo: UsageStatsRepository | None = None
+    # Records which files this session writes, so CollisionWatchCog can notice
+    # two live sessions editing the same file without either announcing it.
+    file_activity: FileActivityTracker | None = None
     claude_command: str = "claude"
     # When True, a compact guardrail was already injected into --append-system-prompt
     # for this run. Prevents infinite interrupt→rerun loops if compact fires again.

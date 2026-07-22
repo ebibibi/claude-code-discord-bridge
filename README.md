@@ -163,6 +163,23 @@ Loops are the real risk (two sessions answering each other burn tokens and inter
 
 The lounge prompt also gives sessions a tie-break rule so the conversation converges instead of ending in mutual politeness: whoever has commits or a PR beats whoever is still investigating; otherwise the earlier session continues; ties go to the lower thread ID. Whoever stands down pushes its branch first and hands over what it learned.
 
+### Automatic Collision Detection
+
+The lounge and claims both depend on a session *saying* something. This catches the overlaps nobody announced, from what the sessions actually did: if two live sessions write to the same file within 15 minutes, they are working on the same thing whether or not either mentioned it.
+
+`EventProcessor` records the path of every write-type tool call (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`); `CollisionWatchCog` compares those sets across live sessions once a minute.
+
+> Why file paths and not working directories: on a single-user host every session tends to start in the same home directory, so `working_dir` equality flags every pair and means nothing. A shared *edited file* is almost never a coincidence. Reads are deliberately ignored — two sessions reading the same file is normal and would drown the signal.
+
+When an overlap is found, the watcher posts:
+
+- a line in the **AI Lounge**, which is injected into every session's next turn at no token cost and without interrupting anything, and
+- a message in **each colliding thread**, naming the peer, the shared files, and the endpoints that resolve it.
+
+It never relays into a running session — preempting a turn on a mere suspicion would cost more than the collision. Escalating is the sessions' decision, using the relay endpoint above. Each pair is announced at most once every 30 minutes, because a warning repeated every minute is a warning everyone learns to ignore.
+
+Enabled automatically; it stays dormant until two sessions actually overlap.
+
 ### Programmatic Session Creation
 
 Spawn new Claude Code sessions from scripts, GitHub Actions, or other Claude sessions — without Discord message interaction.

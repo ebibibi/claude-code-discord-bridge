@@ -1220,6 +1220,7 @@ class ClaudeChatCog(commands.Cog):
                     registry=self._registry,
                     ask_repo=self._ask_repo,
                     lounge_repo=self._lounge_repo,
+                    file_activity=getattr(self.bot, "file_activity", None),
                     stop_view=stop_view,
                     worktree_manager=getattr(self.bot, "worktree_manager", None),
                     images=images,
