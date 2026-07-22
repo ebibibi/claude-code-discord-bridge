@@ -64,6 +64,30 @@ shared repo, or when you suspect a session that never posted here. Sessions with
 ``"state": "running"`` have a turn in flight right now; ``working_dir`` tells you
 whether you would collide. Reading is free and has no side effects — when in
 doubt, look before you edit.
+
+[CLAIM WHAT YOU ARE ABOUT TO WORK ON]
+Before starting substantial work on a repo, issue, or file, claim it. This is
+cheaper than discovering the collision later — no reading, no negotiating:
+
+```bash
+curl -s -X POST "$CCDB_API_URL/api/claims" -H "Content-Type: application/json" \\
+  -d '{{"resource": "repo:my-repo#issue-42", "thread_id": "'$DISCORD_THREAD_ID'", \\
+       "note": "what you intend to do"}}'
+```
+
+- 201 → it is yours; go ahead. Claims expire on their own (default 2h).
+- 409 → another session holds it. The response tells you which thread, what it
+  is doing and whether it is still running. Read that thread, then pick
+  different work or tell the human — do NOT start the same task anyway.
+
+Release when you are done (or when you stop early):
+```bash
+curl -s -X DELETE \\
+  "$CCDB_API_URL/api/claims?resource=repo:my-repo%23issue-42&thread_id=$DISCORD_THREAD_ID"
+```
+
+Resource names are free-form; use `repo:<name>`, `repo:<name>#issue-<n>`, or
+`file:<path>`. Claim the narrowest thing that would actually conflict.
 """
 
 _RECENT_HEADER = "\nRecent lounge messages:\n"

@@ -31,11 +31,13 @@ from typing import TYPE_CHECKING, Any
 from aiohttp import web
 
 from ..discord_ui.file_sender import send_file_blobs
+from ..session_view import STATE_IDLE, STATE_RUNNING, build_session_views
 
 if TYPE_CHECKING:
     import discord
     from discord.ext.commands import Bot
 
+    from ..database.claims_repo import ClaimRepository
     from ..database.ingest_repo import IngestResultRepository
     from ..database.lounge_repo import LoungeRepository
     from ..database.notification_repo import NotificationRepository
@@ -213,6 +215,7 @@ class ApiServer:
         resume_repo: PendingResumeRepository | None = None,
         session_repo: SessionRepository | None = None,
         ingest_repo: IngestResultRepository | None = None,
+        claims_repo: ClaimRepository | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -230,6 +233,7 @@ class ApiServer:
         self.resume_repo = resume_repo
         self.session_repo = session_repo
         self.ingest_repo = ingest_repo
+        self.claims_repo = claims_repo
         # Fall back to COORDINATION_CHANNEL_ID so lounge shares the same channel
         if lounge_channel_id is None:
             ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
@@ -262,6 +266,10 @@ class ApiServer:
         # AI Lounge routes (requires lounge_repo)
         self.app.router.add_get("/api/lounge", self.get_lounge)
         self.app.router.add_post("/api/lounge", self.post_lounge)
+        # Advisory resource claims (requires claims_repo)
+        self.app.router.add_post("/api/claims", self.create_claim)
+        self.app.router.add_get("/api/claims", self.list_claims)
+        self.app.router.add_delete("/api/claims", self.delete_claim)
         # Cross-session observability routes (requires session_repo)
         self.app.router.add_get("/api/sessions", self.list_sessions)
         self.app.router.add_get("/api/threads/{thread_id}/messages", self.get_thread_messages)
@@ -774,6 +782,161 @@ class ApiServer:
     # Session spawn endpoint (/api/spawn)
     # ------------------------------------------------------------------
 
+    def _require_claims_repo(self) -> web.Response | None:
+        """Return a 503 response if claims_repo is not configured."""
+        if self.claims_repo is None:
+            return web.json_response(
+                {"error": "claims_repo is not configured"},
+                status=503,
+            )
+        return None
+
+    def _claim_json(self, claim: object) -> dict[str, object]:
+        """Serialize a Claim, annotating the holder so 409s are actionable."""
+        thread_id = getattr(claim, "thread_id", None)
+        return {
+            "resource": getattr(claim, "resource", None),
+            "thread_id": thread_id,
+            "note": getattr(claim, "note", None),
+            "created_at": getattr(claim, "created_at", None),
+            "expires_at": getattr(claim, "expires_at", None),
+            "holder_state": (
+                STATE_RUNNING if thread_id in self._running_thread_ids() else STATE_IDLE
+            ),
+            "holder_thread_name": self._thread_names({thread_id}).get(thread_id)
+            if isinstance(thread_id, int)
+            else None,
+        }
+
+    async def create_claim(self, request: web.Request) -> web.Response:
+        """POST /api/claims — claim a resource, or learn who already holds it.
+
+        The cheap half of cross-session coordination: no LLM round trip, no
+        negotiation.  A session claims what it is about to work on; a second
+        session asking for the same thing gets 409 and steps aside before doing
+        any work.  Claims are advisory and expire.
+
+        Body (JSON):
+            resource: Free-form name agreed by convention, e.g. ``repo:ccdb``,
+                ``repo:ccdb#issue-123``, ``file:claude_discord/bot.py``.
+            thread_id: The claiming session's Discord thread ID.
+            ttl_seconds: Optional lifetime (default 2h, max 24h).
+            note: Optional human-readable intent shown to whoever collides.
+
+        Returns 201 when acquired or renewed, 409 when another live thread
+        holds it (body carries the holder, its state and its note).
+        """
+        if err := self._require_claims_repo():
+            return err
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        from ..database.claims_repo import (
+            DEFAULT_TTL_SECONDS,
+            MAX_NOTE_LENGTH,
+            MAX_RESOURCE_LENGTH,
+            normalize_resource,
+        )
+
+        resource = normalize_resource(data.get("resource"))
+        if not resource:
+            return web.json_response({"error": "resource is required"}, status=400)
+        if len(resource) > MAX_RESOURCE_LENGTH:
+            return web.json_response(
+                {"error": f"resource must be at most {MAX_RESOURCE_LENGTH} characters"},
+                status=400,
+            )
+
+        try:
+            thread_id = int(data["thread_id"])
+        except (KeyError, TypeError, ValueError):
+            return web.json_response({"error": "thread_id is required (integer)"}, status=400)
+
+        try:
+            ttl_seconds = int(data.get("ttl_seconds", DEFAULT_TTL_SECONDS))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "ttl_seconds must be an integer"}, status=400)
+
+        note = data.get("note")
+        note = str(note)[:MAX_NOTE_LENGTH] if note else None
+
+        acquired, claim = await self.claims_repo.acquire(  # type: ignore[union-attr]
+            resource, thread_id, ttl_seconds=ttl_seconds, note=note
+        )
+        if not acquired:
+            logger.info(
+                "Claim denied: %s wanted by thread %s, held by thread %s",
+                _sanitize_log(resource),
+                thread_id,
+                claim.thread_id,
+            )
+            return web.json_response(
+                {"status": "held", "claim": self._claim_json(claim)},
+                status=409,
+            )
+        return web.json_response(
+            {"status": "acquired", "claim": self._claim_json(claim)},
+            status=201,
+        )
+
+    async def list_claims(self, request: web.Request) -> web.Response:
+        """GET /api/claims — list live claims.
+
+        Query params:
+            resource: Exact resource name to look up (optional).
+        """
+        if err := self._require_claims_repo():
+            return err
+
+        from ..database.claims_repo import normalize_resource
+
+        raw = request.rel_url.query.get("resource")
+        resource = normalize_resource(raw) if raw else None
+        claims = await self.claims_repo.list_active(resource)  # type: ignore[union-attr]
+        return web.json_response({"claims": [self._claim_json(c) for c in claims]})
+
+    async def delete_claim(self, request: web.Request) -> web.Response:
+        """DELETE /api/claims?resource=X&thread_id=Y[&force=true] — release a claim.
+
+        A session releases what it finished.  ``force=true`` lets a session take
+        over a resource pinned by a peer that is no longer running (the 409 body
+        from ``POST /api/claims`` reports the holder's state, which is how a
+        caller justifies forcing).
+        """
+        if err := self._require_claims_repo():
+            return err
+
+        from ..database.claims_repo import normalize_resource
+
+        resource = normalize_resource(request.rel_url.query.get("resource"))
+        if not resource:
+            return web.json_response({"error": "resource is required"}, status=400)
+
+        force = request.rel_url.query.get("force", "").lower() in ("1", "true", "yes")
+        raw_thread = request.rel_url.query.get("thread_id")
+        thread_id = 0
+        if raw_thread:
+            try:
+                thread_id = int(raw_thread)
+            except ValueError:
+                return web.json_response({"error": "thread_id must be an integer"}, status=400)
+        elif not force:
+            return web.json_response(
+                {"error": "thread_id is required unless force=true"}, status=400
+            )
+
+        released = await self.claims_repo.release(  # type: ignore[union-attr]
+            resource, thread_id, force=force
+        )
+        if not released:
+            return web.json_response(
+                {"error": "No matching claim (not held, expired, or held by another thread)"},
+                status=404,
+            )
+        return web.json_response({"status": "released", "resource": resource})
+
     def _require_session_repo(self) -> web.Response | None:
         """Return a 503 response if session_repo is not configured."""
         if self.session_repo is None:
@@ -852,8 +1015,6 @@ class ApiServer:
             if self.lounge_repo is not None
             else []
         )
-
-        from ..session_view import STATE_RUNNING, build_session_views
 
         active = self._active_sessions()
         thread_ids = {r.thread_id for r in records} | {s.thread_id for s in active}
