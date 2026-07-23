@@ -234,6 +234,16 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 
 このエンドポイントはオプトイン方式です。`ingest_token` が設定されていない場合、`POST` は `503` を返します。結果取得が利用できない場合、`POST` は `result_id` を省略し、`GET /api/ingest/{id}` は `503` を返します — スポーン動作は変わりません。リクエスト本文と添付ファイルは結果ストアに保存されません（状態、最終テキスト、スレッド ID のみ）。結果は最大 200 件です。
 
+#### 長時間続くインジェストスレッドの継続サマリー (`/api/ingest/summary`)
+
+上流スレッド（特に Teams ブラウザ拡張機能）で何ヶ月も返信し続けるインジェストクライアントは、本来なら実行のたびに全履歴を再エクスポートしなければなりません — ccdb の「スレッド = セッション」モデルは、インジェストごとに*新しい* Discord スレッド + Claude セッションを起動し、上流スレッドについて何も覚えていないからです。クライアントが供給する安定した `summary_key`（例: 上流スレッドのルートメッセージ ID）をキーとするコンパクトな**継続サマリー**をオプトインすれば、新しい `thread_summaries` テーブルに保存され、クライアントは**差分**だけを送りつつ、セッションは完全な履歴コンテキストを受け取れます:
+
+1. エクスポート前に、クライアントは `GET /api/ingest/summary?key=…`（外部、ingest-token 認証）を呼んで保存済みの `summary` + `marker` を読み取り、エクスポート範囲を `marker` より新しいメッセージに絞り込みます。
+2. `POST /api/ingest` は `summary_key` + `latest_marker` を受け取ります。ccdb は保存済みサマリーをコンテキストとしてプロンプトに注入し、セッションに更新版の保存を促します。
+3. セッションは自身の `result_id` と新しい `summary` を添えて `POST /api/ingest/summary`（内部コントロールプレーン、localhost — `/api/tasks` と同じ信頼モデル）を呼びます。ccdb はキーを解決し、`marker` を**インジェスト行から**前進させます。そのため読み取り位置は、サマリーが実際に保存されたときだけ前進します（失敗したセッションは同じ差分を再エクスポートし、メッセージをスキップしません）。
+
+`DELETE /api/ingest/summary?key=…` は完全な再サマリーを強制します。`marker` は ccdb にとって不透明で、セッションが触ることは決してないため、ずれることがありません。完全に後方互換かつ Zero-Config: `summary_key` を省略すればインジェストは従来どおり動作します。外部リスナーは `GET`（読み取り）ルートのみを公開します — サマリーの書き込みは localhost 限定の操作です。`ingest_results` に `summary_key`/`pending_marker` カラムが追加されます（既存 DB では自動マイグレーション）。
+
 ### スタートアップリジューム
 
 Bot の再起動中にセッションが中断された場合、Bot が再起動したときに自動的に再開されます。リジューム登録の方法は 3 つあります:
@@ -966,6 +976,9 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/spawn` | 新しい Discord スレッドを作成し Claude Code セッションを起動（非ブロッキング）。`auto_start: false` を指定するとユーザーの最初の返信まで Claude の起動を延期できる |
 | POST | `/api/ingest` | 認証済み外部スポーン（ブラウザ拡張機能 / webhook）。base64 添付ファイル対応。結果取得が設定されている場合 `result_id` を返す |
 | GET | `/api/ingest/{result_id}` | スポーンされたセッションの最終返信をポーリング（`status`/`result`/`error`/`thread_id`） |
+| GET | `/api/ingest/summary` | 長時間続くインジェストスレッドの継続サマリー + `marker` を `key` で読み取り（ingest-token 認証）。クライアントは差分だけをエクスポートできる |
+| POST | `/api/ingest/summary` | セッションから更新版の継続サマリー（`result_id` + `summary`）を保存 — localhost コントロールプレーン。ccdb が `marker` をインジェスト行から前進させる |
+| DELETE | `/api/ingest/summary` | `key` の保存済みサマリーをクリアし、次回インジェストで完全な再サマリーを強制 |
 | POST | `/api/mark-resume` | 次回 Bot 起動時のスレッド自動リジュームを登録 |
 | GET | `/api/lounge` | AI Lounge の最近のメッセージを取得 |
 | POST | `/api/lounge` | AI Lounge にメッセージを投稿（`label` オプション） |
