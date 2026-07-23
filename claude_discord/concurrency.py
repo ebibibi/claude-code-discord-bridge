@@ -45,6 +45,13 @@ Check `git status` and recent file modification times before overwriting.
 3. **Ports & processes**: Shared network ports or lock files may already be in use.
 4. **Resources**: Shared databases, APIs with rate limits, or singleton processes \
 may be accessed concurrently.
+5. **Working directory does NOT persist between messages**: Each of your \
+Discord replies runs in a FRESH process that starts in the base working \
+directory. A `cd` only lasts for the current message — it is gone by your next \
+reply, and the shell resets. So a relative-path script you set up in one \
+message will silently run in the WRONG directory later. ALWAYS use absolute \
+paths (for scripts, `os.chdir` to an absolute path at startup); for long jobs \
+or large output, write results to an absolute-path log file and read it back.
 
 CRITICAL: If your target repository is the same as another active session's, \
 you MUST use a separate worktree or stop and warn the user. \
