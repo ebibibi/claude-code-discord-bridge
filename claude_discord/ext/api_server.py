@@ -73,6 +73,8 @@ _DEFAULT_SESSION_LIMIT = 20
 _MAX_SESSION_LIMIT = 100
 _DEFAULT_THREAD_MESSAGE_LIMIT = 30
 _MAX_THREAD_MESSAGE_LIMIT = 100
+_DEFAULT_SEARCH_LIMIT = 15
+_MAX_SEARCH_LIMIT = 50
 # How far back to scan the lounge when attaching each thread's latest note.
 _LOUNGE_LOOKBACK = 50
 # Per-message cap; a single Claude reply can be many KB of code.
@@ -281,6 +283,7 @@ class ApiServer:
         self.app.router.add_delete("/api/claims", self.delete_claim)
         # Cross-session observability routes (requires session_repo)
         self.app.router.add_get("/api/sessions", self.list_sessions)
+        self.app.router.add_get("/api/search", self.search_sessions)
         self.app.router.add_get("/api/threads/{thread_id}/messages", self.get_thread_messages)
         self.app.router.add_post("/api/threads/{thread_id}/message", self.relay_thread_message)
         # Session spawn route
@@ -1146,6 +1149,82 @@ class ApiServer:
             views = [v for v in views if v["thread_id"] != exclude_thread]
 
         return web.json_response({"sessions": views})
+
+    async def search_sessions(self, request: web.Request) -> web.Response:
+        """GET /api/search — find a past thread by keyword.
+
+        Discord threads vanish from the sidebar once they auto-archive, and
+        their titles are often vague.  This searches the persistent per-thread
+        ``summary`` (the opening prompt, already stored for every session) plus
+        the working directory, and returns a Discord deep-link so an archived
+        thread can be reopened with one click.  No AI tokens, no new storage —
+        just a ``LIKE`` query over data ccdb already keeps.
+
+        Query params:
+            q: Keyword (required, non-blank). Matched against summary and
+               working_dir (case-insensitive substring).
+            origin: ``discord`` or ``cli`` to filter by session origin.
+            limit: Max results (default 15, max 50).
+        """
+        if err := self._require_session_repo():
+            return err
+
+        query = (request.rel_url.query.get("q") or "").strip()
+        if not query:
+            return web.json_response({"error": "q must be a non-blank string"}, status=400)
+
+        try:
+            raw_limit = request.rel_url.query.get("limit", str(_DEFAULT_SEARCH_LIMIT))
+            limit = max(1, min(_MAX_SEARCH_LIMIT, int(raw_limit)))
+        except ValueError:
+            return web.json_response({"error": "limit must be an integer"}, status=400)
+
+        origin = request.rel_url.query.get("origin")
+        if origin not in (None, "discord", "cli"):
+            return web.json_response({"error": "origin must be 'discord' or 'cli'"}, status=400)
+
+        records = await self.session_repo.search(  # type: ignore[union-attr]
+            query=query, origin=origin, limit=limit
+        )
+        names = self._thread_names({r.thread_id for r in records})
+        guild_id = self._guild_id()
+
+        results = [
+            {
+                "thread_id": r.thread_id,
+                "session_id": r.session_id,
+                "thread_name": names.get(r.thread_id),
+                "summary": r.summary,
+                "working_dir": r.working_dir,
+                "origin": r.origin,
+                "last_used_at": r.last_used_at,
+                "deep_link": (
+                    f"https://discord.com/channels/{guild_id}/{r.thread_id}"
+                    if guild_id is not None
+                    else None
+                ),
+            }
+            for r in records
+        ]
+        return web.json_response({"query": query, "results": results})
+
+    def _guild_id(self) -> int | None:
+        """Best-effort guild ID for building thread deep-links.
+
+        Tries the configured default channel's guild first, then any guild the
+        bot is a member of.  Deep-links work for archived threads too, so this
+        does not depend on the thread being in the channel cache.
+        """
+        if self.default_channel_id is not None:
+            channel = self.bot.get_channel(self.default_channel_id)
+            gid = getattr(getattr(channel, "guild", None), "id", None)
+            if isinstance(gid, int):
+                return gid
+        for guild in getattr(self.bot, "guilds", None) or []:
+            gid = getattr(guild, "id", None)
+            if isinstance(gid, int):
+                return gid
+        return None
 
     def _thread_names(self, thread_ids: set[int]) -> dict[int, str]:
         """Resolve Discord thread titles from the bot's cache (no API calls)."""

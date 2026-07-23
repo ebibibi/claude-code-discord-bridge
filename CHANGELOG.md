@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Find a past thread by keyword — `/search` slash command and `GET /api/search`** — Discord threads drop out of the sidebar once they auto-archive (they are never deleted, just hidden), and their titles are often vague, so a conversation you remember having becomes impossible to relocate. ccdb already stores a persistent per-thread `summary` (the opening prompt) for every session, so search needs no new storage, no re-indexing, and — crucially — no AI tokens: it is a `LIKE` query over `summary` and `working_dir` (the existing `SessionRepository.search()`), returning each hit with a **Discord deep-link** (`https://discord.com/channels/{guild}/{thread}`) that reopens even an archived thread with one click. The `/search <query>` slash command renders the hits as a scannable embed (origin icon, truncated summary, last-used time, working dir, jump link) and takes an optional `origin` filter (Discord/CLI); `GET /api/search?q=&origin=&limit=` exposes the same lookup on the localhost control plane for other Claude sessions and skills (JSON results with `deep_link`). Both cap results (embed 15, API max 50) and reject a blank query. Zero-Config: auto-wired, works against data ccdb already keeps. This is the lightweight "tier 0" of a search design — body-level search over local Claude transcripts is a deliberate follow-up, kept out to stay token-free.
+
 ## [3.2.0] - 2026-07-22
 
 ### Added
