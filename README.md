@@ -231,6 +231,16 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 
 The endpoint is opt-in: with no `ingest_token` configured, `POST` responds `503`. When result retrieval is unavailable, `POST` simply omits `result_id` and `GET /api/ingest/{id}` returns `503` — the spawn behaviour is otherwise unchanged. The request body and attachments are **not** persisted in the result store (only status, the final text, and the thread id); results are capped at 200 rows.
 
+#### Running per-thread summaries for long ingest threads (`/api/ingest/summary`)
+
+An ingest client that keeps replying in one **upstream** thread for months (notably the Teams browser extension) would otherwise have to re-export the entire history on every run — ccdb's "Thread = Session" model spawns a *fresh* Discord thread + Claude session per ingest and remembers nothing about the upstream thread. Opt into a compact **running summary** keyed by a client-supplied stable `summary_key` (e.g. the upstream thread's root message id), stored in the new `thread_summaries` table, and the client can send only the **diff** while the session still gets full historical context:
+
+1. Before exporting, the client calls `GET /api/ingest/summary?key=…` (external, ingest-token gated) to read the stored `summary` + `marker`, and bounds its export to messages newer than `marker`.
+2. `POST /api/ingest` accepts `summary_key` + `latest_marker`; ccdb injects the stored summary into the prompt as context and asks the session to save an updated one.
+3. The session calls `POST /api/ingest/summary` (internal control plane, localhost — same trust model as `/api/tasks`) with its own `result_id` and the new `summary`; ccdb resolves the key and advances the `marker` **from the ingest row**, so the read position only moves forward when a summary is actually saved (a failed session re-exports the same diff, never skips messages).
+
+`DELETE /api/ingest/summary?key=…` forces a full re-summary. The marker is opaque to ccdb and never handled by the session, so it cannot drift. Fully backward-compatible and Zero-Config: omit `summary_key` and ingest behaves exactly as before. The external listener exposes only the `GET` (read) route; writing a summary is a localhost-only action. `ingest_results` gains `summary_key`/`pending_marker` columns (auto-migrated on existing DBs).
+
 ### Startup Resume
 
 If the bot restarts mid-session, interrupted Claude sessions are automatically resumed when the bot comes back online. Sessions are marked for resume in three ways:
@@ -964,6 +974,9 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply |
 | POST | `/api/ingest` | Authenticated external spawn (browser extension / webhook) with base64 attachments; returns a `result_id` when result retrieval is configured |
 | GET | `/api/ingest/{result_id}` | Poll the spawned session's final reply (`status`/`result`/`error`/`thread_id`) |
+| GET | `/api/ingest/summary` | Read the running summary + `marker` for a long ingest thread by `key` (ingest-token gated) so the client can export only the diff |
+| POST | `/api/ingest/summary` | Save an updated running summary (`result_id` + `summary`) from the session — localhost control plane; ccdb advances the `marker` from the ingest row |
+| DELETE | `/api/ingest/summary` | Clear the stored summary for `key`, forcing a full re-summary on the next ingest |
 | POST | `/api/mark-resume` | Mark a thread for automatic resume on next bot startup |
 | GET | `/api/lounge` | Read recent AI Lounge messages |
 | POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |
