@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from .database.lounge_repo import LoungeRepository
     from .database.repository import SessionRepository
     from .database.resume_repo import PendingResumeRepository
+    from .database.summary_repo import ThreadSummaryRepository
     from .database.task_repo import TaskRepository
     from .ext.api_server import ApiServer
 
@@ -50,6 +51,7 @@ class BridgeComponents:
     claims_repo: ClaimRepository | None = None
     resume_repo: PendingResumeRepository | None = None
     ingest_repo: IngestResultRepository | None = None
+    summary_repo: ThreadSummaryRepository | None = None
     backend_factory: BackendFactory | None = None
     backend_settings: BackendSettings | None = None
 
@@ -72,6 +74,8 @@ class BridgeComponents:
             api_server.resume_repo = self.resume_repo
         if self.ingest_repo is not None:
             api_server.ingest_repo = self.ingest_repo
+        if self.summary_repo is not None:
+            api_server.summary_repo = self.summary_repo
         api_server.session_repo = self.session_repo
 
 
@@ -170,6 +174,7 @@ async def setup_bridge(
     from .database.repository import SessionRepository, UsageStatsRepository
     from .database.resume_repo import PendingResumeRepository
     from .database.settings_repo import SettingsRepository
+    from .database.summary_repo import ThreadSummaryRepository
     from .database.task_repo import TaskRepository
     from .worktree import WorktreeManager
 
@@ -257,6 +262,8 @@ async def setup_bridge(
     usage_repo = UsageStatsRepository(session_db_path)
     ingest_repo = IngestResultRepository(session_db_path)
     await ingest_repo.init_db()
+    summary_repo = ThreadSummaryRepository(session_db_path)
+    await summary_repo.init_db()
     logger.info("Session DB initialized: %s", session_db_path)
 
     # Attach repos to bot so generic cogs (e.g. AutoUpgradeCog) can discover them
@@ -398,6 +405,7 @@ async def setup_bridge(
         claims_repo=claims_repo,
         resume_repo=resume_repo,
         ingest_repo=ingest_repo,
+        summary_repo=summary_repo,
         backend_factory=backend_factory,
         backend_settings=backend_settings,
     )

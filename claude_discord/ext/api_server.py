@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from ..database.notification_repo import NotificationRepository
     from ..database.repository import SessionRepository
     from ..database.resume_repo import PendingResumeRepository
+    from ..database.summary_repo import ThreadSummaryRepository
     from ..database.task_repo import TaskRepository
 
 # /api/ingest — authenticated spawn for untrusted external clients (browser
@@ -223,6 +224,7 @@ class ApiServer:
         resume_repo: PendingResumeRepository | None = None,
         session_repo: SessionRepository | None = None,
         ingest_repo: IngestResultRepository | None = None,
+        summary_repo: ThreadSummaryRepository | None = None,
         claims_repo: ClaimRepository | None = None,
     ) -> None:
         self.repo = repo
@@ -241,6 +243,7 @@ class ApiServer:
         self.resume_repo = resume_repo
         self.session_repo = session_repo
         self.ingest_repo = ingest_repo
+        self.summary_repo = summary_repo
         self.claims_repo = claims_repo
         # Loop/rate brake for thread-to-thread relays. Process-local by design:
         # after a restart there are no in-flight relay chains to protect.
@@ -290,6 +293,13 @@ class ApiServer:
         self.app.router.add_post("/api/spawn", self.spawn)
         # Authenticated external ingest route (browser extension / webhooks)
         self.app.router.add_post("/api/ingest", self.ingest)
+        # Running per-thread summaries. GET (external, token) reads the stored
+        # summary+marker; POST (internal control plane) lets the Claude session
+        # save an updated summary. Register the fixed `/summary` paths BEFORE the
+        # dynamic `/{result_id}` so "summary" is never captured as a result id.
+        self.app.router.add_get("/api/ingest/summary", self.get_thread_summary)
+        self.app.router.add_post("/api/ingest/summary", self.save_thread_summary)
+        self.app.router.add_delete("/api/ingest/summary", self.delete_thread_summary)
         # Poll an ingest session's final result (requires ingest_repo)
         self.app.router.add_get("/api/ingest/{result_id}", self.get_ingest_result)
         # Startup resume routes
@@ -306,6 +316,12 @@ class ApiServer:
         app = web.Application(client_max_size=self.max_body_bytes)
         app.router.add_get("/api/health", self.health)
         app.router.add_post("/api/ingest", self.ingest)
+        # External clients read the running summary/marker to compute their diff.
+        # Registered before the dynamic result route (see _setup_routes). The
+        # summary POST is intentionally NOT exposed here — writing a summary is a
+        # localhost control-plane action performed by the Claude session, not the
+        # untrusted external client.
+        app.router.add_get("/api/ingest/summary", self.get_thread_summary)
         app.router.add_get("/api/ingest/{result_id}", self.get_ingest_result)
         return app
 
@@ -1522,6 +1538,69 @@ class ApiServer:
             return None
         return extracted
 
+    def _build_ingest_prompt(
+        self,
+        *,
+        content: str,
+        saved_paths: list[Path],
+        summary_key: str | None,
+        stored_summary: str,
+        result_id: str | None,
+    ) -> str:
+        """Assemble the session prompt: caller content + attachments + summary.
+
+        When ``summary_key`` is set this ingest is one turn of a long running
+        thread, so the prompt (a) prepends the stored running summary as context
+        and (b) — when a ``result_id`` exists to key it — asks the session to
+        save an updated summary back to ccdb via the control-plane endpoint. The
+        marker is NOT the session's concern: ccdb advances it from the ingest row
+        when the summary is saved.
+        """
+        parts: list[str] = []
+
+        if summary_key and stored_summary:
+            parts.append(
+                "このスレッドは継続的にやり取りされている長いスレッドです。\n"
+                "以下は【これまでの要約】（過去の全履歴を圧縮したもの）です。"
+                "今回の添付は前回要約以降の【新規メッセージ（差分）】です。\n\n"
+                "===== これまでの要約 =====\n"
+                f"{stored_summary}\n"
+                "==========================\n"
+            )
+        elif summary_key:
+            parts.append(
+                "このスレッドは継続的にやり取りされる長いスレッドとして扱います"
+                "（今回が最初の取り込みのため、まだ保存された要約はありません）。\n"
+            )
+
+        parts.append(content)
+
+        if saved_paths:
+            listing = "\n".join(f"- {p}" for p in saved_paths)
+            parts.append(
+                "添付ファイル（ローカルに保存済み）。下記はパス一覧です。"
+                "全部を読み込む必要はありません。返信に必要なものだけ Read ツール等で"
+                f"選択的に開いてください:\n{listing}"
+            )
+
+        if summary_key and result_id:
+            parts.append(
+                "【重要・次回のための要約保存】返信ドラフトを作成したあと、"
+                "このスレッド全体（これまでの要約＋今回の差分）を反映した"
+                "**最新の要約**を必ず保存してください。次回はこの要約＋新しい差分だけで"
+                "文脈を完全に復元できるようにするのが目的です。"
+                "Bash ツールで次を実行します（要約は JSON として正しくエスケープすること）:\n"
+                f'  curl -sS -X POST "$CCDB_API_URL/api/ingest/summary" \\\n'
+                f'    -H "Content-Type: application/json" \\\n'
+                f"    --data-binary @/tmp/ccdb_summary_{result_id}.json\n"
+                f"  # 事前に /tmp/ccdb_summary_{result_id}.json へ "
+                f'{{"result_id":"{result_id}","summary":"..."}} を書き出しておくと安全です。\n'
+                "要約には、決定事項・未解決の論点・相手の関心事・重要な固有名詞や専門用語・"
+                "次のアクションを簡潔に含めてください（冗長にせず、文脈復元に必要な密度で）。"
+            )
+
+        return "\n\n".join(parts)
+
     async def ingest(self, request: web.Request) -> web.Response:
         """POST /api/ingest — authenticated spawn for untrusted external clients.
 
@@ -1576,6 +1655,16 @@ class ApiServer:
         if not isinstance(attachments, list):
             return web.json_response({"error": "attachments must be a list"}, status=400)
 
+        # Optional running-summary linkage. When the client supplies a stable
+        # summary_key, this ingest is one turn of a long upstream thread: ccdb
+        # injects the stored summary as context and asks the session to save an
+        # updated summary at the end. latest_marker is the newest upstream
+        # message id in this (diff) export; it becomes the summary's marker once
+        # the session saves a summary. Both are opaque strings.
+        summary_key = self._valid_summary_key(data.get("summary_key"))
+        raw_marker = data.get("latest_marker")
+        latest_marker = str(raw_marker) if raw_marker not in (None, "") else None
+
         from ..cogs.claude_chat import ClaudeChatCog  # avoid circular import
 
         cog: ClaudeChatCog | None = self.bot.cogs.get("ClaudeChatCog")  # type: ignore[assignment]
@@ -1610,33 +1699,48 @@ class ApiServer:
         # Expand any bundled .zip so the session reads individual files by path.
         saved_paths = self._expand_zip_bundles(saved_paths)
 
-        prompt = content
-        if saved_paths:
-            listing = "\n".join(f"- {p}" for p in saved_paths)
-            prompt = (
-                f"{content}\n\n"
-                f"添付ファイル（ローカルに保存済み）。下記はパス一覧です。"
-                f"全部を読み込む必要はありません。返信に必要なものだけ Read ツール等で"
-                f"選択的に開いてください:\n{listing}"
-            )
-
         thread_name: str | None = data.get("thread_name") or None
         auto_start: bool = data.get("auto_start", True)
+
+        # Generate the result id up front so it can be embedded in the prompt's
+        # "save the updated summary via curl" instruction. Only produced when a
+        # session actually starts and the ingest store exists.
+        result_id: str | None = None
+        if self.ingest_repo is not None and auto_start:
+            result_id = uuid.uuid4().hex
+
+        # Pull any stored running summary for this thread so the session has the
+        # full historical context even though the attachment is just the diff.
+        stored_summary = ""
+        if summary_key and self.summary_repo is not None:
+            existing = await self.summary_repo.get(summary_key)
+            if existing is not None:
+                stored_summary = existing["summary"] or ""
+
+        prompt = self._build_ingest_prompt(
+            content=content,
+            saved_paths=saved_paths,
+            summary_key=summary_key,
+            stored_summary=stored_summary,
+            result_id=result_id,
+        )
 
         # When result retrieval is available, register a result row up front and
         # wire a sink that captures the session's final reply. Only meaningful
         # when the session actually starts (auto_start); otherwise no result is
         # ever produced. The row is created before spawn so the sink (which only
         # fires after the whole Claude run completes) can never race ahead of it.
-        result_id: str | None = None
         result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None
         # One-element holder for the spawned thread, so the completion sink (which
         # fires minutes later, after the session ends) can ping the owner in it.
         # Populated right after spawn_session returns — long before the sink runs.
         spawned_thread: list[discord.Thread] = []
-        if self.ingest_repo is not None and auto_start:
-            result_id = uuid.uuid4().hex
-            await self.ingest_repo.create(result_id=result_id)
+        if result_id is not None and self.ingest_repo is not None:
+            await self.ingest_repo.create(
+                result_id=result_id,
+                summary_key=summary_key,
+                pending_marker=latest_marker,
+            )
             ingest_repo = self.ingest_repo
             captured_id = result_id
 
@@ -1787,6 +1891,146 @@ class ApiServer:
                 "thread_name": record["thread_name"],
             }
         )
+
+    # ------------------------------------------------------------------
+    # Running thread summaries (/api/ingest/summary)
+    # ------------------------------------------------------------------
+
+    #: Upper bound on a client-provided summary key; it is opaque otherwise.
+    MAX_SUMMARY_KEY_LEN = 512
+
+    def _require_summary_repo(self) -> web.Response | None:
+        """Return a 503 response if the thread summary store is not configured."""
+        if self.summary_repo is None:
+            return web.json_response(
+                {"error": "Thread summaries not configured (summary_repo is None)"},
+                status=503,
+            )
+        return None
+
+    def _check_ingest_token(self, request: web.Request) -> web.Response | None:
+        """Enforce the dedicated ingest bearer token (shared with /api/ingest)."""
+        if not self.ingest_token:
+            return web.json_response({"error": "Ingest endpoint is disabled"}, status=503)
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return web.json_response({"error": "Missing Authorization header"}, status=401)
+        if not hmac.compare_digest(auth_header[7:], self.ingest_token):
+            return web.json_response({"error": "Invalid token"}, status=401)
+        return None
+
+    @staticmethod
+    def _valid_summary_key(value: object) -> str | None:
+        """Return a trimmed key if it is a usable non-empty string, else None."""
+        if not isinstance(value, str):
+            return None
+        key = value.strip()
+        if not key or len(key) > ApiServer.MAX_SUMMARY_KEY_LEN:
+            return None
+        return key
+
+    async def get_thread_summary(self, request: web.Request) -> web.Response:
+        """GET /api/ingest/summary?key=... — read the running summary for a thread.
+
+        Token-gated (same model as /api/ingest) so the external client that owns
+        the thread can fetch the stored summary and ``marker`` before exporting,
+        and send only the messages newer than ``marker`` (the diff).
+
+        Returns 200 with ``exists=false`` and empty fields when the key is
+        unknown — friendlier for a first-run client than a 404.
+        """
+        if err := self._check_ingest_token(request):
+            return err
+        if err := self._require_summary_repo():
+            return err
+
+        key = self._valid_summary_key(request.query.get("key"))
+        if key is None:
+            return web.json_response({"error": "key is required"}, status=400)
+
+        record = await self.summary_repo.get(key)  # type: ignore[union-attr]
+        if record is None:
+            return web.json_response({"key": key, "exists": False, "summary": "", "marker": None})
+        return web.json_response(
+            {
+                "key": key,
+                "exists": True,
+                "summary": record["summary"],
+                "marker": record["marker"],
+                "updated_at": record["updated_at"],
+            }
+        )
+
+    async def save_thread_summary(self, request: web.Request) -> web.Response:
+        """POST /api/ingest/summary — save an updated running summary.
+
+        Internal control-plane endpoint (localhost, no token — same trust model
+        as /api/tasks): the Claude session spawned by an ingest run calls this
+        with its own ``result_id`` after drafting a reply. ccdb resolves the
+        ``summary_key`` and the pending marker from the ingest row, so the marker
+        only advances when a summary is actually saved (a failed session leaves
+        the marker untouched and the same diff is re-exported next time).
+
+        Body (JSON), either:
+            {"result_id": "...", "summary": "..."}  (primary: marker from the row)
+            {"key": "...", "summary": "...", "marker": "..."}  (direct, for tests)
+        """
+        if err := self._require_summary_repo():
+            return err
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+
+        summary = data.get("summary")
+        if not isinstance(summary, str):
+            return web.json_response({"error": "summary is required"}, status=400)
+
+        key: str | None = None
+        marker: str | None = None
+        result_id = data.get("result_id")
+        if result_id:
+            if self.ingest_repo is None:
+                return web.json_response(
+                    {"error": "result_id given but ingest_repo is not configured"}, status=503
+                )
+            row = await self.ingest_repo.get(str(result_id))
+            if row is None:
+                return web.json_response({"error": "unknown result_id"}, status=404)
+            key = self._valid_summary_key(row.get("summary_key"))
+            if key is None:
+                return web.json_response(
+                    {"error": "this ingest run has no summary_key to update"}, status=400
+                )
+            marker = row.get("pending_marker")
+        else:
+            key = self._valid_summary_key(data.get("key"))
+            if key is None:
+                return web.json_response({"error": "key or result_id is required"}, status=400)
+            raw_marker = data.get("marker")
+            marker = str(raw_marker) if raw_marker is not None else None
+
+        record = await self.summary_repo.upsert(  # type: ignore[union-attr]
+            key, summary=summary, marker=marker
+        )
+        return web.json_response({"status": "saved", "key": key, "marker": record["marker"]})
+
+    async def delete_thread_summary(self, request: web.Request) -> web.Response:
+        """DELETE /api/ingest/summary?key=... — drop a stored summary (reset).
+
+        Localhost admin/reset path (registered only on the internal app). Forces
+        the next export to be treated as a first run. Token-gated when an ingest
+        token is configured, for parity with the other ingest routes.
+        """
+        if err := self._check_ingest_token(request):
+            return err
+        if err := self._require_summary_repo():
+            return err
+        key = self._valid_summary_key(request.query.get("key"))
+        if key is None:
+            return web.json_response({"error": "key is required"}, status=400)
+        removed = await self.summary_repo.delete(key)  # type: ignore[union-attr]
+        return web.json_response({"status": "deleted" if removed else "not_found", "key": key})
 
     # ------------------------------------------------------------------
     # Startup resume endpoint (/api/mark-resume)

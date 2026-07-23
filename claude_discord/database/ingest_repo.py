@@ -24,18 +24,27 @@ logger = logging.getLogger(__name__)
 
 INGEST_RESULT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ingest_results (
-    result_id   TEXT PRIMARY KEY,
-    status      TEXT NOT NULL DEFAULT 'running',
-    result      TEXT,
-    error       TEXT,
-    thread_id   TEXT,
-    thread_name TEXT,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+    result_id      TEXT PRIMARY KEY,
+    status         TEXT NOT NULL DEFAULT 'running',
+    result         TEXT,
+    error          TEXT,
+    thread_id      TEXT,
+    thread_name    TEXT,
+    summary_key    TEXT,
+    pending_marker TEXT,
+    created_at     TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_ingest_results_created ON ingest_results(created_at);
 """
+
+# Columns added after the table first shipped. init_db() ALTERs existing DBs so
+# an upgrade needs no manual migration (Zero-Config principle).
+_ADDED_COLUMNS = {
+    "summary_key": "TEXT",
+    "pending_marker": "TEXT",
+}
 
 
 class IngestResultRepository:
@@ -51,18 +60,39 @@ class IngestResultRepository:
         """Create the ingest_results schema if it does not exist."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(INGEST_RESULT_SCHEMA)
+            # Backfill columns added after the initial release on existing DBs.
+            cursor = await db.execute("PRAGMA table_info(ingest_results)")
+            existing = {row[1] for row in await cursor.fetchall()}
+            for name, coltype in _ADDED_COLUMNS.items():
+                if name not in existing:
+                    await db.execute(
+                        f"ALTER TABLE ingest_results ADD COLUMN {name} {coltype}"  # noqa: S608
+                    )
             await db.commit()
         logger.info("Ingest result DB initialized at %s", self.db_path)
 
     async def create(
-        self, *, result_id: str, thread_id: str | None = None, thread_name: str | None = None
+        self,
+        *,
+        result_id: str,
+        thread_id: str | None = None,
+        thread_name: str | None = None,
+        summary_key: str | None = None,
+        pending_marker: str | None = None,
     ) -> dict:
-        """Insert a new ingest result in the 'running' state and return it."""
+        """Insert a new ingest result in the 'running' state and return it.
+
+        ``summary_key`` / ``pending_marker`` link this run to a running thread
+        summary (see ThreadSummaryRepository): when the session later saves an
+        updated summary via ``POST /api/ingest/summary`` referencing this
+        ``result_id``, ccdb advances the summary's marker to ``pending_marker``.
+        """
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "INSERT INTO ingest_results (result_id, status, thread_id, thread_name) "
-                "VALUES (?, 'running', ?, ?)",
-                (result_id, thread_id, thread_name),
+                "INSERT INTO ingest_results "
+                "(result_id, status, thread_id, thread_name, summary_key, pending_marker) "
+                "VALUES (?, 'running', ?, ?, ?, ?)",
+                (result_id, thread_id, thread_name, summary_key, pending_marker),
             )
             # Prune old rows, keeping only the most recent MAX_STORED_RESULTS.
             await db.execute(
