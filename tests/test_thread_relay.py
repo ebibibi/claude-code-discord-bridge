@@ -276,7 +276,13 @@ async def test_delivery_posts_the_message_so_humans_can_see_it() -> None:
     cog._run_claude.assert_awaited_once()
 
 
-async def test_interrupt_true_stops_the_turn_in_flight() -> None:
+async def test_interrupt_true_delegates_preemption_to_run_claude() -> None:
+    """interrupt=True must ask _run_claude to preempt the in-flight turn.
+
+    Eviction/interrupt now lives in _run_claude (the single per-thread run
+    slot); deliver_relayed_message only forwards the intent. The actual SIGINT
+    is covered by test_claude_chat's _evict_active_run tests.
+    """
     cog = _make_cog()
     thread = _make_target_thread()
     running = MagicMock()
@@ -286,34 +292,27 @@ async def test_interrupt_true_stops_the_turn_in_flight() -> None:
 
     await cog.deliver_relayed_message(thread, "stop now", interrupt=True)
 
-    running.interrupt.assert_awaited_once()
+    cog._run_claude.assert_awaited_once()
+    _, kwargs = cog._run_claude.call_args
+    assert kwargs.get("interrupt_existing") is True
 
 
-async def test_queue_mode_never_interrupts_a_running_turn() -> None:
-    """The default must not cost the receiver its in-flight work."""
+async def test_queue_mode_forwards_no_preemption() -> None:
+    """The default must not cost the receiver its in-flight work.
+
+    deliver_relayed_message forwards interrupt_existing=False; _run_claude then
+    queues behind the current turn (proven by test_claude_chat's queue-mode
+    _evict_active_run test and the real-overlap test).
+    """
     cog = _make_cog()
     thread = _make_target_thread()
     running = MagicMock()
     running.interrupt = AsyncMock()
     cog._active_runners[thread.id] = running
-
-    finished = asyncio.Event()
-
-    async def existing_turn() -> None:
-        await finished.wait()
-
-    task = asyncio.create_task(existing_turn())
-    cog._active_tasks[thread.id] = task
     cog._run_claude = AsyncMock()
 
-    delivery = asyncio.create_task(
-        cog.deliver_relayed_message(thread, "when you get a moment", interrupt=False)
-    )
-    await asyncio.sleep(0.05)
+    await cog.deliver_relayed_message(thread, "when you get a moment", interrupt=False)
 
-    running.interrupt.assert_not_awaited()
-    cog._run_claude.assert_not_awaited()  # still waiting for the current turn
-
-    finished.set()
-    await delivery
     cog._run_claude.assert_awaited_once()
+    _, kwargs = cog._run_claude.call_args
+    assert kwargs.get("interrupt_existing") is False
