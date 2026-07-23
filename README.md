@@ -104,6 +104,8 @@ curl "$CCDB_API_URL/api/lounge"
 
 The lounge channel doubles as a human-visible activity feed — open it in Discord to see at a glance what every active Claude session is currently doing.
 
+**Lounge vs. the coordination APIs.** Since the cross-session endpoints below landed, the lounge is no longer the place to *discover* who is running, read another thread, or lock a resource — `GET /api/sessions`, `GET /api/threads/{id}/messages` and `POST /api/claims` do that precisely and even surface sessions that never posted. The lounge keeps what no structured call carries: **broadcast announcements with no single target** ("restarting the bot", "cut release v3.2.0") and **intent announced before acting**. Treat it as the room's announcements, not its database. The Discord-channel mirror is purely for humans — the AI-to-AI layer is the DB-backed prompt injection, which works with `lounge_channel_id` unset, so a deployment whose humans don't watch the channel can drop the mirror without affecting coordination.
+
 ### Cross-Session Observability
 
 A lounge note tells a session *that* another thread exists. These two read-only endpoints let it go and look — so two sessions that started on the same task can discover the overlap instead of both charging ahead.

@@ -233,6 +233,14 @@ class TestBuildLoungePrompt:
         assert "thread_id" in result
         assert "DISCORD_THREAD_ID" in result
 
+    def test_prompt_draws_the_line_between_lounge_and_apis(self) -> None:
+        """The prompt tells sessions to use the APIs for discovery/locking, not the lounge."""
+        result = build_lounge_prompt([])
+        assert "/api/sessions" in result
+        assert "/api/claims" in result
+        # And it names the lounge's own remaining job (broadcast / intent).
+        assert "BROADCAST" in result
+
     def test_this_thread_marker_for_matching_thread(self) -> None:
         """Messages from current thread are annotated with [this thread]."""
         messages = [
