@@ -50,7 +50,12 @@ class TestExternalAppSurface:
     ) -> None:
         api = ApiServer(repo=repo, bot=bot, ingest_token="secret")
         paths = _external_paths(api)
-        assert paths == {"/api/health", "/api/ingest", "/api/ingest/{result_id}"}
+        assert paths == {
+            "/api/health",
+            "/api/ingest",
+            "/api/ingest/summary",
+            "/api/ingest/{result_id}",
+        }
 
     def test_does_not_expose_control_plane(
         self, repo: NotificationRepository, bot: MagicMock

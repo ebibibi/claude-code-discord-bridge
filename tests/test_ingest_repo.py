@@ -74,3 +74,55 @@ async def test_pruning_keeps_recent_only(repo: IngestResultRepository) -> None:
     # Oldest two pruned, newest three survive.
     assert await repo.get("id-0") is None
     assert await repo.get("id-4") is not None
+
+
+@pytest.mark.asyncio
+async def test_create_stores_summary_link(repo: IngestResultRepository) -> None:
+    await repo.create(
+        result_id="abc", summary_key="teams:thread:42", pending_marker="1700000000000"
+    )
+    rec = await repo.get("abc")
+    assert rec is not None
+    assert rec["summary_key"] == "teams:thread:42"
+    assert rec["pending_marker"] == "1700000000000"
+
+
+@pytest.mark.asyncio
+async def test_summary_columns_default_null(repo: IngestResultRepository) -> None:
+    await repo.create(result_id="abc")
+    rec = await repo.get("abc")
+    assert rec is not None
+    assert rec["summary_key"] is None
+    assert rec["pending_marker"] is None
+
+
+@pytest.mark.asyncio
+async def test_init_db_migrates_legacy_table() -> None:
+    """A DB created before summary columns existed gains them on init_db()."""
+    import aiosqlite
+
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        # Simulate a legacy table without the summary columns.
+        async with aiosqlite.connect(path) as db:
+            await db.execute(
+                "CREATE TABLE ingest_results ("
+                "result_id TEXT PRIMARY KEY, status TEXT NOT NULL DEFAULT 'running', "
+                "result TEXT, error TEXT, thread_id TEXT, thread_name TEXT, "
+                "created_at TEXT, updated_at TEXT)"
+            )
+            await db.execute("INSERT INTO ingest_results (result_id) VALUES ('legacy')")
+            await db.commit()
+        repo = IngestResultRepository(path)
+        await repo.init_db()  # should ALTER in the new columns without error
+        await repo.create(result_id="new", summary_key="k", pending_marker="m")
+        rec = await repo.get("new")
+        assert rec is not None
+        assert rec["summary_key"] == "k"
+        # Legacy row still readable, new columns NULL.
+        legacy = await repo.get("legacy")
+        assert legacy is not None
+        assert legacy["summary_key"] is None
+    finally:
+        os.unlink(path)
