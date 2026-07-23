@@ -361,6 +361,7 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 - **組み込みヘルプ** — `/help` で利用可能な全スラッシュコマンドと基本的な使い方を表示（エフェメラル表示、呼び出し者のみ表示）
 - **セッション同期** — CLI セッションを Discord スレッドにインポート（`/sync-sessions`）。`/sync-settings` で同期設定（スレッドスタイル、時間範囲、最小件数）の表示・変更が可能
 - **セッション一覧** — 起動元（Discord / CLI / 全て）と時間範囲でフィルタリング（`/sessions`）
+- **スレッド検索** — `/search <query>` でキーワードから過去のスレッドを検索。スレッドごとに永続保存されたサマリー（最初のプロンプト）と作業ディレクトリにマッチし、ヒットを一覧しやすい embed で表示。アーカイブされて（サイドバーから消えた）スレッドもワンクリックで開き直せる Discord ディープリンク付き。任意の `origin` フィルタ（Discord / CLI）に対応。同じ検索を `GET /api/search` として他セッション・スキルにも公開。AI トークン不要 — ccdb が既に保持しているデータへの `LIKE` クエリのみ
 - **セッションリジューム** — `/resume` で直近のセッション一覧（最大 25 件）をセレクトメニューで表示し、選択したセッションを新スレッドで再開。オプションの `query` パラメータでキーワード検索（サマリーと作業ディレクトリにマッチ）、`filter=orphaned` で削除済みスレッドのセッションのみ表示。任意のチャンネルやスレッドから実行可能 — 常に設定されたメインチャンネルに新スレッドを作成
 - **リジューム情報** — 現在のセッションをターミナルで継続する CLI コマンドを表示（`/resume-info`、スレッド内限定）
 - **セッションクリア** — `/clear` で現在のスレッドの Claude Code セッションをリセットし、新スレッドを作成せずにゼロから再開
@@ -969,6 +970,7 @@ uv add "claude-code-discord-bridge[api]"
 | GET | `/api/lounge` | AI Lounge の最近のメッセージを取得 |
 | POST | `/api/lounge` | AI Lounge にメッセージを投稿（`label` オプション） |
 | GET | `/api/sessions` | すべてのセッション（ライブ・保存済み）を状態・作業ディレクトリ・最新のラウンジメモ付きで一覧（`state=running`、`exclude_thread`、`limit`） |
+| GET | `/api/search` | キーワードから過去のスレッドを検索 — サマリーと作業ディレクトリへの `LIKE` クエリ。各ヒットを Discord `deep_link` 付きで返す（`q` 必須、任意の `origin`、`limit` は最大 50） |
 | GET | `/api/threads/{thread_id}/messages` | 他スレッドの会話を古い順に取得（`limit`） |
 | POST | `/api/claims` | 作業開始前にリソースを宣言 — 取得成功で 201、取得済みなら保持者情報付きで 409 |
 | GET | `/api/claims` | 有効なクレームの一覧（`resource` フィルター任意） |
@@ -1041,7 +1043,7 @@ claude_discord/
   cogs/
     claude_chat.py         # インタラクティブチャット（スレッド作成、メッセージ処理）
     skill_command.py       # /skill スラッシュコマンド（オートコンプリート付き）
-    session_manage.py      # /sessions, /sync-sessions, /resume, /resume-info, /sync-settings
+    session_manage.py      # /sessions, /search, /sync-sessions, /resume, /resume-info, /sync-settings
     session_sync.py        # sync-sessions のスレッド作成・メッセージ投稿ロジック
     prompt_builder.py      # build_prompt_and_images() — 純粋関数、Cog/Bot 状態に非依存
     scheduler.py           # 定期 Claude Code タスク実行エンジン

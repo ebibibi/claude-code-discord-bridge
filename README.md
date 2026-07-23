@@ -359,6 +359,7 @@ Behind the scenes:
 - **Built-in help** — `/help` shows all available slash commands and basic usage (ephemeral, only visible to the caller)
 - **Session sync** — Import CLI sessions as Discord threads (`/sync-sessions`); `/sync-settings` to view or change sync preferences (thread style, time window, minimum results)
 - **Session list** — `/sessions` with filtering by origin (Discord / CLI / all) and time window
+- **Thread search** — `/search <query>` finds a past thread by keyword, matching the persistent per-thread summary (the opening prompt) and working directory; renders hits as a scannable embed with a Discord deep-link that reopens even an archived (sidebar-hidden) thread; optional `origin` filter (Discord / CLI). The same lookup is exposed as `GET /api/search` for other sessions and skills. No AI tokens — a `LIKE` query over data ccdb already keeps
 - **Session resume** — `/resume` shows a select menu of recent sessions (up to 25) and resumes the selected one in a new thread; optional `query` parameter for keyword search (matches summary and working directory); optional `filter=orphaned` to show only sessions from deleted threads; works from any channel or thread — always creates a new thread in the configured main channel
 - **Resume info** — `/resume-info` shows the CLI command to continue the current session in a terminal (thread-only)
 - **Clear session** — `/clear` resets the Claude Code session for the current thread, starting fresh without creating a new thread
@@ -967,6 +968,7 @@ uv add "claude-code-discord-bridge[api]"
 | GET | `/api/lounge` | Read recent AI Lounge messages |
 | POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |
 | GET | `/api/sessions` | List every session — live and stored — with state, working dir and latest lounge note (`state=running`, `exclude_thread`, `limit`) |
+| GET | `/api/search` | Find a past thread by keyword — `LIKE` over summary and working dir; returns each hit with a Discord `deep_link` (`q` required, optional `origin`, `limit` max 50) |
 | GET | `/api/threads/{thread_id}/messages` | Read another thread's conversation, oldest first (`limit`) |
 | POST | `/api/claims` | Claim a resource before working on it — 201 when acquired, 409 with the holder when taken |
 | GET | `/api/claims` | List live claims (optional `resource` filter) |
@@ -1039,7 +1041,7 @@ claude_discord/
   cogs/
     claude_chat.py         # Interactive chat (thread creation, message handling)
     skill_command.py       # /skill slash command with autocomplete
-    session_manage.py      # /sessions, /sync-sessions, /resume, /resume-info, /sync-settings
+    session_manage.py      # /sessions, /search, /sync-sessions, /resume, /resume-info, /sync-settings
     session_sync.py        # Thread-creation and message-posting logic for sync-sessions
     prompt_builder.py      # build_prompt_and_images() — pure function, no Cog/Bot state
     scheduler.py           # Periodic Claude Code task executor
