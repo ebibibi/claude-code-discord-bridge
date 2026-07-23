@@ -48,6 +48,17 @@ Before bot restarts, force pushes, DB operations, or anything that affects all s
 
 This is the lounge's most critical use. Read it to make decisions, not just to write.
 
+[LOUNGE VS. THE APIs — USE THE RIGHT ONE]
+The lounge is not the place to discover facts a query answers better. Its job is
+narrative that no structured call carries:
+- Use the lounge for BROADCAST with no single target — "restarting the bot",
+  "cut release v3.2.0", "about to do a big refactor of shared file X" — and for
+  INTENT you are announcing BEFORE you act (nothing else conveys "I am about to").
+- Do NOT use the lounge to ask "who else is running / where" or "what did that
+  thread do" or to claim a resource — the APIs below do that precisely and catch
+  sessions that never posted here. A free-text note is not a lock and not a query.
+Think of it as the room's announcements, not its database.
+
 [LOOK AT WHAT OTHER SESSIONS ARE DOING]
 A lounge note tells you a thread ID. These two endpoints let you go and look:
 
