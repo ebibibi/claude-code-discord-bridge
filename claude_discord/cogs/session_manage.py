@@ -17,7 +17,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..database.repository import SessionRepository, UsageStatsRepository
+from ..database.repository import SessionRecord, SessionRepository, UsageStatsRepository
 from ..database.settings_repo import SettingsRepository
 from ..discord_ui.embeds import COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
 from ..discord_ui.views import ResumeSelectView, ToolSelectView
@@ -82,6 +82,48 @@ KNOWN_TOOLS: list[str] = [
 
 
 _AUTOCOMPACT_THRESHOLD = 0.835  # Claude Code's default autocompact threshold
+
+# Max results shown by /search. Kept small so the embed stays scannable on mobile.
+_SEARCH_RESULT_LIMIT = 15
+
+
+def build_search_embed(
+    query: str,
+    records: list[SessionRecord],
+    *,
+    guild_id: int | None,
+) -> discord.Embed:
+    """Render /search hits as an embed with a Discord deep-link per thread.
+
+    The deep-link reopens even an archived (sidebar-hidden) thread, which is the
+    whole point: threads are never deleted, just hard to find again.
+    """
+    if not records:
+        return discord.Embed(
+            title=f"\U0001f50d Search: {query}",
+            description="No threads matched. Try a different keyword.",
+            color=COLOR_INFO,
+        )
+
+    embed = discord.Embed(
+        title=f"\U0001f50d Search: {query} ({len(records)})",
+        color=COLOR_INFO,
+    )
+    for record in records:
+        icon = _ORIGIN_ICON.get(record.origin, "❓")
+        summary = (record.summary or "(no summary)").replace("\n", " ")
+        name = f"{icon} {summary[:60]}"
+
+        parts: list[str] = []
+        if guild_id is not None:
+            link = f"https://discord.com/channels/{guild_id}/{record.thread_id}"
+            parts.append(f"[\U0001f517 open thread]({link})")
+        parts.append(record.last_used_at)
+        if record.working_dir:
+            parts.append(f"`{record.working_dir.rsplit('/', 1)[-1]}`")
+
+        embed.add_field(name=name, value=" · ".join(parts), inline=False)
+    return embed
 
 
 def _progress_bar(ratio: float, width: int = 20) -> str:
@@ -496,6 +538,36 @@ class SessionManageCog(commands.Cog):
 
             embed.add_field(name=name, value=value, inline=False)
 
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="search",
+        description="Find a past thread by keyword (searches summaries)",
+    )
+    @app_commands.describe(
+        query="Keyword to look for in thread summaries",
+        origin="Filter by session origin",
+    )
+    @app_commands.choices(origin=_ORIGIN_CHOICES)
+    async def search_command(
+        self,
+        interaction: discord.Interaction,
+        query: str,
+        origin: str | None = None,
+    ) -> None:
+        """Search past threads by keyword and return clickable deep-links."""
+        query = (query or "").strip()
+        if not query:
+            await interaction.response.send_message(
+                "❌ Enter a keyword to search for.", ephemeral=True
+            )
+            return
+
+        origin_filter = None if origin in (None, "all") else origin
+        records = await self.repo.search(
+            query=query, origin=origin_filter, limit=_SEARCH_RESULT_LIMIT
+        )
+        embed = build_search_embed(query, records, guild_id=interaction.guild_id)
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(
