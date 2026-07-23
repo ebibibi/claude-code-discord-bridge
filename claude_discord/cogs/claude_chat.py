@@ -847,19 +847,11 @@ class ClaudeChatCog(commands.Cog):
         if record is not None and session_id:
             session_id = await self._session_id_for_current_backend(thread, record)
 
-        lock = self._thread_locks.setdefault(thread.id, asyncio.Lock())
-        async with lock:
-            existing_runner = self._active_runners.get(thread.id)
-            existing_task = self._active_tasks.get(thread.id)
-            if existing_runner is not None:
-                if interrupt:
-                    await thread.send("-# ⚡ Interrupted by another session's message...")
-                    await existing_runner.interrupt()
-                if existing_task is not None and not existing_task.done():
-                    with contextlib.suppress(Exception):
-                        await existing_task
-
         chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
+        # _run_claude serializes per thread: with interrupt=False it queues
+        # behind the current turn, with interrupt=True it preempts it. Either
+        # way eviction + registration is atomic under the per-thread lock, so a
+        # relayed message can never spawn a second parallel process here.
         await self._run_claude(
             seed_message,
             thread,
@@ -867,6 +859,8 @@ class ClaudeChatCog(commands.Cog):
             session_id=session_id,
             working_dir_override=record.working_dir if record else None,
             chat_only=chat_only,
+            interrupt_existing=interrupt,
+            interrupt_notice="-# ⚡ Interrupted by another session's message...",
         )
 
     async def cog_unload(self) -> None:
@@ -1046,19 +1040,12 @@ class ClaudeChatCog(commands.Cog):
                 if isinstance(_dashboard, ThreadStatusDashboard):
                     await _dashboard.refresh_inbox(_inbox_repo)
 
-        lock = self._thread_locks.setdefault(thread.id, asyncio.Lock())
-        async with lock:
-            existing_runner = self._active_runners.get(thread.id)
-            existing_task = self._active_tasks.get(thread.id)
-            if existing_runner is not None:
-                await thread.send("-# ⚡ Interrupted. Starting with new instruction...")
-                await existing_runner.interrupt()
-                if existing_task is not None and not existing_task.done():
-                    with contextlib.suppress(Exception):
-                        await existing_task
-
         # Determine chat_only from the parent channel of this thread.
         chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
+        # A human reply preempts whatever is running in this thread. _run_claude
+        # is the single serialization point: it interrupts the in-flight run and
+        # registers the replacement atomically under the per-thread lock, so two
+        # fast replies can never spawn parallel CLI processes.
         await self._run_claude(
             message,
             thread,
@@ -1067,6 +1054,7 @@ class ClaudeChatCog(commands.Cog):
             images=images,
             working_dir_override=record.working_dir if record else None,
             chat_only=chat_only,
+            interrupt_existing=True,
         )
 
     async def _session_id_for_current_backend(
@@ -1141,6 +1129,43 @@ class ClaudeChatCog(commands.Cog):
             logger.debug("Failed to fetch seed message for thread %d", thread.id, exc_info=True)
             return None
 
+    async def _evict_active_run(
+        self,
+        thread: discord.Thread | discord.TextChannel,
+        *,
+        interrupt: bool,
+        notice: str,
+    ) -> None:
+        """Clear the thread's active run so the caller can register a new one.
+
+        Must be called while holding ``self._thread_locks[thread.id]``. When
+        ``interrupt`` is True the in-flight runner is SIGINT'd (the ``notice`` is
+        posted first); otherwise we simply wait for it to finish — queue
+        semantics. Either way we await the run's task so its cleanup (its own
+        ``finally``) completes before the caller registers a replacement, which
+        is what keeps at most one runner per thread.
+
+        No deadlock: a task is only in ``_active_tasks`` after it finished its
+        own phase 1 and released the lock, so it never blocks on the lock we
+        hold here.
+        """
+        existing_runner = self._active_runners.get(thread.id)
+        if existing_runner is None:
+            return
+        existing_task = self._active_tasks.get(thread.id)
+        if interrupt:
+            with contextlib.suppress(discord.HTTPException):
+                await thread.send(notice)
+            with contextlib.suppress(Exception):
+                await existing_runner.interrupt()
+        if (
+            existing_task is not None
+            and existing_task is not asyncio.current_task()
+            and not existing_task.done()
+        ):
+            with contextlib.suppress(Exception):
+                await existing_task
+
     async def _run_claude(
         self,
         user_message: discord.Message,
@@ -1152,63 +1177,93 @@ class ClaudeChatCog(commands.Cog):
         working_dir_override: str | None = None,
         chat_only: bool = False,
         result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None,
+        interrupt_existing: bool = False,
+        interrupt_notice: str = "-# ⚡ Interrupted. Starting with new instruction...",
     ) -> None:
-        """Execute Claude Code CLI and stream results to the thread."""
+        """Execute Claude Code CLI and stream results to the thread.
+
+        This is the single serialization point for a thread: at most one Claude
+        run may be active per thread at any time. Under the thread's per-thread
+        lock it evicts whatever run is already in flight — interrupting it when
+        ``interrupt_existing`` is set, otherwise waiting for it to finish (queue
+        semantics) — then builds and *registers* the new runner, and only then
+        releases the lock and starts the subprocess.
+
+        Registering the runner under the *same* lock that checks for an existing
+        one is what closes the race: without it, two near-simultaneous messages
+        both pass the "nothing is running" check during the awaits below (model
+        lookup, runner build) and both spawn parallel CLI processes in the same
+        thread. The subprocess itself runs *outside* the lock so a later message
+        can still interrupt this run.
+        """
         dashboard = self._get_dashboard()
         description = prompt[:100].replace("\n", " ")
 
-        # Register the current asyncio Task so _handle_thread_reply can
-        # await it after sending SIGINT to the runner.
         current_task = asyncio.current_task()
-        if current_task is not None:
-            self._active_tasks[thread.id] = current_task
+        lock = self._thread_locks.setdefault(thread.id, asyncio.Lock())
 
-        # Mark thread as PROCESSING when Claude starts
-        if dashboard is not None:
-            await dashboard.set_state(
-                thread.id,
-                ThreadState.PROCESSING,
-                description,
-                thread=thread,
+        # --- Phase 1: atomically take the thread's single run slot -----------
+        # Everything from evicting the previous run through registering this one
+        # happens under the lock, so no concurrent _run_claude can observe an
+        # empty slot and spawn a parallel process.
+        async with lock:
+            await self._evict_active_run(
+                thread, interrupt=interrupt_existing, notice=interrupt_notice
             )
 
-        model_override = await self._get_current_model()
-        effective_model = model_override or self.runner.model
+            # Mark thread as PROCESSING when Claude starts
+            if dashboard is not None:
+                await dashboard.set_state(
+                    thread.id,
+                    ThreadState.PROCESSING,
+                    description,
+                    thread=thread,
+                )
 
-        async def _notify_stall() -> None:
-            threshold = status._stall_hard
-            await thread.send(
-                f"-# \u26a0\ufe0f No activity for {threshold}s — could be extended thinking "
-                "or context compression. Will resume automatically."
+            model_override = await self._get_current_model()
+            effective_model = model_override or self.runner.model
+
+            async def _notify_stall() -> None:
+                threshold = status._stall_hard
+                await thread.send(
+                    f"-# ⚠️ No activity for {threshold}s — could be extended thinking "
+                    "or context compression. Will resume automatically."
+                )
+
+            status = StatusManager(
+                user_message,
+                on_hard_stall=_notify_stall,
+                model=effective_model,
             )
+            await status.set_thinking()
 
-        status = StatusManager(
-            user_message,
-            on_hard_stall=_notify_stall,
-            model=effective_model,
-        )
-        await status.set_thinking()
+            tools_override = await self._get_allowed_tools()
+            effort_override = await self._get_current_effort()
 
-        tools_override = await self._get_allowed_tools()
-        effort_override = await self._get_current_effort()
+            runner = await self._build_runner_for_thread(
+                thread_id=thread.id,
+                model_override=model_override,
+                tools_override=tools_override,
+                fork_session=fork,
+                working_dir_override=working_dir_override,
+                effort_override=effort_override,
+            )
+            # Register as the sole active run BEFORE releasing the lock. Track
+            # the task too so a later eviction can await our cleanup.
+            self._active_runners[thread.id] = runner
+            if current_task is not None:
+                self._active_tasks[thread.id] = current_task
 
-        runner = await self._build_runner_for_thread(
-            thread_id=thread.id,
-            model_override=model_override,
-            tools_override=tools_override,
-            fork_session=fork,
-            working_dir_override=working_dir_override,
-            effort_override=effort_override,
-        )
-        self._active_runners[thread.id] = runner
+            # In chat_only mode, skip the "Session running" message and stop button.
+            stop_view: StopView | None = None
+            if not chat_only:
+                stop_view = StopView(runner)
+                stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
+                stop_view.set_message(stop_msg)
 
-        # In chat_only mode, skip the "Session running" message and stop button.
-        stop_view: StopView | None = None
-        if not chat_only:
-            stop_view = StopView(runner)
-            stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
-            stop_view.set_message(stop_msg)
-
+        # --- Phase 2: run the subprocess OUTSIDE the lock --------------------
+        # The lock is released so a later message can interrupt this run. The
+        # runner is already registered, so that message will find and evict it.
         try:
             await run_claude_with_config(
                 RunConfig(
@@ -1241,9 +1296,16 @@ class ClaudeChatCog(commands.Cog):
         finally:
             if stop_view is not None:
                 await stop_view.disable()
-            self._active_runners.pop(thread.id, None)
-            self._active_tasks.pop(thread.id, None)
-            self._thread_locks.pop(thread.id, None)
+            # Identity-guarded cleanup: only clear our own entries. A successor
+            # that evicted us may already have registered its runner/task, and
+            # we must not delete it. _thread_locks is intentionally NOT popped:
+            # the lock must stay stable for the thread's lifetime, or a later
+            # message could create a fresh Lock and run concurrently with one
+            # still holding the old object.
+            if self._active_runners.get(thread.id) is runner:
+                self._active_runners.pop(thread.id, None)
+            if self._active_tasks.get(thread.id) is current_task:
+                self._active_tasks.pop(thread.id, None)
 
             # Transition to WAITING_INPUT so owner knows a reply is needed
             if dashboard is not None:

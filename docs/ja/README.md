@@ -361,7 +361,7 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 - **組み込みヘルプ** — `/help` で利用可能な全スラッシュコマンドと基本的な使い方を表示（エフェメラル表示、呼び出し者のみ表示）
 - **セッション同期** — CLI セッションを Discord スレッドにインポート（`/sync-sessions`）。`/sync-settings` で同期設定（スレッドスタイル、時間範囲、最小件数）の表示・変更が可能
 - **セッション一覧** — 起動元（Discord / CLI / 全て）と時間範囲でフィルタリング（`/sessions`）
-- **スレッド検索** — `/search <query>` でキーワードから過去のスレッドを検索。スレッドごとに永続保存されたサマリー（最初のプロンプト）と作業ディレクトリにマッチし、ヒットを一覧しやすい embed で表示。アーカイブされて（サイドバーから消えた）スレッドもワンクリックで開き直せる Discord ディープリンク付き。任意の `origin` フィルタ（Discord / CLI）に対応。同じ検索を `GET /api/search` として他セッション・スキルにも公開。AI トークン不要 — ccdb が既に保持しているデータへの `LIKE` クエリのみ
+- **スレッド検索** — `/search <query>` でキーワードから過去のスレッドを検索。スレッドごとに永続保存されたサマリー（最初のプロンプト）と作業ディレクトリにマッチし、ヒットを一覧しやすい embed で表示。アーカイブされて（サイドバーから消えた）スレッドもワンクリックで開き直せる Discord ディープリンク付き。任意の `origin` フィルタ（Discord / CLI）に対応。`body:True` を付けるとローカルの Claude トランスクリプト（`~/.claude/projects`）全体も grep し、会話の途中にしか出てこないキーワードも見つけられる — body ヒットには一致したスニペットが `💬` バッジ付きで表示され、Discord スレッドのないトランスクリプトはリンクの代わりに `claude --resume <id>` のヒントを表示。同じ検索を `GET /api/search`（`body=1` を付ける）として他セッション・スキルにも公開。AI トークン不要 — ccdb が既に保持しているデータへの `LIKE` クエリと、ディスク上のトランスクリプトへの安全な `grep`（`shell=True` は不使用）のみ
 - **セッションリジューム** — `/resume` で直近のセッション一覧（最大 25 件）をセレクトメニューで表示し、選択したセッションを新スレッドで再開。オプションの `query` パラメータでキーワード検索（サマリーと作業ディレクトリにマッチ）、`filter=orphaned` で削除済みスレッドのセッションのみ表示。任意のチャンネルやスレッドから実行可能 — 常に設定されたメインチャンネルに新スレッドを作成
 - **リジューム情報** — 現在のセッションをターミナルで継続する CLI コマンドを表示（`/resume-info`、スレッド内限定）
 - **セッションクリア** — `/clear` で現在のスレッドの Claude Code セッションをリセットし、新スレッドを作成せずにゼロから再開
@@ -727,7 +727,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `INLINE_REPLY_CHANNEL_IDS` | インライン返信チャンネル ID（カンマ区切り、スレッドを作成しない） | （オプション） |
 | `CHAT_ONLY_CHANNEL_IDS` | チャットのみモードのチャンネル ID（カンマ区切り）— Claude のテキスト応答のみ表示。ツール embed・思考・セッション情報・Todo はすべて非表示 | （オプション） |
 | `WORKTREE_BASE_DIR` | セッション Worktree のスキャン対象ディレクトリ（自動クリーンアップを有効化） | （オプション） |
-| `CLI_SESSIONS_PATH` | CLI セッション検出用のパス（`~/.claude/projects`）。`/sync-sessions` の有効化に必要 | （オプション） |
+| `CLI_SESSIONS_PATH` | CLI セッション検出用のパス（`~/.claude/projects`）。`/sync-sessions` の有効化と、トランスクリプトの本文検索（`/search body:True`、`GET /api/search?body=1`）に使用。デフォルトは標準の `~/.claude/projects` なので、Claude Code を実行した環境ならゼロコンフィグで本文検索が使える | （オプション） |
 | `CUSTOM_COGS_DIR` | 起動時に読み込むカスタム Cog ファイルを含むディレクトリ（[カスタム Cog](#カスタム-cogフォーク不要で機能拡張) 参照） | （オプション） |
 | `CLAUDE_ALLOWED_TOOLS` | Claude CLI に許可するツールのカンマ区切りリスト（旧名 — `CCDB_ALLOWED_TOOLS` を推奨） | （オプション） |
 | `CLAUDE_CHANNEL_IDS` | マルチチャンネル設定用の追加チャンネル ID（旧名 — `CCDB_CHANNEL_IDS` を推奨） | （オプション） |
@@ -970,7 +970,7 @@ uv add "claude-code-discord-bridge[api]"
 | GET | `/api/lounge` | AI Lounge の最近のメッセージを取得 |
 | POST | `/api/lounge` | AI Lounge にメッセージを投稿（`label` オプション） |
 | GET | `/api/sessions` | すべてのセッション（ライブ・保存済み）を状態・作業ディレクトリ・最新のラウンジメモ付きで一覧（`state=running`、`exclude_thread`、`limit`） |
-| GET | `/api/search` | キーワードから過去のスレッドを検索 — サマリーと作業ディレクトリへの `LIKE` クエリ。各ヒットを Discord `deep_link` 付きで返す（`q` 必須、任意の `origin`、`limit` は最大 50） |
+| GET | `/api/search` | キーワードから過去のスレッドを検索 — サマリーと作業ディレクトリへの `LIKE` クエリ。`body=1` を付けるとローカルの Claude トランスクリプトも grep（各ヒットに `snippet` と `source` が付く）。各ヒットを Discord `deep_link` 付きで返す（`q` 必須、任意の `origin`、`limit` は最大 50） |
 | GET | `/api/threads/{thread_id}/messages` | 他スレッドの会話を古い順に取得（`limit`） |
 | POST | `/api/claims` | 作業開始前にリソースを宣言 — 取得成功で 201、取得済みなら保持者情報付きで 409 |
 | GET | `/api/claims` | 有効なクレームの一覧（`resource` フィルター任意） |
@@ -1024,6 +1024,8 @@ claude_code_core/          # バックエンド非依存のコアライブラリ
   types.py                 # SDK メッセージの型定義
   models.py                # SQLite スキーマ
   session_repo.py          # セッション CRUD
+  thread_search.py         # /search のオーケストレーション — サマリー + 本文をマージしスレッド単位で重複排除
+  transcript_search.py     # ~/.claude/projects トランスクリプトの grep/スキャン + スニペット抽出
   lounge_repo.py           # AI Lounge メッセージ CRUD
   rewind.py                # セッションリワインドヘルパー
 claude_discord/

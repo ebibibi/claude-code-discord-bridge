@@ -32,6 +32,9 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from claude_code_core.thread_search import run_thread_search
+from claude_code_core.transcript_search import default_transcripts_root
+
 from ..discord_ui.file_sender import send_file_blobs
 from ..relay import MODE_INTERRUPT, MODE_QUEUE, VALID_MODES, RelayGuard, build_relay_prompt
 from ..session_view import STATE_IDLE, STATE_RUNNING, build_session_views
@@ -226,6 +229,7 @@ class ApiServer:
         ingest_repo: IngestResultRepository | None = None,
         summary_repo: ThreadSummaryRepository | None = None,
         claims_repo: ClaimRepository | None = None,
+        transcripts_path: str | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -245,6 +249,10 @@ class ApiServer:
         self.ingest_repo = ingest_repo
         self.summary_repo = summary_repo
         self.claims_repo = claims_repo
+        # Where Claude Code transcripts live, for /api/search?body=1. Falls back
+        # to the standard ~/.claude/projects location so body search is
+        # Zero-Config wherever Claude Code has run.
+        self.transcripts_path = transcripts_path or default_transcripts_root()
         # Loop/rate brake for thread-to-thread relays. Process-local by design:
         # after a restart there are no in-flight relay chains to protect.
         self.relay_guard = RelayGuard()
@@ -1180,7 +1188,10 @@ class ApiServer:
             q: Keyword (required, non-blank). Matched against summary and
                working_dir (case-insensitive substring).
             origin: ``discord`` or ``cli`` to filter by session origin.
-            limit: Max results (default 15, max 50).
+            limit: Max summary results (default 15, max 50).
+            body: ``1`` to also grep local Claude transcripts for the keyword
+                  (token-free), surfacing threads whose *conversation* mentioned
+                  it even when the opening summary did not.
         """
         if err := self._require_session_repo():
             return err
@@ -1199,30 +1210,39 @@ class ApiServer:
         if origin not in (None, "discord", "cli"):
             return web.json_response({"error": "origin must be 'discord' or 'cli'"}, status=400)
 
-        records = await self.session_repo.search(  # type: ignore[union-attr]
-            query=query, origin=origin, limit=limit
+        include_body = request.rel_url.query.get("body") in ("1", "true", "yes")
+
+        results = await run_thread_search(
+            session_repo=self.session_repo,  # type: ignore[arg-type]
+            query=query,
+            origin=origin,
+            limit=limit,
+            include_body=include_body,
+            transcripts_root=self.transcripts_path,
         )
-        names = self._thread_names({r.thread_id for r in records})
+        names = self._thread_names({r.thread_id for r in results if r.thread_id is not None})
         guild_id = self._guild_id()
 
-        results = [
+        payload = [
             {
                 "thread_id": r.thread_id,
                 "session_id": r.session_id,
-                "thread_name": names.get(r.thread_id),
+                "thread_name": names.get(r.thread_id) if r.thread_id is not None else None,
                 "summary": r.summary,
                 "working_dir": r.working_dir,
                 "origin": r.origin,
                 "last_used_at": r.last_used_at,
+                "snippet": r.snippet,
+                "source": r.source,
                 "deep_link": (
                     f"https://discord.com/channels/{guild_id}/{r.thread_id}"
-                    if guild_id is not None
+                    if guild_id is not None and r.thread_id is not None
                     else None
                 ),
             }
-            for r in records
+            for r in results
         ]
-        return web.json_response({"query": query, "results": results})
+        return web.json_response({"query": query, "results": payload})
 
     def _guild_id(self) -> int | None:
         """Best-effort guild ID for building thread deep-links.

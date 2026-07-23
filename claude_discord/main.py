@@ -170,6 +170,7 @@ async def main() -> None:
             if os.getenv("CCDB_MAX_BODY_BYTES")
             else None,
             working_dir=config["working_dir"] or None,
+            transcripts_path=config["cli_sessions_path"] or None,
         )
 
     async with bot:
