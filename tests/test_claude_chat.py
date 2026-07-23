@@ -12,6 +12,25 @@ from claude_discord.cogs.claude_chat import ClaudeChatCog
 from claude_discord.concurrency import SessionRegistry
 
 
+class _StubStatus:
+    """Minimal StatusManager stand-in for _run_claude serialization tests."""
+
+    _stall_hard = 300
+
+    async def set_thinking(self) -> None:
+        return None
+
+
+class _StubStopView:
+    """Minimal StopView stand-in — no Discord interaction."""
+
+    def set_message(self, message: object) -> None:
+        return None
+
+    async def disable(self, message: object | None = None) -> None:
+        return None
+
+
 def _make_cog() -> ClaudeChatCog:
     """Return a ClaudeChatCog with minimal mocked dependencies."""
     bot = MagicMock()
@@ -202,69 +221,69 @@ class TestInterruptOnNewMessage:
         return msg
 
     @pytest.mark.asyncio
-    async def test_interrupt_called_when_runner_active(self) -> None:
-        """When a runner is active for a thread, _handle_thread_reply must interrupt it."""
+    async def test_handle_thread_reply_delegates_interrupt_to_run_claude(self) -> None:
+        """_handle_thread_reply must ask _run_claude to preempt the running turn.
+
+        Serialization + interrupt now live in _run_claude (the single run slot),
+        so the reply path only needs to pass interrupt_existing=True.
+        """
         cog = _make_cog()
         thread_id = 42
         message = self._make_thread_message(thread_id)
 
-        # Plant an active runner in the cog
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_thread_reply(message)
+
+        cog._run_claude.assert_called_once()
+        _, kwargs = cog._run_claude.call_args
+        assert kwargs.get("interrupt_existing") is True
+
+    @pytest.mark.asyncio
+    async def test_evict_active_run_interrupts_and_notifies(self) -> None:
+        """_evict_active_run(interrupt=True) posts the notice and SIGINTs the runner."""
+        cog = _make_cog()
+        thread_id = 42
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = thread_id
+        thread.send = AsyncMock()
+
         existing_runner = MagicMock()
         existing_runner.interrupt = AsyncMock()
         cog._active_runners[thread_id] = existing_runner
 
-        # Stub _run_claude so we don't actually spawn Claude
-        cog._run_claude = AsyncMock()
-
-        await cog._handle_thread_reply(message)
+        await cog._evict_active_run(thread, interrupt=True, notice="-# ⚡ stop")
 
         existing_runner.interrupt.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_interrupt_message_sent_to_thread(self) -> None:
-        """The thread should receive a notification when the session is interrupted."""
-        cog = _make_cog()
-        thread_id = 42
-        message = self._make_thread_message(thread_id)
-        thread = message.channel
-
-        existing_runner = MagicMock()
-        existing_runner.interrupt = AsyncMock()
-        cog._active_runners[thread_id] = existing_runner
-        cog._run_claude = AsyncMock()
-
-        await cog._handle_thread_reply(message)
-
         thread.send.assert_called_once()
         sent_text: str = thread.send.call_args.args[0]
-        assert "interrupted" in sent_text.lower() or "⚡" in sent_text
+        assert "⚡" in sent_text or "interrupted" in sent_text.lower()
 
     @pytest.mark.asyncio
-    async def test_no_interrupt_when_no_active_runner(self) -> None:
-        """When no runner is active, _handle_thread_reply skips interrupt."""
+    async def test_evict_active_run_noop_when_idle(self) -> None:
+        """_evict_active_run does nothing (no notice) when no runner is active."""
         cog = _make_cog()
-        message = self._make_thread_message(thread_id=42)
-        thread = message.channel
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+        thread.send = AsyncMock()
 
-        cog._run_claude = AsyncMock()
+        await cog._evict_active_run(thread, interrupt=True, notice="-# ⚡ stop")
 
-        await cog._handle_thread_reply(message)
-
-        # No notification message sent for interruption
         thread.send.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_awaits_existing_task_before_new_session(self) -> None:
-        """_handle_thread_reply must await the existing task to ensure cleanup completes."""
+    async def test_evict_active_run_queue_mode_waits_without_interrupt(self) -> None:
+        """interrupt=False must wait out the existing task without SIGINT (queue)."""
         cog = _make_cog()
         thread_id = 42
-        message = self._make_thread_message(thread_id)
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = thread_id
+        thread.send = AsyncMock()
 
         existing_runner = MagicMock()
         existing_runner.interrupt = AsyncMock()
         cog._active_runners[thread_id] = existing_runner
 
-        # A future that we can control to simulate a running task
         cleanup_done = asyncio.Event()
         call_order: list[str] = []
 
@@ -274,18 +293,15 @@ class TestInterruptOnNewMessage:
 
         task = asyncio.ensure_future(slow_task())
         cog._active_tasks[thread_id] = task
-
-        async def run_claude_stub(*args, **kwargs) -> None:
-            call_order.append("new_session_started")
-
-        cog._run_claude = run_claude_stub
-
-        # Let cleanup complete so the await resolves
         cleanup_done.set()
 
-        await cog._handle_thread_reply(message)
+        await cog._evict_active_run(thread, interrupt=False, notice="-# ⚡ stop")
+        call_order.append("evict_returned")
 
-        assert call_order == ["task_done", "new_session_started"]
+        # Queue mode: no interrupt, no notice, but the prior task is awaited.
+        existing_runner.interrupt.assert_not_called()
+        thread.send.assert_not_called()
+        assert call_order == ["task_done", "evict_returned"]
 
     @pytest.mark.asyncio
     async def test_run_claude_called_with_session_id_after_interrupt(self) -> None:
@@ -327,22 +343,27 @@ class TestInterruptOnNewMessage:
         assert len(cog._thread_locks) == 0
 
     @pytest.mark.asyncio
-    async def test_concurrent_messages_only_spawn_one_session(self) -> None:
-        """Two near-simultaneous messages should not both spawn CLI processes."""
+    async def test_concurrent_messages_both_reach_run_claude(self) -> None:
+        """Two near-simultaneous replies both delegate to _run_claude (interrupt=True).
+
+        The actual "never overlaps" guarantee is proven by
+        test_real_run_claude_never_overlaps_same_thread, which exercises the
+        real _run_claude. Here we only confirm both replies are handled and each
+        asks to preempt the running turn.
+        """
         cog = _make_cog()
         thread_id = 42
 
         call_count = 0
+        flags: list[object] = []
 
-        async def slow_run_claude(*args: object, **kwargs: object) -> None:
+        async def spy_run_claude(*args: object, **kwargs: object) -> None:
             nonlocal call_count
             call_count += 1
-            runner = MagicMock()
-            runner.interrupt = AsyncMock()
-            cog._active_runners[thread_id] = runner
-            await asyncio.sleep(0.05)
+            flags.append(kwargs.get("interrupt_existing"))
+            await asyncio.sleep(0.01)
 
-        cog._run_claude = slow_run_claude
+        cog._run_claude = spy_run_claude
 
         msg1 = self._make_thread_message(thread_id)
         msg2 = self._make_thread_message(thread_id)
@@ -354,9 +375,71 @@ class TestInterruptOnNewMessage:
         await asyncio.gather(t1, t2, return_exceptions=True)
 
         assert call_count == 2
-        thread = msg2.channel
-        send_calls = [c.args[0] for c in thread.send.call_args_list]
-        assert any("⚡" in s for s in send_calls)
+        assert flags == [True, True]
+
+    @pytest.mark.asyncio
+    async def test_real_run_claude_never_overlaps_same_thread(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The real _run_claude must never run two CLI subprocesses at once per thread.
+
+        This exercises the actual serialization inside _run_claude (not a stub).
+        Runner registration happens *after* several awaits (model lookup, runner
+        build), so two near-simultaneous messages can slip past a naive
+        "is anything running?" check and both spawn. The per-thread lock must
+        make eviction + registration atomic so the two runs are serialized.
+        """
+        import claude_discord.cogs.claude_chat as chat_mod
+
+        cog = _make_cog()
+        thread_id = 42
+
+        concurrency = 0
+        max_concurrency = 0
+        run_count = 0
+
+        async def fake_run(config: object) -> None:
+            nonlocal concurrency, max_concurrency, run_count
+            run_count += 1
+            concurrency += 1
+            max_concurrency = max(max_concurrency, concurrency)
+            await asyncio.sleep(0.02)
+            concurrency -= 1
+
+        monkeypatch.setattr(chat_mod, "run_claude_with_config", fake_run)
+        # StatusManager / StopView touch Discord; stub them to no-ops.
+        monkeypatch.setattr(chat_mod, "StatusManager", lambda *a, **k: _StubStatus())
+        monkeypatch.setattr(chat_mod, "StopView", lambda *a, **k: _StubStopView())
+        cog._get_dashboard = lambda: None  # type: ignore[method-assign]
+
+        async def slow_build_runner(**kwargs: object) -> MagicMock:
+            # The await here is the gap the race exploits: registration into
+            # _active_runners happens only *after* this returns.
+            await asyncio.sleep(0.005)
+            runner = MagicMock()
+            runner.interrupt = AsyncMock()
+            runner.command = "claude"
+            return runner
+
+        cog._build_runner_for_thread = slow_build_runner  # type: ignore[method-assign]
+        cog._get_current_model = AsyncMock(return_value=None)
+        cog._get_allowed_tools = AsyncMock(return_value=None)
+        cog._get_current_effort = AsyncMock(return_value=None)
+
+        msg1 = self._make_thread_message(thread_id)
+        msg2 = self._make_thread_message(thread_id)
+
+        t1 = asyncio.create_task(cog._handle_thread_reply(msg1))
+        await asyncio.sleep(0)
+        t2 = asyncio.create_task(cog._handle_thread_reply(msg2))
+
+        await asyncio.gather(t1, t2, return_exceptions=True)
+
+        # Both messages ran, but never simultaneously in the same thread.
+        assert run_count == 2
+        assert max_concurrency == 1
+        # No orphaned runner left registered after both finished.
+        assert thread_id not in cog._active_runners
 
 
 class TestSpawnSession:
