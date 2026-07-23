@@ -17,7 +17,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..database.repository import SessionRecord, SessionRepository, UsageStatsRepository
+from claude_code_core.thread_search import ThreadSearchResult, run_thread_search
+from claude_code_core.transcript_search import default_transcripts_root
+
+from ..database.repository import SessionRepository, UsageStatsRepository
 from ..database.settings_repo import SettingsRepository
 from ..discord_ui.embeds import COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS, COLOR_TOOL
 from ..discord_ui.views import ResumeSelectView, ToolSelectView
@@ -89,16 +92,18 @@ _SEARCH_RESULT_LIMIT = 15
 
 def build_search_embed(
     query: str,
-    records: list[SessionRecord],
+    results: list[ThreadSearchResult],
     *,
     guild_id: int | None,
 ) -> discord.Embed:
     """Render /search hits as an embed with a Discord deep-link per thread.
 
     The deep-link reopens even an archived (sidebar-hidden) thread, which is the
-    whole point: threads are never deleted, just hard to find again.
+    whole point: threads are never deleted, just hard to find again. Body-match
+    hits (``source == "body"``) also show the matching snippet; a transcript with
+    no Discord thread offers a ``claude --resume`` hint instead of a link.
     """
-    if not records:
+    if not results:
         return discord.Embed(
             title=f"\U0001f50d Search: {query}",
             description="No threads matched. Try a different keyword.",
@@ -106,23 +111,30 @@ def build_search_embed(
         )
 
     embed = discord.Embed(
-        title=f"\U0001f50d Search: {query} ({len(records)})",
+        title=f"\U0001f50d Search: {query} ({len(results)})",
         color=COLOR_INFO,
     )
-    for record in records:
-        icon = _ORIGIN_ICON.get(record.origin, "❓")
-        summary = (record.summary or "(no summary)").replace("\n", " ")
-        name = f"{icon} {summary[:60]}"
+    for result in results:
+        icon = _ORIGIN_ICON.get(result.origin or "", "❓")
+        label = result.summary or (f"session {result.session_id[:8]}" if result.session_id else "")
+        badge = " 💬" if result.source == "body" else ""
+        name = f"{icon} {label.replace(chr(10), ' ')[:60]}{badge}"
 
         parts: list[str] = []
-        if guild_id is not None:
-            link = f"https://discord.com/channels/{guild_id}/{record.thread_id}"
+        if guild_id is not None and result.thread_id is not None:
+            link = f"https://discord.com/channels/{guild_id}/{result.thread_id}"
             parts.append(f"[\U0001f517 open thread]({link})")
-        parts.append(record.last_used_at)
-        if record.working_dir:
-            parts.append(f"`{record.working_dir.rsplit('/', 1)[-1]}`")
+        elif result.session_id is not None:
+            parts.append(f"resume: `claude --resume {result.session_id}`")
+        if result.last_used_at:
+            parts.append(result.last_used_at)
+        if result.working_dir:
+            parts.append(f"`{result.working_dir.rsplit('/', 1)[-1]}`")
 
-        embed.add_field(name=name, value=" · ".join(parts), inline=False)
+        value = " · ".join(parts) if parts else "​"
+        if result.snippet:
+            value = f"{value}\n> {result.snippet[:180]}"
+        embed.add_field(name=name, value=value, inline=False)
     return embed
 
 
@@ -542,11 +554,12 @@ class SessionManageCog(commands.Cog):
 
     @app_commands.command(
         name="search",
-        description="Find a past thread by keyword (searches summaries)",
+        description="Find a past thread by keyword (add body:True to grep full conversations)",
     )
     @app_commands.describe(
-        query="Keyword to look for in thread summaries",
+        query="Keyword to look for",
         origin="Filter by session origin",
+        body="Also grep the full conversation transcripts (token-free, a bit slower)",
     )
     @app_commands.choices(origin=_ORIGIN_CHOICES)
     async def search_command(
@@ -554,8 +567,14 @@ class SessionManageCog(commands.Cog):
         interaction: discord.Interaction,
         query: str,
         origin: str | None = None,
+        body: bool = False,
     ) -> None:
-        """Search past threads by keyword and return clickable deep-links."""
+        """Search past threads by keyword and return clickable deep-links.
+
+        By default matches the persistent per-thread summary (instant). With
+        ``body:True`` it also greps the local Claude transcripts so keywords that
+        only appear mid-conversation are found — still zero AI tokens.
+        """
         query = (query or "").strip()
         if not query:
             await interaction.response.send_message(
@@ -564,11 +583,29 @@ class SessionManageCog(commands.Cog):
             return
 
         origin_filter = None if origin in (None, "all") else origin
-        records = await self.repo.search(
-            query=query, origin=origin_filter, limit=_SEARCH_RESULT_LIMIT
-        )
-        embed = build_search_embed(query, records, guild_id=interaction.guild_id)
-        await interaction.response.send_message(embed=embed)
+        transcripts_root = self.cli_sessions_path or default_transcripts_root()
+
+        async def _run() -> list[ThreadSearchResult]:
+            return await run_thread_search(
+                session_repo=self.repo,
+                query=query,
+                origin=origin_filter,
+                limit=_SEARCH_RESULT_LIMIT,
+                include_body=body,
+                transcripts_root=transcripts_root,
+            )
+
+        # Body search greps files on disk, which can exceed Discord's 3s ACK
+        # window, so defer first. Summary-only search is instant.
+        if body:
+            await interaction.response.defer()
+            results = await _run()
+            embed = build_search_embed(query, results, guild_id=interaction.guild_id)
+            await interaction.followup.send(embed=embed)
+        else:
+            results = await _run()
+            embed = build_search_embed(query, results, guild_id=interaction.guild_id)
+            await interaction.response.send_message(embed=embed)
 
     @app_commands.command(
         name="sync-sessions",

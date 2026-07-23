@@ -129,3 +129,67 @@ async def test_search_no_matches_returns_empty_list(api_client: TestClient) -> N
 async def test_search_limit_is_capped(api_client: TestClient) -> None:
     resp = await api_client.get("/api/search", params={"q": "home", "limit": "99999"})
     assert resp.status == 200
+
+
+async def test_search_body_mode_finds_transcript(
+    db_path: str, bot: MagicMock, seeded_repo: SessionRepository, tmp_path
+) -> None:
+    """body=1 surfaces a thread whose transcript (not its summary) matches."""
+    import json as _json
+
+    # Real session_ids are UUIDs; the transcript filename must match that shape.
+    sid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    await seeded_repo.save(
+        thread_id=1002,
+        session_id=sid,
+        summary="Design a lightweight search feature for ccdb threads",
+        working_dir="/home/ebi",
+        origin="discord",
+    )
+    transcripts = tmp_path / "proj"
+    transcripts.mkdir()
+    with open(transcripts / f"{sid}.jsonl", "w", encoding="utf-8") as f:
+        f.write(
+            _json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "midway we discussed quantum tunneling"}
+                        ],
+                    },
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    notif_repo = NotificationRepository(db_path)
+    await notif_repo.init_db()
+    api = ApiServer(
+        repo=notif_repo,
+        bot=bot,
+        default_channel_id=12345,
+        host="127.0.0.1",
+        port=0,
+        session_repo=seeded_repo,
+        lounge_repo=LoungeRepository(db_path),
+        transcripts_path=str(transcripts),
+    )
+    server = TestServer(api.app)
+    client = TestClient(server)
+    await client.start_server()
+    try:
+        # Without body search: no hit (summary doesn't mention it).
+        resp = await client.get("/api/search", params={"q": "quantum tunneling"})
+        assert (await resp.json())["results"] == []
+
+        # With body search: the transcript match maps back to thread 1002.
+        resp = await client.get("/api/search", params={"q": "quantum tunneling", "body": "1"})
+        results = (await resp.json())["results"]
+        assert [r["thread_id"] for r in results] == [1002]
+        assert results[0]["source"] == "body"
+        assert "quantum tunneling" in results[0]["snippet"]
+    finally:
+        await client.close()
