@@ -256,11 +256,19 @@ class ApiServer:
         # Loop/rate brake for thread-to-thread relays. Process-local by design:
         # after a restart there are no in-flight relay chains to protect.
         self.relay_guard = RelayGuard()
-        # Fall back to COORDINATION_CHANNEL_ID so lounge shares the same channel
+        # AI Lounge Discord mirror (OPTIONAL, human-facing). When a channel is
+        # configured, lounge messages are echoed there so a human can watch the
+        # AI-to-AI chatter in Discord. Leave it unset to run the lounge DB-only:
+        # the prompt-injected lounge and every coordination API keep working, so
+        # a deployment whose humans don't read the channel loses nothing.
+        # Falls back to COORDINATION_CHANNEL_ID for backward compatibility.
         if lounge_channel_id is None:
             ch_str = os.getenv("COORDINATION_CHANNEL_ID", "")
             lounge_channel_id = int(ch_str) if ch_str.isdigit() else None
         self.lounge_channel_id = lounge_channel_id
+        # Set once the mirror channel is found to be gone (deleted / no access),
+        # so a removed channel doesn't log a warning on every single post.
+        self._lounge_mirror_disabled = False
 
         self.app = web.Application(client_max_size=self.max_body_bytes)
         if self.api_secret:
@@ -2137,14 +2145,32 @@ class ApiServer:
         return web.json_response({"status": "marked", "id": row_id}, status=201)
 
     async def _send_lounge_to_discord(self, label: str, message: str, posted_at: str) -> None:
-        """Send a lounge message to the configured Discord lounge channel."""
+        """Mirror a lounge message to the configured Discord lounge channel.
+
+        Best-effort and self-healing: if the channel has been deleted or the bot
+        can no longer see it, the mirror disables itself for the rest of the
+        process so a removed channel doesn't warn on every post. The lounge DB
+        record is already saved by the caller, so disabling the mirror never
+        loses a message — it only stops the human-facing echo.
+        """
+        import discord
+
+        if self._lounge_mirror_disabled or not self.lounge_channel_id:
+            return
         try:
-            channel = self.bot.get_channel(self.lounge_channel_id)  # type: ignore[arg-type]
+            channel = self.bot.get_channel(self.lounge_channel_id)
             if channel is None:
-                channel = await self.bot.fetch_channel(self.lounge_channel_id)  # type: ignore[arg-type]
+                channel = await self.bot.fetch_channel(self.lounge_channel_id)
             if hasattr(channel, "send"):
                 timestamp = posted_at[11:16] if len(posted_at) >= 16 else posted_at
                 await channel.send(f"**[{label}]** {message} *({timestamp})*")  # type: ignore[union-attr]
+        except (discord.NotFound, discord.Forbidden):
+            self._lounge_mirror_disabled = True
+            logger.warning(
+                "Lounge mirror channel %s is gone or inaccessible; disabling the "
+                "Discord mirror for this process (the DB lounge is unaffected).",
+                self.lounge_channel_id,
+            )
         except Exception:
             logger.warning("Failed to forward lounge message to Discord", exc_info=True)
 
