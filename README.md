@@ -104,7 +104,14 @@ curl "$CCDB_API_URL/api/lounge"
 
 The lounge channel doubles as a human-visible activity feed — open it in Discord to see at a glance what every active Claude session is currently doing.
 
-**Lounge vs. the coordination APIs.** Since the cross-session endpoints below landed, the lounge is no longer the place to *discover* who is running, read another thread, or lock a resource — `GET /api/sessions`, `GET /api/threads/{id}/messages` and `POST /api/claims` do that precisely and even surface sessions that never posted. The lounge keeps what no structured call carries: **broadcast announcements with no single target** ("restarting the bot", "cut release v3.2.0") and **intent announced before acting**. Treat it as the room's announcements, not its database. The Discord-channel mirror is purely for humans — the AI-to-AI layer is the DB-backed prompt injection, which works with `lounge_channel_id` unset, so a deployment whose humans don't watch the channel can drop the mirror without affecting coordination.
+**Lounge vs. the coordination APIs.** Since the cross-session endpoints below landed, the lounge is no longer the place to *discover* who is running, read another thread, or lock a resource — `GET /api/sessions`, `GET /api/threads/{id}/messages` and `POST /api/claims` do that precisely and even surface sessions that never posted. The lounge keeps what no structured call carries: **broadcast announcements with no single target** ("restarting the bot", "cut release v3.2.0") and **intent announced before acting**. Treat it as the room's announcements, not its database.
+
+**The Discord mirror is optional (on/off).** The AI-to-AI layer is the DB-backed lounge that is injected into every session's prompt; mirroring it into a Discord channel is a separate, purely human-facing convenience. It is controlled by one setting:
+
+- **On** — set `COORDINATION_CHANNEL_ID` (or `lounge_channel_id`) to a channel, and lounge messages are echoed there for a human to watch.
+- **Off** — leave it unset. The lounge and every coordination API keep working exactly the same; you simply don't get the Discord feed. If the configured channel is later deleted, the mirror notices and disables itself for the rest of the process (the DB lounge is never affected).
+
+So a deployment whose humans don't read the channel can run mirror-off and lose nothing.
 
 ### Cross-Session Observability
 
