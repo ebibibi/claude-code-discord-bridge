@@ -663,8 +663,8 @@ MENTION_ONLY_CHANNEL_IDS=222,333
 
 Threads **inherit their parent channel's policy**. A thread that a human creates in a mention-only channel does not start a Claude session — otherwise anyone could bypass the setting just by opening a thread. Claude engages in such a thread only when:
 
-- the bot is explicitly **@mentioned** in the message, or
-- ccdb **already owns the thread** — a session thread the bot created, or one created via `/api/spawn`. Once a session exists, every reply is handled normally without needing a mention.
+- the bot is explicitly **@mentioned** in the message — *every* message, so summoning Claude once into a human thread does not sign that thread up for good, or
+- **the bot itself created the thread** — a session thread from `_handle_new_conversation`, `/fork`, or `/api/spawn`. Discord records the creator in `Thread.owner_id`, so these are unambiguously ccdb's own threads and every reply in them is handled without a mention.
 
 Threads under channels that are *not* listed in `mention_only_channel_ids` are unaffected and always handled.
 
