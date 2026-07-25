@@ -38,6 +38,7 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 8. **SQLite-backed dynamic scheduler**: Scheduled tasks are stored in `scheduled_tasks` DB table and executed by a single `discord.ext.tasks` master loop (every 30s). Tasks are registered at runtime via REST API — no code changes needed to add new tasks. `discord.ext.tasks` decorators are only used for the master loop, not per-task (they're static/compile-time constructs).
 9. **Claude handles "what", ccdb handles "when"**: For scheduled tasks, ccdb only manages the schedule. All domain logic (what to check, how to deduplicate, what to post) lives in the Claude prompt. No GitHub/AzureDevOps-specific code in ccdb itself.
 10. **CLI env overlay** (`CCDB_CLI_ENV_FILE`): Optional `KEY=VALUE` file read on every CLI spawn to inject env vars into the subprocess. Enables live configuration changes (e.g., switching to Azure Foundry) without restarting the bot. The file is read by `_build_env()` in `runner.py`.
+11. **Model suggestions are discovered, not hardcoded** (`model_catalog.py`): the `/model` autocomplete asks `GET /v1/models` (reusing the CLI's own credentials) instead of shipping a constant that goes stale on every model launch. This is the *only* sanctioned direct Anthropic API call, and it is strictly non-essential: no credentials, no network, a 3P provider, or `CCDB_MODEL_DISCOVERY=0` all degrade to the static `SUGGESTED_MODELS` fallback. Never let it raise into a command path, and never log the token.
 
 ### Why REST API over stdout markers for Claude→ccdb communication
 
@@ -346,6 +347,6 @@ Project-specific skills that help AI agents work effectively on this codebase:
 
 - Personal bot configuration (tokens, channel IDs, user IDs)
 - Server-specific Cogs or workflows
-- Direct Anthropic API calls (we use Claude Code CLI, not the API)
+- Direct Anthropic API calls (we use Claude Code CLI, not the API). Sole exception: the read-only model lookup in `model_catalog.py`, because the CLI can't enumerate models — see Key Design Decision 11 for the rules it has to obey
 - Heavy dependencies that most users won't need
 - Anything that requires secrets to import the package
