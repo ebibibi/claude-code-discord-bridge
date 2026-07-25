@@ -21,6 +21,8 @@ This document captures the "why" behind key architectural choices. Each decision
 - Larger resource footprint (one OS process per session)
 - Parsing stream-json instead of getting structured responses directly
 
+**The one sanctioned exception — `model_catalog.py`:** the `/model` autocomplete needs to *enumerate* models, and the CLI exposes no way to do that, so the suggestion list is read from `GET /v1/models` instead of a hardcoded constant that goes stale on every model launch. It is fenced in so it can never become a second execution path: read-only, reusing the CLI's own credentials (`ANTHROPIC_API_KEY` → `ANTHROPIC_AUTH_TOKEN` → `~/.claude/.credentials.json`), never logging the token, cached (6h; 5min on failure), stdlib `urllib` on a worker thread with a 5s timeout, and **strictly non-essential** — no credentials, no network, a third-party provider (Bedrock/Vertex/Foundry), or `CCDB_MODEL_DISCOVERY=0` all degrade to the static `SUGGESTED_MODELS` fallback rather than failing the command. No other code path may call the API directly.
+
 ## 2. Thread = Session (1:1 Mapping)
 
 **Decision:** Each Discord thread maps to exactly one Claude Code session via `--resume`.
