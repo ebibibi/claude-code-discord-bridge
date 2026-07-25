@@ -641,32 +641,53 @@ await setup_bridge(
 
 Each channel is fully independent — messages in any of the configured channels spawn a new Claude session thread, and `/skill` commands work across all of them.  `claude_channel_id` is kept for backward compatibility and is used as the fallback thread-creation target when the `/skill` command is invoked outside a configured channel.
 
-#### Mention-Only Channels
+#### Where the Bot Listens — No-Mention Channels vs. @Mentions
 
-To make the bot respond **only when @mentioned** in specific channels (useful for shared channels where you don't want the bot to react to every message):
+`claude_channel_ids` is a list of channels that need **no @mention**: everything posted there, and in any thread under them, goes straight to Claude. Everywhere else in the guild the bot answers **only when someone @mentions it**.
+
+So the configuration describes where ccdb speaks *freely*, not where it exists. A channel nobody thought about is quiet by construction, and the bot is still reachable by name from anywhere without a config change.
 
 ```python
 await setup_bridge(
     bot,
     runner,
-    claude_channel_ids={111, 222},
-    mention_only_channel_ids={222},  # bot ignores messages in #222 unless @mentioned
+    claude_channel_ids={111},          # #111: no mention needed, every message runs Claude
     allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
 )
+# Anywhere else in the guild: "@YourBot what do you think?" starts a session; silence otherwise.
 ```
 
-Or via environment variable (comma-separated channel IDs):
+Claude engages when any one of these holds:
+
+- the message is in a **no-mention channel** (or a thread under it),
+- the bot is **@mentioned in that message** — *every* message, so summoning Claude once into a human thread never signs that thread up for good, or
+- the thread was **created by the bot itself** — a session thread from a new conversation, `/fork`, or `/api/spawn`. Discord records the creator in `Thread.owner_id`, so these are unambiguously ccdb's own threads and every reply in them is handled without a mention.
+
+Direct messages are never picked up by the mention path, and the per-user gate (`allowed_user_ids`) still applies first everywhere.
+
+To restore the old strict behaviour — the bot exists *only* in the configured channels and a mention elsewhere does nothing — turn the mention path off:
+
+```
+CCDB_MENTION_ANYWHERE=false
+```
+
+##### Thread context when a mention wakes Claude
+
+A mention usually lands in the middle of a conversation Claude has not seen. Before answering in a thread it does not own, ccdb prepends a transcript of that thread's **last 7 days** so the reply is about what was actually being discussed. Reading the whole thread would be the obvious move and the wrong one — a months-old thread is a large, mostly irrelevant token bill — so the window is bounded three ways: by age, by message count (200), and by total size (12,000 characters, trimmed from the oldest end so the turns being replied to always survive).
+
+```
+CCDB_THREAD_CONTEXT_DAYS=7   # 0 disables the transcript entirely
+```
+
+Threads the bot created itself are skipped: it saw every turn there, so re-sending them would only burn tokens.
+
+##### Mention-only channels (legacy)
+
+`mention_only_channel_ids` carves a channel back out of the no-mention set. With the mention path on, simply *not listing* a channel has the same effect, so this is only useful when a parent channel is listed and one child should be excluded.
 
 ```
 MENTION_ONLY_CHANNEL_IDS=222,333
 ```
-
-Threads **inherit their parent channel's policy**. A thread that a human creates in a mention-only channel does not start a Claude session — otherwise anyone could bypass the setting just by opening a thread. Claude engages in such a thread only when:
-
-- the bot is explicitly **@mentioned** in the message — *every* message, so summoning Claude once into a human thread does not sign that thread up for good, or
-- **the bot itself created the thread** — a session thread from `_handle_new_conversation`, `/fork`, or `/api/spawn`. Discord records the creator in `Thread.owner_id`, so these are unambiguously ccdb's own threads and every reply in them is handled without a mention.
-
-Threads under channels that are *not* listed in `mention_only_channel_ids` are unaffected and always handled.
 
 #### Inline-Reply Channels
 
@@ -740,7 +761,9 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `SESSION_TIMEOUT_SECONDS` | Session inactivity timeout | `300` |
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
 | `COORDINATION_CHANNEL_ID` | Channel ID used as default fallback for AI Lounge channel | (optional) |
-| `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot only responds when @mentioned (threads under them inherit the policy) | (optional) |
+| `CCDB_MENTION_ANYWHERE` | When true, an @mention summons Claude in any guild channel or thread; set `false` to listen only in the configured channels | `true` |
+| `CCDB_THREAD_CONTEXT_DAYS` | Days of a foreign thread's history prepended to the prompt when a mention wakes Claude there (`0` disables) | `7` |
+| `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs carved back out of the no-mention set (legacy; not listing a channel now has the same effect) | (optional) |
 | `INLINE_REPLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot replies inline (no thread created) | (optional) |
 | `CHAT_ONLY_CHANNEL_IDS` | Comma-separated channel IDs in chat-only mode — only Claude's text responses are shown; all technical embeds (tools, thinking, session info, todos) are hidden | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |

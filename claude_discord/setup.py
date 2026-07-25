@@ -100,6 +100,8 @@ async def setup_bridge(
     enable_thread_inbox: bool = False,
     auto_rename_threads: bool | None = None,
     monitor_all_channels: bool | None = None,
+    mention_anywhere: bool | None = None,
+    thread_context_days: int | None = None,
     context_links_config: str | None = None,
     backend_factory: BackendFactory | None = None,
 ) -> BridgeComponents:
@@ -124,14 +126,28 @@ async def setup_bridge(
         claude_channel_id: Primary channel ID for Claude chat.  Kept for
                            backward compatibility.  Also used as the fallback
                            thread-creation target in SkillCommandCog.
-        claude_channel_ids: Additional channel IDs to listen on.  Combined with
-                            ``claude_channel_id`` to form the full set.  Use this
-                            to deploy the bot in multiple channels.
-        mention_only_channel_ids: Channel IDs where the bot only responds when
-                                  explicitly @mentioned.  Thread replies are not
-                                  affected (they are already within an active session).
-                                  Defaults to MENTION_ONLY_CHANNEL_IDS env var
-                                  (comma-separated).
+        claude_channel_ids: Additional channel IDs that need **no @mention** —
+                            everything posted there (and in threads under them)
+                            goes to Claude.  Combined with ``claude_channel_id``
+                            to form the full set.  Everywhere else in the guild
+                            the bot answers only when @mentioned, so this list
+                            configures where ccdb is *silent by default*, not
+                            where it exists.
+        mention_anywhere: When True (default), an @mention summons Claude in any
+                          guild channel or thread, not just the configured ones.
+                          Set False to restore the strict listed-channels-only
+                          behaviour.  Defaults to the CCDB_MENTION_ANYWHERE env var.
+        thread_context_days: How many days of a foreign thread's history to feed
+                             Claude when a mention wakes it there, so it answers
+                             about the conversation it just walked into.  ``0``
+                             disables the transcript.  Defaults to the
+                             CCDB_THREAD_CONTEXT_DAYS env var, then 7.
+        mention_only_channel_ids: Channel IDs carved back out of the no-mention
+                                  set above.  Largely redundant now that not
+                                  listing a channel has the same effect; kept for
+                                  configurations that list a parent channel and
+                                  want one child excluded.  Defaults to the
+                                  MENTION_ONLY_CHANNEL_IDS env var (comma-separated).
         chat_only_channel_ids: Channel IDs where only text responses are shown.
                                Tool embeds, thinking blocks, and session chrome are
                                hidden.  Useful for public channels where non-technical
@@ -176,6 +192,7 @@ async def setup_bridge(
     from .database.settings_repo import SettingsRepository
     from .database.summary_repo import ThreadSummaryRepository
     from .database.task_repo import TaskRepository
+    from .discord_ui.thread_context import DEFAULT_DAYS
     from .worktree import WorktreeManager
 
     # Build the full set of claude channel IDs from both parameters
@@ -230,6 +247,25 @@ async def setup_bridge(
         )
     if monitor_all_channels:
         logger.info("Monitor-all-channels enabled — bot will respond in ANY guild channel")
+
+    # Mention-anywhere — fall back to CCDB_MENTION_ANYWHERE env var (on by default).
+    # This is what turns claude_channel_ids into "channels that need no mention":
+    # everywhere else the bot answers only when someone @mentions it.
+    if mention_anywhere is None:
+        mention_anywhere = os.getenv("CCDB_MENTION_ANYWHERE", "true").lower() not in (
+            "false",
+            "0",
+            "no",
+        )
+    if not mention_anywhere:
+        logger.info("Mention-anywhere disabled — bot only listens in configured channels")
+
+    # Thread context window — fall back to CCDB_THREAD_CONTEXT_DAYS env var, then 7 days.
+    if thread_context_days is None:
+        _env_days = os.getenv("CCDB_THREAD_CONTEXT_DAYS", "")
+        thread_context_days = int(_env_days) if _env_days.lstrip("-").isdigit() else DEFAULT_DAYS
+    if thread_context_days != DEFAULT_DAYS:
+        logger.info("Thread context window: %d day(s)", thread_context_days)
 
     # Max concurrent sessions — fall back to MAX_CONCURRENT_SESSIONS env var, then 3
     if max_concurrent is None:
@@ -310,6 +346,8 @@ async def setup_bridge(
         chat_only_channel_ids=chat_only_channel_ids or None,
         auto_rename_threads=auto_rename_threads,
         monitor_all_channels=monitor_all_channels,
+        mention_anywhere=mention_anywhere,
+        thread_context_days=thread_context_days,
     )
     await bot.add_cog(chat_cog)
     logger.info("Registered ClaudeChatCog")
