@@ -657,11 +657,12 @@ await setup_bridge(
 # Anywhere else in the guild: "@YourBot what do you think?" starts a session; silence otherwise.
 ```
 
-Claude engages when any one of these holds:
+Claude engages when either of these holds:
 
-- the message is in a **no-mention channel** (or a thread under it),
-- the bot is **@mentioned in that message** — *every* message, so summoning Claude once into a human thread never signs that thread up for good, or
-- the thread was **created by the bot itself** — a session thread from a new conversation, `/fork`, or `/api/spawn`. Discord records the creator in `Thread.owner_id`, so these are unambiguously ccdb's own threads and every reply in them is handled without a mention.
+- the message is in a **no-mention channel** (or a thread under it) — this is the session flow: a channel message opens a thread, replies in that thread continue its session, or
+- the bot is **@mentioned in that message** — *every* message, everywhere else, including in threads ccdb opened itself. Owning a thread is not standing consent: people keep talking to each other in those threads, and a run nobody asked for is noise.
+
+**A mention is answered in place.** No thread is created: a mention in a channel is answered in that channel, a mention in a thread is answered in that thread. Spinning off a thread would move the answer away from the discussion that prompted it and leave a session running where nobody is reading. If a session already belongs to that channel or thread it is resumed, so a follow-up mention continues the same work.
 
 Direct messages are never picked up by the mention path, and the per-user gate (`allowed_user_ids`) still applies first everywhere.
 
@@ -671,15 +672,15 @@ To restore the old strict behaviour — the bot exists *only* in the configured 
 CCDB_MENTION_ANYWHERE=false
 ```
 
-##### Thread context when a mention wakes Claude
+##### Reading the room before answering
 
-A mention usually lands in the middle of a conversation Claude has not seen. Before answering in a thread it does not own, ccdb prepends a transcript of that thread's **last 7 days** so the reply is about what was actually being discussed. Reading the whole thread would be the obvious move and the wrong one — a months-old thread is a large, mostly irrelevant token bill — so the window is bounded three ways: by age, by message count (200), and by total size (12,000 characters, trimmed from the oldest end so the turns being replied to always survive).
+A mention usually lands in the middle of a conversation Claude has not seen. Before answering, ccdb prepends a transcript of the **last 7 days of that exact channel or thread** so the reply is about what was actually being discussed. Reading the whole thread would be the obvious move and the wrong one — a months-old thread is a large, mostly irrelevant token bill — so the window is bounded three ways: by age, by message count (200), and by total size (12,000 characters, trimmed from the oldest end so the turns being replied to always survive).
 
 ```
 CCDB_THREAD_CONTEXT_DAYS=7   # 0 disables the transcript entirely
 ```
 
-Threads the bot created itself are skipped: it saw every turn there, so re-sending them would only burn tokens.
+Inside the no-mention channels the transcript is only used for threads ccdb did not create — in its own session threads it saw every turn already, so re-sending them would just burn tokens.
 
 ##### Mention-only channels (legacy)
 

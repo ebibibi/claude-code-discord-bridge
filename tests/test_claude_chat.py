@@ -1263,19 +1263,21 @@ class TestMentionOnlyChannels:
         cog._handle_new_conversation.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_mention_only_channel_with_mention_triggers_conversation(self) -> None:
-        """Message in a mention-only channel WITH @bot mention must start a session."""
+    async def test_mention_only_channel_with_mention_answers_in_place(self) -> None:
+        """A mention there is answered in the channel itself — no thread is opened."""
         cog = self._make_cog(
             channel_ids={111, 222},
             mention_only_channel_ids={222},
         )
+        cog._handle_mention = AsyncMock()
         cog._handle_new_conversation = AsyncMock()
 
         bot_user = cog.bot.user
         msg = self._make_message(channel_id=222, mentions=[bot_user])
         await cog.on_message(msg)
 
-        cog._handle_new_conversation.assert_awaited_once_with(msg)
+        cog._handle_mention.assert_awaited_once_with(msg)
+        cog._handle_new_conversation.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_non_mention_only_channel_responds_to_all_messages(self) -> None:
@@ -1342,12 +1344,12 @@ class TestMentionOnlyChannels:
             mention_only_channel_ids={222},
             session_record=None,
         )
-        cog._handle_thread_reply = AsyncMock()
+        cog._handle_mention = AsyncMock()
 
         msg = self._make_thread_message(parent_id=222, mentions=[cog.bot.user])
         await cog.on_message(msg)
 
-        cog._handle_thread_reply.assert_awaited_once_with(msg)
+        cog._handle_mention.assert_awaited_once_with(msg)
 
     @pytest.mark.asyncio
     async def test_human_thread_with_session_record_still_requires_a_mention(self) -> None:
@@ -1371,39 +1373,36 @@ class TestMentionOnlyChannels:
 
     @pytest.mark.asyncio
     async def test_human_thread_with_session_record_resumes_on_mention(self) -> None:
-        """Re-mentioning the bot in such a thread continues the existing session."""
+        """Re-mentioning the bot in such a thread answers there again."""
         cog = self._make_cog(
             channel_ids={111, 222},
             mention_only_channel_ids={222},
             session_record=MagicMock(),
         )
-        cog._handle_thread_reply = AsyncMock()
+        cog._handle_mention = AsyncMock()
 
         msg = self._make_thread_message(parent_id=222, mentions=[cog.bot.user], owner_id=42)
         await cog.on_message(msg)
 
-        cog._handle_thread_reply.assert_awaited_once_with(msg)
+        cog._handle_mention.assert_awaited_once_with(msg)
 
     @pytest.mark.asyncio
-    async def test_bot_created_thread_continues_without_mention(self) -> None:
-        """Threads ccdb itself opened (session spawn, /fork) stay conversational.
-
-        Discord sets ``Thread.owner_id`` to whoever created the thread, so a
-        thread the bot opened is unambiguously a ccdb session thread — no
-        session-record lookup needed, and no way for a human's own thread to
-        inherit the exemption.
-        """
+    async def test_bot_created_thread_here_also_needs_a_mention(self) -> None:
+        """Owning the thread is not consent: under a mention-only parent, even
+        ccdb's own threads run only when summoned."""
         cog = self._make_cog(
             channel_ids={111, 222},
             mention_only_channel_ids={222},
             session_record=None,
         )
         cog._handle_thread_reply = AsyncMock()
+        cog._handle_mention = AsyncMock()
 
         msg = self._make_thread_message(parent_id=222, owner_id=cog.bot.user.id)
         await cog.on_message(msg)
 
-        cog._handle_thread_reply.assert_awaited_once_with(msg)
+        cog._handle_thread_reply.assert_not_called()
+        cog._handle_mention.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_thread_under_regular_channel_needs_no_mention(self) -> None:
@@ -1493,15 +1492,17 @@ class TestMentionAnywhere:
         return msg
 
     @pytest.mark.asyncio
-    async def test_mention_in_an_unlisted_channel_starts_a_session(self) -> None:
-        """The bot is reachable anywhere by name — listing channels is only for silence."""
+    async def test_mention_in_an_unlisted_channel_answers_in_place(self) -> None:
+        """A mention is a question to answer here, not a session to open elsewhere."""
         cog = self._make_cog(channel_ids={111})
+        cog._handle_mention = AsyncMock()
         cog._handle_new_conversation = AsyncMock()
 
         msg = self._channel_message(channel_id=777, mentions=[cog.bot.user])
         await cog.on_message(msg)
 
-        cog._handle_new_conversation.assert_awaited_once_with(msg)
+        cog._handle_mention.assert_awaited_once_with(msg)
+        cog._handle_new_conversation.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_mention_in_an_unlisted_channel_stays_silent(self) -> None:
@@ -1525,15 +1526,15 @@ class TestMentionAnywhere:
         cog._handle_new_conversation.assert_awaited_once_with(msg)
 
     @pytest.mark.asyncio
-    async def test_mention_in_an_unlisted_thread_is_handled_as_a_thread_reply(self) -> None:
+    async def test_mention_in_an_unlisted_thread_answers_in_that_thread(self) -> None:
         """A mention inside someone else's thread answers *in* that thread."""
         cog = self._make_cog(channel_ids={111})
-        cog._handle_thread_reply = AsyncMock()
+        cog._handle_mention = AsyncMock()
 
         msg = self._thread_message(parent_id=777, mentions=[cog.bot.user])
         await cog.on_message(msg)
 
-        cog._handle_thread_reply.assert_awaited_once_with(msg)
+        cog._handle_mention.assert_awaited_once_with(msg)
 
     @pytest.mark.asyncio
     async def test_no_mention_in_an_unlisted_thread_stays_silent(self) -> None:
@@ -1545,12 +1546,26 @@ class TestMentionAnywhere:
         cog._handle_thread_reply.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_bot_created_thread_anywhere_needs_no_mention(self) -> None:
-        """ccdb's own session threads (/api/spawn, /fork) stay conversational."""
+    async def test_bot_created_thread_outside_the_scope_still_needs_a_mention(self) -> None:
+        """Owning the thread is not consent either — outside the listed channels,
+        every run is summoned explicitly."""
+        cog = self._make_cog(channel_ids={111})
+        cog._handle_thread_reply = AsyncMock()
+        cog._handle_mention = AsyncMock()
+
+        msg = self._thread_message(parent_id=777, owner_id=cog.bot.user.id)
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_not_called()
+        cog._handle_mention.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_thread_under_a_listed_channel_still_needs_no_mention(self) -> None:
+        """Session threads live under the listed channels — those keep flowing."""
         cog = self._make_cog(channel_ids={111})
         cog._handle_thread_reply = AsyncMock()
 
-        msg = self._thread_message(parent_id=777, owner_id=cog.bot.user.id)
+        msg = self._thread_message(parent_id=111, owner_id=cog.bot.user.id)
         await cog.on_message(msg)
 
         cog._handle_thread_reply.assert_awaited_once_with(msg)
@@ -1582,6 +1597,134 @@ class TestMentionAnywhere:
         bot.channel_id = 999
         cog = ClaudeChatCog(bot=bot, repo=MagicMock(), runner=MagicMock())
         assert cog._mention_anywhere is True
+
+
+class TestHandleMention:
+    """A mention is answered *where it was written* — no thread is ever created."""
+
+    def _make_cog(self, *, session_record: object | None = None) -> ClaudeChatCog:
+        bot = MagicMock()
+        bot.channel_id = 999
+        bot.user = MagicMock()
+        bot.user.id = 1111
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=session_record)
+        repo.save = AsyncMock()
+        runner = MagicMock()
+        runner.clone = MagicMock(return_value=MagicMock())
+        cog = ClaudeChatCog(bot=bot, repo=repo, runner=runner, channel_ids={111})
+        cog._run_claude = AsyncMock()
+        return cog
+
+    @staticmethod
+    def _channel_message(channel_id: int = 777) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.id = 7
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = 42
+        msg.type = discord.MessageType.default
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.id = channel_id
+        msg.channel = channel
+        msg.guild = MagicMock()
+        msg.content = "@bot what do you think?"
+        msg.attachments = []
+        msg.create_thread = AsyncMock()
+        return msg
+
+    @staticmethod
+    def _thread_message(thread_id: int = 555, parent_id: int = 777) -> MagicMock:
+        msg = MagicMock(spec=discord.Message)
+        msg.id = 7
+        msg.author = MagicMock()
+        msg.author.bot = False
+        msg.author.id = 42
+        msg.type = discord.MessageType.default
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = thread_id
+        thread.parent_id = parent_id
+        thread.owner_id = 42
+        msg.channel = thread
+        msg.guild = MagicMock()
+        msg.content = "@bot thoughts?"
+        msg.attachments = []
+        msg.create_thread = AsyncMock()
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_channel_mention_never_creates_a_thread(self) -> None:
+        cog = self._make_cog()
+        msg = self._channel_message()
+        with patch(
+            "claude_discord.cogs.claude_chat.build_recent_transcript",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await cog._handle_mention(msg)
+
+        msg.create_thread.assert_not_called()
+        assert cog._run_claude.await_args.args[1] is msg.channel
+
+    @pytest.mark.asyncio
+    async def test_thread_mention_answers_in_the_same_thread(self) -> None:
+        cog = self._make_cog()
+        msg = self._thread_message()
+        with patch(
+            "claude_discord.cogs.claude_chat.build_recent_transcript",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await cog._handle_mention(msg)
+
+        msg.create_thread.assert_not_called()
+        assert cog._run_claude.await_args.args[1] is msg.channel
+
+    @pytest.mark.asyncio
+    async def test_recent_history_of_that_place_is_prepended(self) -> None:
+        """Whatever ccdb is answering in — channel or thread — it reads that place first."""
+        cog = self._make_cog()
+        msg = self._channel_message()
+        with patch(
+            "claude_discord.cogs.claude_chat.build_recent_transcript",
+            new_callable=AsyncMock,
+            return_value="TRANSCRIPT",
+        ) as build:
+            await cog._handle_mention(msg)
+
+        assert build.await_args.args[0] is msg.channel
+        assert build.await_args.kwargs["exclude_message_id"] == msg.id
+        prompt = cog._run_claude.await_args.args[2]
+        assert prompt.startswith("TRANSCRIPT")
+        assert "what do you think?" in prompt
+
+    @pytest.mark.asyncio
+    async def test_existing_session_for_that_place_is_resumed(self) -> None:
+        record = MagicMock()
+        record.session_id = "sess-1"
+        record.working_dir = "/tmp"
+        cog = self._make_cog(session_record=record)
+        cog._session_id_for_current_backend = AsyncMock(return_value="sess-1")
+        with patch(
+            "claude_discord.cogs.claude_chat.build_recent_transcript",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await cog._handle_mention(self._channel_message())
+
+        assert cog._run_claude.await_args.kwargs["session_id"] == "sess-1"
+
+    @pytest.mark.asyncio
+    async def test_transcript_can_be_disabled(self) -> None:
+        cog = self._make_cog()
+        cog._thread_context_days = 0
+        with patch(
+            "claude_discord.cogs.claude_chat.build_recent_transcript",
+            new_callable=AsyncMock,
+        ) as build:
+            await cog._handle_mention(self._channel_message())
+
+        build.assert_not_called()
 
 
 class TestThreadContextInjection:
@@ -1624,7 +1767,7 @@ class TestThreadContextInjection:
     async def test_foreign_thread_history_is_prepended_to_the_prompt(self) -> None:
         cog = self._make_cog()
         with patch(
-            "claude_discord.cogs.claude_chat.build_thread_transcript",
+            "claude_discord.cogs.claude_chat.build_recent_transcript",
             new_callable=AsyncMock,
             return_value="TRANSCRIPT",
         ):
@@ -1639,7 +1782,7 @@ class TestThreadContextInjection:
         """ccdb saw every turn in its own thread — re-sending it would just burn tokens."""
         cog = self._make_cog()
         with patch(
-            "claude_discord.cogs.claude_chat.build_thread_transcript",
+            "claude_discord.cogs.claude_chat.build_recent_transcript",
             new_callable=AsyncMock,
         ) as build:
             await cog._handle_thread_reply(self._thread_message(owner_id=1111))
@@ -1651,7 +1794,7 @@ class TestThreadContextInjection:
         cog = self._make_cog()
         cog._thread_context_days = 0
         with patch(
-            "claude_discord.cogs.claude_chat.build_thread_transcript",
+            "claude_discord.cogs.claude_chat.build_recent_transcript",
             new_callable=AsyncMock,
         ) as build:
             await cog._handle_thread_reply(self._thread_message(owner_id=42))
