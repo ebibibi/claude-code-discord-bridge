@@ -267,6 +267,7 @@ ccdb 3.0 では、Bot を再起動せずにどの AI が次のセッションを
 
 - `/backend [name] [scope]` — バックエンドの表示または切り替え。`name` は `claude` または `codex`。`scope` は `thread`（このスレッドのみ）または `global`（サーバー全体のデフォルト）。`scope` を省略すると自動解決: スレッド内ではそのスレッドにスコープ、それ以外ではグローバルデフォルトを設定。
 - `/model [name] [scope]` — **現在の**バックエンドで使用するモデルの表示または切り替え。各バックエンドは独自のモデル設定を記憶するため、バックエンドを切り替えても好みのモデルが保持されます。バックエンドのモデルを未設定にすると、その CLI 自身のデフォルトに委ねられます（たとえば Codex は `~/.codex/config.toml` の `model` を使用するため、ccdb が特定バージョンに固定せずコンソールのデフォルトに追従します）。
+  `name` のオートコンプリートは**実行時に取得**されます。ccdb が Anthropic のモデル一覧エンドポイントへ（Claude Code CLI がすでに持っている認証情報を使って）アカウントから見えるモデルを問い合わせるため、今朝リリースされたばかりのモデルでも ccdb をアップグレードすることなくドロップダウンに現れます。エイリアス（`opus`、`sonnet` など）には、現時点でそのエイリアスが解決される実際のモデルが併記されます。オフライン時・未認証時・Bedrock/Vertex/Foundry 利用時は、小さな静的リストへ黙ってフォールバックします。`CCDB_MODEL_DISCOVERY=0` を設定すると常にその静的リストを使用します。Codex の候補は静的なままです（Codex CLI はモデル一覧を公開していないため）— 任意の id を直接入力すれば従来どおり動作します。
 - `/effort [level] [scope]` — 現在のバックエンドで使用する**推論の強度**の表示または切り替え。有効なレベルはバックエンドごとに異なり、Claude は `low/medium/high/max`、Codex は `minimal/low/medium/high/xhigh`（CLI の `model_reasoning_effort` にマッピング）を受け付けます。未設定にすると CLI のデフォルトに委ねられます。
 
 3 つのコマンドはいずれも `SettingsRepository` 経由で SQLite に永続化されるため、Bot を再起動しても設定が保持されます。引数なしで呼び出すと、現在のグローバルデフォルトとスレッドごとのオーバーライドを表示します。
@@ -750,6 +751,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CCDB_CODEX_COMMAND` | OpenAI Codex CLI バイナリの明示的なパス。systemd 下で Bot を実行する場合に必須（デフォルトのサービス PATH に `~/.npm-global/bin` が含まれない）。`codex`（PATH）へのフォールバックあり。 | （オプション） |
 | `PATH` | Bot **と Bot が起動する全 CLI セッション**のバイナリ検索パス（セッションは Bot の環境を継承）。systemd はユニットを最小限の PATH で起動し `~/.bashrc` / `~/.profile` を読まないため、systemd 運用時は `.env` に設定する。[ツールチェーンの PATH](#ツールチェーンの-path--env-に設定する) 参照 | （親プロセスから継承） |
 | `CCDB_MODEL` | 使用するモデル（`CLAUDE_MODEL` より優先） | `sonnet` |
+| `CCDB_MODEL_DISCOVERY` | `0` にすると、`/model` のオートコンプリートが Anthropic のモデル一覧エンドポイントへ「この認証情報から見えるモデル」を問い合わせるのをやめ、常に静的な候補リストを使用する。この問い合わせは読み取り専用で、Claude Code CLI 自身の認証情報を再利用し、オフライン時・未認証時・Bedrock/Vertex/Foundry 利用時には自動的にフォールバックする | `1` |
 | `CCDB_PERMISSION_MODE` | CLI のパーミッションモード（`CLAUDE_PERMISSION_MODE` より優先） | `acceptEdits` |
 | `CCDB_DANGEROUSLY_SKIP_PERMISSIONS` | 全パーミッションチェックをスキップ（`CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` より優先） | `false` |
 | `CCDB_WORKING_DIR` | CLI の作業ディレクトリ（`CLAUDE_WORKING_DIR` より優先） | カレントディレクトリ |
