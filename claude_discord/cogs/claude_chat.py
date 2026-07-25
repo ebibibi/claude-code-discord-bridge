@@ -272,19 +272,29 @@ class ClaudeChatCog(commands.Cog):
         """Return whether a thread message may start/continue a Claude session.
 
         Threads under a mention-only channel inherit that channel's policy: a
-        thread a human created there is not an invitation to run Claude.  Two
-        escape hatches keep existing behaviour intact:
+        thread a human created there is not an invitation to run Claude, and it
+        does not become one just because Claude was once summoned into it.  Two
+        escape hatches keep bot-driven work intact:
 
         * the bot is explicitly @mentioned, or
-        * ccdb already owns the thread (a session record exists), which covers
-          bot-created session threads and ``/api/spawn`` threads.
+        * the bot itself created the thread — Discord sets ``Thread.owner_id``
+          to the creator, so session threads opened by ``_handle_new_conversation``,
+          ``/fork`` and ``/api/spawn`` are unambiguously ccdb's own and stay
+          conversational.
+
+        Note the exemption is deliberately *not* "a session record exists":
+        human threads that were woken once with a mention keep their record
+        forever, which turned every later message — including ones addressed to
+        other people in the thread — into a new Claude run.
         """
         parent_id = getattr(message.channel, "parent_id", None)
         if parent_id not in self._mention_only_channel_ids:
             return True
-        if self.bot.user is not None and self.bot.user in message.mentions:
+        if self.bot.user is None:
+            return False
+        if self.bot.user in message.mentions:
             return True
-        return await self.repo.get(message.channel.id) is not None
+        return getattr(message.channel, "owner_id", None) == self.bot.user.id
 
     async def _build_runner_for_thread(
         self,

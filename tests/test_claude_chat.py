@@ -1292,7 +1292,11 @@ class TestMentionOnlyChannels:
         cog._handle_new_conversation.assert_awaited_once_with(msg)
 
     @staticmethod
-    def _make_thread_message(parent_id: int, mentions: list | None = None) -> MagicMock:
+    def _make_thread_message(
+        parent_id: int,
+        mentions: list | None = None,
+        owner_id: int = 42,
+    ) -> MagicMock:
         msg = MagicMock(spec=discord.Message)
         msg.author = MagicMock()
         msg.author.bot = False
@@ -1302,6 +1306,7 @@ class TestMentionOnlyChannels:
         thread = MagicMock(spec=discord.Thread)
         thread.id = 55555
         thread.parent_id = parent_id
+        thread.owner_id = owner_id  # 42 = a human created the thread
         msg.channel = thread
         msg.content = "reply"
         msg.attachments = []
@@ -1345,18 +1350,57 @@ class TestMentionOnlyChannels:
         cog._handle_thread_reply.assert_awaited_once_with(msg)
 
     @pytest.mark.asyncio
-    async def test_known_thread_under_mention_only_channel_continues_without_mention(
-        self,
-    ) -> None:
-        """Threads ccdb already owns keep working without a mention on every reply."""
+    async def test_human_thread_with_session_record_still_requires_a_mention(self) -> None:
+        """A past session in a human's thread is not standing consent to keep listening.
+
+        Regression: once a human-created thread had been woken with a single
+        @mention, the session record made every later message in that thread
+        start Claude again — including messages meant for the other humans in
+        the thread.  Mention-only must mean mention-only, every time.
+        """
         cog = self._make_cog(
             channel_ids={111, 222},
             mention_only_channel_ids={222},
-            session_record=MagicMock(),  # existing session for this thread
+            session_record=MagicMock(),  # ccdb ran here before
         )
         cog._handle_thread_reply = AsyncMock()
 
-        msg = self._make_thread_message(parent_id=222)
+        await cog.on_message(self._make_thread_message(parent_id=222, owner_id=42))
+
+        cog._handle_thread_reply.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_human_thread_with_session_record_resumes_on_mention(self) -> None:
+        """Re-mentioning the bot in such a thread continues the existing session."""
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+            session_record=MagicMock(),
+        )
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_thread_message(parent_id=222, mentions=[cog.bot.user], owner_id=42)
+        await cog.on_message(msg)
+
+        cog._handle_thread_reply.assert_awaited_once_with(msg)
+
+    @pytest.mark.asyncio
+    async def test_bot_created_thread_continues_without_mention(self) -> None:
+        """Threads ccdb itself opened (session spawn, /fork) stay conversational.
+
+        Discord sets ``Thread.owner_id`` to whoever created the thread, so a
+        thread the bot opened is unambiguously a ccdb session thread — no
+        session-record lookup needed, and no way for a human's own thread to
+        inherit the exemption.
+        """
+        cog = self._make_cog(
+            channel_ids={111, 222},
+            mention_only_channel_ids={222},
+            session_record=None,
+        )
+        cog._handle_thread_reply = AsyncMock()
+
+        msg = self._make_thread_message(parent_id=222, owner_id=cog.bot.user.id)
         await cog.on_message(msg)
 
         cog._handle_thread_reply.assert_awaited_once_with(msg)
