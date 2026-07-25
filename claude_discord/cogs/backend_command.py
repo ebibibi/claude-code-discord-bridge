@@ -28,6 +28,7 @@ from ..backend_settings import (
     CODEX_STATUS_MODES,
     BackendSettings,
 )
+from ..model_catalog import claude_model_choices
 
 if TYPE_CHECKING:
     from ..backend_factory import BackendFactory
@@ -59,12 +60,17 @@ EFFORT_ORDER: dict[str, list[str]] = {
 # convenience suggestions surfaced in the dropdown, not an enforced allowlist.
 # Codex model defaults live in ~/.codex/config.toml; ccdb never pins one, so the
 # Codex suggestions are common ids only (typing any other id still works).
+#
+# The Claude entry is a *fallback*: normally the suggestions are discovered live
+# (see model_catalog), so a new model shows up without a ccdb release. It is
+# deliberately version-free — a hardcoded "Opus 4.8" is exactly the staleness
+# this list used to cause when discovery isn't possible (offline, no creds).
 SUGGESTED_MODELS: dict[str, list[tuple[str, str]]] = {
     "claude": [
-        ("haiku", "Haiku 4.5 (fast, cost-effective)"),
-        ("sonnet", "Sonnet 4.6 (balanced)"),
-        ("opus", "Opus 4.8 (powerful, deep reasoning)"),
-        ("fable", "Fable 5 (state-of-the-art, token-efficient)"),
+        ("haiku", "fastest, cheapest (alias — newest Haiku)"),
+        ("sonnet", "balanced (alias — newest Sonnet)"),
+        ("opus", "most capable (alias — newest Opus)"),
+        ("fable", "token-efficient frontier (alias — newest Fable)"),
     ],
     "codex": [
         ("gpt-5.6-sol", "GPT-5.6 SOL (current Codex console default)"),
@@ -262,11 +268,19 @@ class BackendCommandCog(commands.Cog):
         interaction: discord.Interaction,
         current: str,
     ) -> list[Choice[str]]:
-        """Suggest models for the active backend, filtered by what's typed."""
+        """Suggest models for the active backend, filtered by what's typed.
+
+        Claude suggestions are discovered live so a newly launched model appears
+        without a ccdb release; discovery falls back to ``SUGGESTED_MODELS``.
+        """
         backend = await self._backend_for_autocomplete(interaction)
+        if backend == "claude":
+            suggestions = await claude_model_choices(fallback=SUGGESTED_MODELS["claude"])
+        else:
+            suggestions = SUGGESTED_MODELS.get(backend, [])
         current_lower = current.lower()
         choices: list[Choice[str]] = []
-        for value, desc in SUGGESTED_MODELS.get(backend, []):
+        for value, desc in suggestions:
             if current_lower and current_lower not in value.lower():
                 continue
             label = f"{value} — {desc}"

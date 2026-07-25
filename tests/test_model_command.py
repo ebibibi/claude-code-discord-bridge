@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 import aiosqlite
 import discord
+import pytest
 
 from claude_discord.backend_factory import BackendFactory
 from claude_discord.backend_settings import BackendSettings
@@ -24,6 +25,20 @@ from claude_discord.cogs.backend_command import (
     BackendCommandCog,
 )
 from claude_discord.database.settings_repo import SettingsRepository
+
+
+@pytest.fixture(autouse=True)
+def _offline_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the suite off the network: discovery degrades to the static list.
+
+    Live discovery has its own tests in ``test_model_catalog.py``; here we only
+    care that the autocomplete surfaces whatever it is handed.
+    """
+
+    async def _fallback_only(*, fallback: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        return fallback
+
+    monkeypatch.setattr("claude_discord.cogs.backend_command.claude_model_choices", _fallback_only)
 
 
 async def _new_settings_repo() -> SettingsRepository:
@@ -87,6 +102,39 @@ class TestModelAutocomplete:
         assert {"haiku", "sonnet", "opus", "fable"} <= values
         # No Codex models leaked in.
         assert not any(v.startswith("gpt-") for v in values)
+
+    async def test_claude_backend_surfaces_discovered_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model that shipped after this release must appear without a code change."""
+
+        async def _discovered(*, fallback: list[tuple[str, str]]) -> list[tuple[str, str]]:
+            return [("opus", "Claude Opus 5 (alias)"), ("claude-opus-5", "Claude Opus 5")]
+
+        monkeypatch.setattr("claude_discord.cogs.backend_command.claude_model_choices", _discovered)
+        settings = await _settings()
+        cog = _make_cog(settings)
+
+        choices = await cog._model_name_autocomplete(_channel_interaction(), "")
+
+        assert [c.value for c in choices] == ["opus", "claude-opus-5"]
+
+    async def test_codex_backend_ignores_claude_discovery(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Codex must never be handed Claude ids, discovered or otherwise."""
+
+        async def _discovered(*, fallback: list[tuple[str, str]]) -> list[tuple[str, str]]:
+            raise AssertionError("Claude discovery must not run for the Codex backend")
+
+        monkeypatch.setattr("claude_discord.cogs.backend_command.claude_model_choices", _discovered)
+        settings = await _settings()
+        await settings.set_backend("codex")
+        cog = _make_cog(settings)
+
+        choices = await cog._model_name_autocomplete(_channel_interaction(), "")
+
+        assert {c.value for c in choices} == {m for m, _ in SUGGESTED_MODELS["codex"]}
 
     async def test_codex_backend_suggests_codex_models(self) -> None:
         settings = await _settings()
