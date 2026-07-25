@@ -38,7 +38,7 @@ from ..discord_ui.chunker import chunk_message
 from ..discord_ui.embeds import stopped_embed
 from ..discord_ui.file_sender import send_file_blobs
 from ..discord_ui.status import StatusManager
-from ..discord_ui.thread_context import DEFAULT_DAYS, build_thread_transcript
+from ..discord_ui.thread_context import DEFAULT_DAYS, build_recent_transcript
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.thread_renamer import suggest_title
 from ..discord_ui.views import RewindSelectView, StopView
@@ -243,13 +243,19 @@ class ClaudeChatCog(commands.Cog):
         if self._allowed_user_ids is not None and message.author.id not in self._allowed_user_ids:
             return
 
-        if not self._should_respond(message):
+        # Inside a no-mention channel (or a thread under it) everything is for
+        # Claude, and the session model applies: a channel message opens a
+        # thread, a thread message continues that thread's session.
+        if self._is_no_mention_scope(message.channel):
+            if isinstance(message.channel, discord.Thread):
+                await self._handle_thread_reply(message)
+            else:
+                await self._handle_new_conversation(message)
             return
 
-        if isinstance(message.channel, discord.Thread):
-            await self._handle_thread_reply(message)
-        else:
-            await self._handle_new_conversation(message)
+        # Everywhere else: answer only when summoned, and answer *there*.
+        if self._is_summoned(message):
+            await self._handle_mention(message)
 
     def _is_no_mention_scope(self, channel: discord.abc.MessageableChannel) -> bool:
         """Return whether *channel* is one ccdb was invited to speak in freely.
@@ -266,35 +272,14 @@ class ClaudeChatCog(commands.Cog):
             return True
         return self._monitor_all_channels and getattr(channel, "guild", None) is not None
 
-    def _should_respond(self, message: discord.Message) -> bool:
-        """Return whether this message may start or continue a Claude session.
+    def _is_summoned(self, message: discord.Message) -> bool:
+        """Return whether this message explicitly @mentions the bot.
 
-        The policy is deny-by-default, and it is the *silence* that is
-        configured rather than the speech: ccdb speaks freely only in the
-        channels it was explicitly invited into, and everywhere else in the
-        guild it answers when — and only when — someone @mentions it. That way
-        a channel or thread nobody thought about is quiet by construction, and
-        the bot is still reachable by name from anywhere without a config change.
-
-        Three ways in:
-
-        * the message is in a **no-mention scope** (see ``_is_no_mention_scope``),
-        * the bot is **@mentioned in this message** — every message, so summoning
-          Claude once into a human thread never signs that thread up for good, or
-        * the thread was **created by the bot itself** (`Thread.owner_id`), which
-          is what a ccdb session thread is: `_handle_new_conversation`, `/fork`
-          and `/api/spawn` all open their own thread.
+        Outside the no-mention channels this is the *only* way in — including in
+        threads ccdb created itself.  Owning a thread is not standing consent:
+        people keep talking in these threads to each other, and a run they did
+        not ask for is noise at best.  Every run out here is summoned by name.
         """
-        if self._is_no_mention_scope(message.channel):
-            return True
-
-        if (
-            isinstance(message.channel, discord.Thread)
-            and self.bot.user is not None
-            and getattr(message.channel, "owner_id", None) == self.bot.user.id
-        ):
-            return True
-
         if not self._mention_anywhere:
             return False
         # A mention only carries a channel policy inside a guild — stay out of DMs.
@@ -694,6 +679,53 @@ class ClaudeChatCog(commands.Cog):
             f"🔀 Forked! Continue in {new_thread.mention} — this thread is unchanged."
         )
 
+    async def _handle_mention(self, message: discord.Message) -> None:
+        """Answer an @mention **in the place it was written** — never in a new thread.
+
+        This is deliberately not the session flow.  A mention outside the
+        no-mention channels is someone in a conversation turning to Claude for
+        an answer, so spinning off a thread would move the answer away from the
+        discussion that prompted it and leave a session running somewhere nobody
+        is reading.  Instead ccdb reads the recent history of that exact channel
+        or thread, answers there, and goes quiet again until the next mention.
+        """
+        channel = message.channel
+        if not isinstance(channel, (discord.Thread, discord.TextChannel)):
+            return  # voice/DM/forum-root: nothing sensible to reply into
+        prompt, images = await self._build_prompt_and_images(message)
+
+        if self._thread_context_days > 0:
+            transcript = await build_recent_transcript(
+                channel,
+                days=self._thread_context_days,
+                exclude_message_id=message.id,
+            )
+            if transcript:
+                prompt = f"{transcript}\n\n---\n\n{prompt}"
+
+        # Nothing to send — ignore silently (e.g. unsupported attachment only).
+        if not prompt and not images:
+            return
+
+        # Resume whatever session already belongs to this place, so a follow-up
+        # mention continues the same work rather than starting from scratch.
+        record = await self.repo.get(channel.id)
+        session_id = record.session_id if record else None
+        if record is not None and session_id:
+            session_id = await self._session_id_for_current_backend(channel, record)
+
+        root_id = channel.parent_id if isinstance(channel, discord.Thread) else channel.id
+        await self._run_claude(
+            message,
+            channel,
+            prompt,
+            session_id=session_id,
+            images=images,
+            working_dir_override=record.working_dir if record else None,
+            chat_only=(root_id or 0) in self._chat_only_channel_ids,
+            interrupt_existing=True,
+        )
+
     async def _handle_new_conversation(self, message: discord.Message) -> None:
         """Start a Claude Code session, creating a thread unless inline-reply mode is active."""
         prompt, images = await self._build_prompt_and_images(message)
@@ -1036,7 +1068,7 @@ class ClaudeChatCog(commands.Cog):
         # there, so re-sending them would only burn tokens.
         bot_owned = self.bot.user is not None and thread.owner_id == self.bot.user.id
         if not bot_owned and self._thread_context_days > 0:
-            transcript = await build_thread_transcript(
+            transcript = await build_recent_transcript(
                 thread,
                 days=self._thread_context_days,
                 exclude_message_id=message.id,
@@ -1087,9 +1119,12 @@ class ClaudeChatCog(commands.Cog):
         )
 
     async def _session_id_for_current_backend(
-        self, thread: discord.Thread, record: SessionRecord
+        self, thread: discord.Thread | discord.TextChannel, record: SessionRecord
     ) -> str | None:
         """Return the stored session ID, or ``None`` when the backend changed.
+
+        *thread* is whatever the session is keyed on — a thread, or the channel
+        itself for the in-place mention flow.
 
         A global ``/backend`` switch does not touch per-thread session records
         (only a thread-scoped switch does), so a thread can end up holding a
