@@ -95,6 +95,22 @@ class TestCodexRunnerBuildArgs:
         assert "--cd" in args or "-C" in args
         assert "/tmp/work" in args
 
+    def test_skip_git_repo_check_always_present(self) -> None:
+        """Working dirs are frequently plain folders, not git repos (e.g. the
+        default CLAUDE_WORKING_DIR). Codex CLI refuses to run outside a git
+        repo unless told otherwise, so ccdb must always pass this flag —
+        Claude Code has no such restriction, and ccdb aims to be backend-
+        agnostic from the user's point of view.
+        """
+        runner = CodexRunner(command="codex", model="o4-mini")
+        args = runner._build_args("hello", session_id=None)
+        assert "--skip-git-repo-check" in args
+
+    def test_skip_git_repo_check_present_on_resume(self) -> None:
+        runner = CodexRunner(command="codex", model="o4-mini")
+        args = runner._build_args("hello", session_id="0199a213-81c0-7800-8aa1-bbab2a035a53")
+        assert "--skip-git-repo-check" in args
+
     def test_prompt_is_not_in_args(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini")
         args = runner._build_args("hello world", session_id=None)
