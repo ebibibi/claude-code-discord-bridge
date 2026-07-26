@@ -472,6 +472,11 @@ class CodexRunner:
             args.append("resume")
 
         args.append("--json")
+        # ccdb's working directories are frequently plain folders, not git
+        # repos (e.g. the default CLAUDE_WORKING_DIR). Codex CLI refuses to
+        # run outside a git repo unless told otherwise; Claude Code has no
+        # such restriction, so this keeps the two backends interchangeable.
+        args.append("--skip-git-repo-check")
         if self.model:
             args.extend(["--model", self.model])
         if self.effort:
