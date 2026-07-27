@@ -236,6 +236,35 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 
 이 엔드포인트는 옵트인 방식입니다: `ingest_token`이 구성되지 않으면 `POST`는 `503`을 반환합니다. 결과 조회를 사용할 수 없으면 `POST`는 단순히 `result_id`를 생략하고 `GET /api/ingest/{id}`는 `503`을 반환합니다 — 스폰 동작은 그 외에는 변경되지 않습니다. 요청 본문과 첨부 파일은 결과 저장소에 **저장되지 않습니다**(상태, 최종 텍스트, 스레드 ID만); 결과는 최대 200개 행으로 제한됩니다.
 
+#### 검증된 첨부 파일 전달 (`attachments_manifest`)
+
+클라이언트 쪽에서 첨부 파일이 사라져도 예전에는 아무도 알아챌 수 없었습니다. ccdb는 건네받은 것을 저장하고 아무도 대조할 수 없는 개수를 보고했기 때문에, 세션은 받은 적 없는 파일을 가진 것처럼 답변했습니다. **매니페스트**를 보내면 ccdb는 전달을 가정하는 대신 **검증**합니다 — 원본에서 찾은 첨부 파일마다 한 항목씩 나열하고, 그 바이트가 이 요청에 포함되어 있는지를 `status`로 알려주세요:
+
+```bash
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "답장 초안을 작성해 줘",
+       "attachments": [{"filename": "bundle.zip", "data": "<base64>"}],
+       "attachments_manifest": [
+         {"name": "shot.png",  "status": "embedded", "sha256": "…", "message": "返信 11"},
+         {"name": "debug.log", "status": "linked", "url": "https://…", "message": "返信 12",
+          "reason": "SharePoint download returned 403"}
+       ]}'
+# → {"status": "spawned", …, "attachments": {"verified": true, "complete": false,
+#      "missing": [], "not_delivered": [{"name": "debug.log", "message": "返信 12", …}]}}
+```
+
+| `status` | 의미 |
+|---|---|
+| `embedded`(기본값) | 바이트가 이 요청에 포함됨 — ccdb는 대응하는 파일을 찾을 것으로 기대함 |
+| `linked` | URL만 얻음(호스트 권한 없음, 인증 벽 등) |
+| `skipped` | 의도적으로 보내지 않음(크기 제한, 필터링됨) |
+| `failed` | 캡처 또는 다운로드 실패 |
+
+ccdb는 각 `embedded` 항목을 실제 전달된 파일과 **sha256 우선**, 그다음 파일명 완전 일치, 그다음 번들러가 이름 충돌 시 붙이는 `4_image.png` 인덱스 접두사, 마지막으로 크기 순으로 대조합니다. 각 파일은 최대 한 번만 소비되므로 `image.png`라는 이름의 첨부 두 개가 도착한 파일 하나를 동시에 자기 것이라 주장할 수 없습니다. 설명되지 않은 것은 네 가지 경로로 드러납니다: **세션 프롬프트 최상단**의 ⚠️ 블록(누락된 파일을 나열하고 그 내용을 지어내지 말라고 세션에 지시하며, 최신 메시지에서 손실이 발생한 경우 별도 안내가 추가됨), 파일 옆에 기록되는 `ATTACHMENTS-REPORT.md` 원장, 위 응답의 `attachments` 판정, 그리고 로그의 `WARNING`입니다. `message`를 함께 보내면 프롬프트의 경로 목록이 원본 메시지 단위로 묶이고, 가장 최신 그룹이 먼저 읽어야 할 것으로 표시됩니다.
+
+`CCDB_INGEST_REQUIRE_COMPLETE=1`(또는 `ingest_require_complete=True`)을 설정하면 손실이 있는 인제스트를 불완전한 근거로 세션을 시작하는 대신 `409`로 **거부**합니다 — 첨부 파일 자체가 요청의 본체인 경우에 적합합니다. 매니페스트를 아예 생략하면 아무것도 달라지지 않습니다: 해당 인제스트는 `verified: false`로 보고되며, 검증 완료로 보고되는 일은 결코 없습니다.
+
 ### 시작 재개
 
 봇이 세션 도중 재시작되면, 중단된 Claude 세션이 봇이 다시 온라인이 될 때 자동으로 재개됩니다. 세션은 세 가지 방법으로 재개 대상으로 표시됩니다:
@@ -739,6 +768,8 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CCDB_LOG_FILE` | 로그 파일 경로. 설정 시 기본 stdout 핸들러에 더해 순환 파일 핸들러(10 MB × 5 백업)가 추가됨. 모니터링 및 알림에 유용. | (선택) |
 | `API_HOST` | REST API 바인드 주소 | `127.0.0.1` |
 | `API_PORT` | REST API 포트(설정 시 REST API 활성화) | (선택) |
+| `CCDB_INGEST_TOKEN` | `POST /api/ingest`용 Bearer 토큰(`api_secret`과 독립); 미설정 시 이 엔드포인트는 `503`을 반환 | (선택) |
+| `CCDB_INGEST_REQUIRE_COMPLETE` | `1`로 설정하면 `attachments_manifest`가 첨부 파일 누락을 입증할 때, 불완전한 근거로 세션을 시작하는 대신 `409`로 인제스트를 거부 | `0` |
 
 ### 권한 모드 — `-p` 모드에서 작동하는 것
 
@@ -1089,6 +1120,7 @@ claude_discord/
     thread_renamer.py      # suggest_title() — background claude -p call for auto thread naming
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
+    ingest_manifest.py     # attachments_manifest와 실제 전달된 파일의 대조
   utils/
     logger.py              # Logging setup
 examples/

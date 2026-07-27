@@ -236,6 +236,35 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 
 L'endpoint est opt-in : sans `ingest_token` configuré, `POST` répond `503`. Lorsque la récupération de résultats est indisponible, `POST` omet simplement `result_id` et `GET /api/ingest/{id}` renvoie `503` — le comportement de spawn est par ailleurs inchangé. Le corps de la requête et les pièces jointes ne sont **pas** persistés dans le magasin de résultats (seulement le statut, le texte final et l'ID du fil) ; les résultats sont plafonnés à 200 lignes.
 
+#### Livraison de pièces jointes vérifiée (`attachments_manifest`)
+
+Une pièce jointe perdue côté client était jusqu'ici invisible : ccdb enregistrait ce qu'on lui donnait et annonçait un décompte que personne ne pouvait vérifier, si bien qu'une session répondait comme si elle disposait d'un fichier qu'elle n'avait jamais reçu. Envoyez un **manifeste** et ccdb **vérifie** la livraison au lieu de la présumer — une entrée par pièce jointe repérée en amont, avec `status` indiquant si ses octets figurent dans cette requête :
+
+```bash
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "Rédige une réponse",
+       "attachments": [{"filename": "bundle.zip", "data": "<base64>"}],
+       "attachments_manifest": [
+         {"name": "shot.png",  "status": "embedded", "sha256": "…", "message": "返信 11"},
+         {"name": "debug.log", "status": "linked", "url": "https://…", "message": "返信 12",
+          "reason": "SharePoint download returned 403"}
+       ]}'
+# → {"status": "spawned", …, "attachments": {"verified": true, "complete": false,
+#      "missing": [], "not_delivered": [{"name": "debug.log", "message": "返信 12", …}]}}
+```
+
+| `status` | Signification |
+|---|---|
+| `embedded` (par défaut) | Les octets sont dans cette requête — ccdb s'attend à trouver un fichier correspondant |
+| `linked` | Seule une URL a pu être obtenue (pas de permission sur l'hôte, mur d'authentification, …) |
+| `skipped` | Délibérément non envoyé (limite de taille, filtré) |
+| `failed` | La capture ou le téléchargement a échoué |
+
+ccdb rapproche chaque entrée `embedded` d'un fichier livré en utilisant **d'abord le sha256**, puis le nom exact, puis le préfixe d'index de type `4_image.png` qu'un empaqueteur ajoute en cas de collision de noms, et enfin la taille — chaque fichier n'étant consommé qu'une seule fois, deux pièces jointes nommées `image.png` ne peuvent pas revendiquer toutes les deux l'unique fichier arrivé. Tout ce qui reste inexpliqué est signalé de quatre façons : un bloc ⚠️ **en tête du prompt de la session** qui nomme les fichiers manquants et enjoint à la session de ne pas inventer leur contenu (avec une mention supplémentaire lorsque la perte concerne le message le plus récent), un registre `ATTACHMENTS-REPORT.md` écrit à côté des fichiers, le verdict `attachments` dans la réponse ci-dessus, et un `WARNING` dans le log. Fournir `message` regroupe également la liste des chemins du prompt par message d'origine et marque le groupe le plus récent comme celui à lire en premier.
+
+Définissez `CCDB_INGEST_REQUIRE_COMPLETE=1` (ou `ingest_require_complete=True`) pour **refuser** une ingestion lacunaire avec un `409` plutôt que de démarrer une session sur des preuves partielles — pertinent lorsque les pièces jointes *sont* la requête. Omettez complètement le manifeste et rien ne change : l'ingestion est rapportée comme `verified: false`, jamais comme vérifiée-complète.
+
 ### Reprise au Démarrage
 
 Si le bot redémarre en pleine session, les sessions Claude interrompues sont automatiquement reprises quand le bot revient en ligne. Les sessions sont marquées pour reprise de trois façons :
@@ -739,6 +768,8 @@ En mode chat uniquement, les demandes de permission et les invites `AskUserQuest
 | `CCDB_LOG_FILE` | Chemin vers un fichier de log. Quand défini, un gestionnaire de fichier rotatif (10 Mo × 5 sauvegardes) est ajouté en plus du gestionnaire stdout par défaut. Utile pour la surveillance et les alertes. | (optionnel) |
 | `API_HOST` | Adresse de liaison de l'API REST | `127.0.0.1` |
 | `API_PORT` | Port de l'API REST (active l'API REST quand défini) | (optionnel) |
+| `CCDB_INGEST_TOKEN` | Jeton Bearer pour `POST /api/ingest` (indépendant de `api_secret`) ; non défini ⇒ l'endpoint répond `503` | (optionnel) |
+| `CCDB_INGEST_REQUIRE_COMPLETE` | Mettre à `1` pour refuser une ingestion avec un `409` quand son `attachments_manifest` prouve que des pièces jointes ont été perdues, au lieu de démarrer une session sur des preuves partielles | `0` |
 
 ### Modes de Permission — Ce Qui Fonctionne en Mode `-p`
 
@@ -1089,6 +1120,7 @@ claude_discord/
     thread_renamer.py      # suggest_title() — background claude -p call for auto thread naming
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
+    ingest_manifest.py     # Rapproche attachments_manifest des fichiers livrés
   utils/
     logger.py              # Logging setup
 examples/
