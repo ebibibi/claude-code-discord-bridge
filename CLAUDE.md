@@ -253,6 +253,7 @@ claude_discord/          # Installable Python package
     thread_renamer.py    # suggest_title() — background claude -p call for auto thread renaming
   ext/
     api_server.py        # REST API server (optional, requires aiohttp)
+    ingest_manifest.py   # Reconciles attachments_manifest against delivered files
   utils/
     logger.py            # Logging setup
 tests/                   # pytest test suite

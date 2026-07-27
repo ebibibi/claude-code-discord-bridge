@@ -243,6 +243,35 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 
 このエンドポイントはオプトイン方式です。`ingest_token` が設定されていない場合、`POST` は `503` を返します。結果取得が利用できない場合、`POST` は `result_id` を省略し、`GET /api/ingest/{id}` は `503` を返します — スポーン動作は変わりません。リクエスト本文と添付ファイルは結果ストアに保存されません（状態、最終テキスト、スレッド ID のみ）。結果は最大 200 件です。
 
+#### 添付ファイル到達の検証 (`attachments_manifest`)
+
+クライアント側で添付ファイルが失われても、従来はそれが見えませんでした。ccdb は渡されたものを保存し、誰も検証できない件数を報告するだけだったため、セッションは受け取っていないファイルを持っているかのように回答してしまいます。**マニフェスト**を送れば、ccdb は到達を推測ではなく検証します — 上流で見つけた添付ごとに 1 エントリを送り、`status` でそのバイト列がこのリクエストに含まれるかどうかを ccdb に伝えます:
+
+```bash
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "返信を作成して",
+       "attachments": [{"filename": "bundle.zip", "data": "<base64>"}],
+       "attachments_manifest": [
+         {"name": "shot.png",  "status": "embedded", "sha256": "…", "message": "返信 11"},
+         {"name": "debug.log", "status": "linked", "url": "https://…", "message": "返信 12",
+          "reason": "SharePoint download returned 403"}
+       ]}'
+# → {"status": "spawned", …, "attachments": {"verified": true, "complete": false,
+#      "missing": [], "not_delivered": [{"name": "debug.log", "message": "返信 12", …}]}}
+```
+
+| `status` | 意味 |
+|---|---|
+| `embedded`（デフォルト） | バイト列がこのリクエストに含まれる — ccdb は一致するファイルが届いていることを期待する |
+| `linked` | URL しか取得できなかった（ホストの権限がない、認証の壁など） |
+| `skipped` | 意図的に送らなかった（サイズ上限、フィルタ除外） |
+| `failed` | 取得またはダウンロードに失敗した |
+
+ccdb は各 `embedded` エントリを、届いたファイルに対して **sha256 を最優先**に、次に完全一致するファイル名、次にバンドラーが名前衝突時に付ける `4_image.png` 形式のインデックス接頭辞、最後にサイズ、の順で突合します。各ファイルは高々 1 回しか消費されないため、`image.png` という名前の添付 2 件が、実際に届いた 1 ファイルを両方とも「一致」と主張することはできません。説明のつかない不足は 4 通りで表面化します: 欠落したファイル名を挙げ、その内容を推測で補わないようセッションに指示する ⚠️ ブロックを**セッションプロンプトの先頭**に置き（最新メッセージ側で失われた場合は別途警告を追加）、ファイルの隣に `ATTACHMENTS-REPORT.md` の台帳を書き出し、上記レスポンスの `attachments` 判定を返し、ログに `WARNING` を出します。`message` を指定すると、プロンプトのパス一覧が上流メッセージごとにグループ化され、最新グループが最初に読むべきものとして印されます。
+
+`CCDB_INGEST_REQUIRE_COMPLETE=1`（または `ingest_require_complete=True`）を設定すると、欠落のあるインジェストは部分的な証拠でセッションを開始せず、`409` で**拒否**されます — 添付ファイルそのものが依頼の本体である用途に適しています。マニフェストを完全に省略した場合は何も変わりません: そのインジェストは `verified: false` として報告され、検証済みで完全とは決して報告されません。
+
 #### 長時間続くインジェストスレッドの継続サマリー (`/api/ingest/summary`)
 
 上流スレッド（特に Teams ブラウザ拡張機能）で何ヶ月も返信し続けるインジェストクライアントは、本来なら実行のたびに全履歴を再エクスポートしなければなりません — ccdb の「スレッド = セッション」モデルは、インジェストごとに*新しい* Discord スレッド + Claude セッションを起動し、上流スレッドについて何も覚えていないからです。クライアントが供給する安定した `summary_key`（例: 上流スレッドのルートメッセージ ID）をキーとするコンパクトな**継続サマリー**をオプトインすれば、新しい `thread_summaries` テーブルに保存され、クライアントは**差分**だけを送りつつ、セッションは完全な履歴コンテキストを受け取れます:
@@ -782,6 +811,8 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CCDB_LOG_FILE` | ログファイルのパス。設定するとデフォルトの stdout ハンドラに加えてローテーティングファイルハンドラ（10 MB × 5 バックアップ）が追加される。監視・アラートに便利 | （オプション） |
 | `API_HOST` | REST API バインドアドレス | `127.0.0.1` |
 | `API_PORT` | REST API ポート（設定すると REST API が有効になる） | （オプション） |
+| `CCDB_INGEST_TOKEN` | `POST /api/ingest` 用の Bearer トークン（`api_secret` とは独立）。未設定ならこのエンドポイントは `503` を返す | （オプション） |
+| `CCDB_INGEST_REQUIRE_COMPLETE` | `1` を設定すると、`attachments_manifest` によって添付ファイルの欠落が判明したインジェストを、部分的な証拠でセッションを開始せずに `409` で拒否する | `0` |
 
 ### パーミッションモード — `-p` モードで動作するもの
 
@@ -1138,6 +1169,7 @@ claude_discord/
     thread_renamer.py      # suggest_title() — スレッド自動リネーム用バックグラウンド claude -p 呼び出し
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）
+    ingest_manifest.py     # attachments_manifest と実際に届いたファイルの突合
   utils/
     logger.py              # ロギング設定
 examples/
