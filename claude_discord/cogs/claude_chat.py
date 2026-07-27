@@ -655,12 +655,17 @@ class ClaudeChatCog(commands.Cog):
             isinstance(message.channel, discord.TextChannel)
             and message.channel.id in self._inline_reply_channel_ids
         ):
-            # Inline-reply mode: respond directly in the channel without creating a thread.
+            # Inline-reply mode: respond directly in the channel without creating
+            # a thread. Every message in such a channel lands here, so resume the
+            # session stored against the channel id — otherwise the conversation
+            # would restart cold on each message, which threads never do (see
+            # _handle_thread_reply). The channel is the conversation; /clear ends it.
+            record = await self.repo.get(message.channel.id)
             await self._run_claude(
                 message,
                 message.channel,
                 prompt,
-                session_id=None,
+                session_id=record.session_id if record else None,
                 images=images,
                 chat_only=chat_only,
             )
