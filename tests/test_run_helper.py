@@ -21,6 +21,7 @@ from claude_discord.claude.types import (
 from claude_discord.cogs import _run_helper as _rh_module
 from claude_discord.cogs._run_helper import (
     TOOL_RESULT_MAX_CHARS,
+    _build_system_context,
     _make_error_embed,
     _truncate_result,
     configure_session_limit,
@@ -1895,3 +1896,111 @@ class TestResultSink:
         config = RunConfig(thread=thread, runner=runner, prompt="hi")
         # Must not raise when result_sink is None.
         await run_claude_with_config(config)
+
+
+class TestLoungeInjectionGate:
+    """The lounge block is only useful when the REST API it depends on is up."""
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        t.id = 77777
+        return t
+
+    def _lounge_repo(self) -> MagicMock:
+        repo = MagicMock()
+        repo.get_recent = AsyncMock(return_value=[])
+        return repo
+
+    def _runner(self, api_port: int | None) -> MagicMock:
+        runner = MagicMock()
+        runner.working_dir = None
+        runner.api_port = api_port
+        return runner
+
+    @pytest.mark.asyncio
+    async def test_lounge_skipped_when_api_server_disabled(self, thread: MagicMock) -> None:
+        """api_port is None → CCDB_API_URL is never injected into the subprocess.
+
+        Sending the invite anyway tells the agent to run
+        ``curl -s -X POST "$CCDB_API_URL/api/lounge"`` against an empty
+        variable, which fails with exit code 3 on every single session.
+        """
+        lounge_repo = self._lounge_repo()
+        config = RunConfig(
+            thread=thread, runner=self._runner(None), prompt="hi", lounge_repo=lounge_repo
+        )
+
+        context = await _build_system_context(config)
+
+        assert context is None or "AI LOUNGE" not in context
+        lounge_repo.get_recent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_lounge_injected_when_api_server_enabled(self, thread: MagicMock) -> None:
+        """api_port set → the POST command in the invite actually resolves."""
+        lounge_repo = self._lounge_repo()
+        config = RunConfig(
+            thread=thread, runner=self._runner(8099), prompt="hi", lounge_repo=lounge_repo
+        )
+
+        context = await _build_system_context(config)
+
+        assert context is not None
+        assert "AI LOUNGE" in context
+        lounge_repo.get_recent.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notice_drops_lounge_caveat_when_gated_off(self, thread: MagicMock) -> None:
+        """Gating the block must also drop the notice's lounge caveat.
+
+        Otherwise the notice still explains how to read "[this thread]" markers
+        in a transcript that was never injected.
+        """
+        config = RunConfig(
+            thread=thread,
+            runner=self._runner(None),
+            prompt="hi",
+            registry=SessionRegistry(),
+            lounge_repo=self._lounge_repo(),
+        )
+
+        context = await _build_system_context(config)
+
+        assert context is not None
+        assert "CONCURRENCY NOTICE" in context
+        assert "AI Lounge" not in context
+
+    @pytest.mark.asyncio
+    async def test_notice_keeps_lounge_caveat_when_injected(self, thread: MagicMock) -> None:
+        """Lounge block present → the caveat explaining its markers stays."""
+        config = RunConfig(
+            thread=thread,
+            runner=self._runner(8099),
+            prompt="hi",
+            registry=SessionRegistry(),
+            lounge_repo=self._lounge_repo(),
+        )
+
+        context = await _build_system_context(config)
+
+        assert context is not None
+        assert "AI Lounge" in context
+
+    @pytest.mark.asyncio
+    async def test_lounge_fetch_failure_also_drops_the_caveat(self, thread: MagicMock) -> None:
+        """get_recent() raised → nothing was injected, so the caveat is dead text."""
+        lounge_repo = MagicMock()
+        lounge_repo.get_recent = AsyncMock(side_effect=RuntimeError("db gone"))
+        config = RunConfig(
+            thread=thread,
+            runner=self._runner(8099),
+            prompt="hi",
+            registry=SessionRegistry(),
+            lounge_repo=lounge_repo,
+        )
+
+        context = await _build_system_context(config)
+
+        assert context is not None
+        assert "AI Lounge" not in context

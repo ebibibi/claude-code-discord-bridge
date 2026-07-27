@@ -26,12 +26,42 @@ class ActiveSession:
     working_dir: str | None = None
 
 
+# Only meaningful when a lounge transcript is actually injected alongside the
+# notice.  _build_system_context skips the lounge block when the REST API the
+# invite depends on is not running, and then these lines explain how to read
+# messages the session will never see.
+_LOUNGE_SELF_POSTS_NOTE = (
+    " Messages marked [this thread] in the AI Lounge are YOUR earlier posts from"
+    " this same thread — not from other sessions. After context compaction you may"
+    " see your own lounge messages; do NOT treat them as another session's work."
+)
+
+# Sent when this session is the only one registered.  It keeps the advice that
+# holds for a single session (shared-state checks, the working-directory reset)
+# and drops the two statements that are simply false on their own: that other
+# sessions are active, and that a worktree is required before any edit.
+_SOLO_CONCURRENCY_NOTICE = """\
+[CONCURRENCY NOTICE] You are a Claude Code session running via Discord. \
+Your thread ID is {thread_id}.{lounge_note}
+
+No other Claude Code session is active right now, so the main working \
+directory is yours — no isolation step is needed. Another session may still \
+start while you work, so check the current state of anything shared (git \
+index, databases, network ports, lock files, singleton processes) before \
+assuming nothing else touches it.
+
+**Working directory does NOT persist between messages**: Each of your Discord \
+replies runs in a FRESH process that starts in the base working directory. A \
+`cd` only lasts for the current message — it is gone by your next reply, and \
+the shell resets. So a relative-path script you set up in one message will \
+silently run in the WRONG directory later. ALWAYS use absolute paths (for \
+scripts, `os.chdir` to an absolute path at startup); for long jobs or large \
+output, write results to an absolute-path log file and read it back.\
+"""
+
 _BASE_CONCURRENCY_NOTICE = """\
 [CONCURRENCY NOTICE — MANDATORY] You are one of MULTIPLE Claude Code sessions \
-running simultaneously via Discord. Your thread ID is {thread_id}. \
-Messages marked [this thread] in the AI Lounge are YOUR earlier posts from \
-this same thread — not from other sessions. After context compaction you may \
-see your own lounge messages; do NOT treat them as another session's work. \
+running simultaneously via Discord. Your thread ID is {thread_id}.{lounge_note} \
 Other sessions ARE active right now. \
 You MUST follow these rules to avoid destroying each other's work:
 
@@ -119,23 +149,38 @@ class SessionRegistry:
         with self._lock:
             return [s for s in self._sessions.values() if s.thread_id != thread_id]
 
-    def build_concurrency_notice(self, thread_id: int) -> str:
+    def build_concurrency_notice(self, thread_id: int, *, lounge_enabled: bool = True) -> str:
         """Build the full concurrency notice for a session.
 
         Combines the base Layer 1 warning with Layer 2 context about
         other active sessions.
+
+        When this session is the only one registered, the mandatory wording is
+        replaced by a shorter notice that says the same thing truthfully: the
+        full version asserts "Other sessions ARE active right now" and REQUIRES
+        ``git worktree add ../wt-<thread_id>`` before any edit.  Both are wrong
+        with nothing else running, and the demanded worktree is a checkout in
+        the repository's parent directory that nothing removes unless
+        WORKTREE_BASE_DIR is configured.
+
+        ``lounge_enabled`` drops the AI Lounge caveat when no lounge transcript
+        is being injected, since it would describe messages the session cannot
+        see.  Defaults to True so existing callers keep the current wording.
         """
-        notice = _BASE_CONCURRENCY_NOTICE.format(thread_id=thread_id)
+        lounge_note = _LOUNGE_SELF_POSTS_NOTE if lounge_enabled else ""
         others = self.list_others(thread_id)
-        if others:
-            notice += _OTHER_SESSIONS_HEADER
-            for s in others:
-                line = f"- {s.description}"
-                if s.working_dir:
-                    line += f" (working in {s.working_dir})"
-                notice += line + "\n"
-            notice += (
-                "\nIf your work targets the same repository as any session above, "
-                "you MUST use a git worktree. Do NOT proceed without isolation.\n"
-            )
+        if not others:
+            return _SOLO_CONCURRENCY_NOTICE.format(thread_id=thread_id, lounge_note=lounge_note)
+
+        notice = _BASE_CONCURRENCY_NOTICE.format(thread_id=thread_id, lounge_note=lounge_note)
+        notice += _OTHER_SESSIONS_HEADER
+        for s in others:
+            line = f"- {s.description}"
+            if s.working_dir:
+                line += f" (working in {s.working_dir})"
+            notice += line + "\n"
+        notice += (
+            "\nIf your work targets the same repository as any session above, "
+            "you MUST use a git worktree. Do NOT proceed without isolation.\n"
+        )
         return notice

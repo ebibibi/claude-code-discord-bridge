@@ -127,11 +127,21 @@ async def _build_system_context(config: RunConfig) -> str | None:
     parts: list[str] = []
 
     # Layer 3: AI Lounge context (recent messages + invitation).
-    if config.lounge_repo is not None:
+    # Gated on the backend's api_port: the invite tells the model to POST to
+    # $CCDB_API_URL, and _build_env() only injects that variable when api_port
+    # is set (SessionBackend.api_port; same condition in both the Claude and
+    # Codex runners).  With the API server disabled every session opens by
+    # running a curl against an empty URL, which exits 3 — the lounge is
+    # unreachable, so the whole block is noise.  Deriving this from api_port
+    # rather than a new setting keeps the zero-config contract: enabling the
+    # API server is all a consumer has to do.
+    lounge_injected = False
+    if config.lounge_repo is not None and config.runner.api_port is not None:
         try:
             recent = await config.lounge_repo.get_recent(limit=10)
             lounge_context = build_lounge_prompt(recent, current_thread_id=config.thread.id)
             parts.append(lounge_context)
+            lounge_injected = True
             logger.debug("Lounge context built (%d recent message(s))", len(recent))
         except Exception:
             logger.warning("Failed to fetch lounge context — skipping", exc_info=True)
@@ -140,7 +150,11 @@ async def _build_system_context(config: RunConfig) -> str | None:
     if config.registry is not None:
         config.registry.register(config.thread.id, config.prompt[:100], config.runner.working_dir)
         others = config.registry.list_others(config.thread.id)
-        notice = config.registry.build_concurrency_notice(config.thread.id)
+        # Reflects what was actually appended above, not just what was
+        # configured: a failed get_recent() leaves the caveat describing nothing.
+        notice = config.registry.build_concurrency_notice(
+            config.thread.id, lounge_enabled=lounge_injected
+        )
         parts.append(notice)
         logger.info(
             "Concurrency notice built for thread %d (%d other active session(s), dir=%s)",
