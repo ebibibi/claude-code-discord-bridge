@@ -236,6 +236,35 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 
 该端点为可选启用：未配置 `ingest_token` 时，`POST` 返回 `503`。结果检索不可用时，`POST` 仅省略 `result_id`，`GET /api/ingest/{id}` 返回 `503`——派生行为在其他方面不变。请求体和附件**不会**持久化到结果存储中（只存储状态、最终文本和线程 ID）；结果上限为 200 条。
 
+#### 已验证的附件投递 (`attachments_manifest`)
+
+在客户端一侧丢失的附件过去是不可见的：ccdb 保存它拿到的内容，并报告一个无人能核对的数量，于是会话会表现得好像它拥有一个从未收到的文件。发送一份**清单（manifest）**，ccdb 就会**验证**投递，而不是假定它成功——为你在上游发现的每个附件列出一条记录，用 `status` 告诉 ccdb 它的字节是否包含在本次请求中：
+
+```bash
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "起草一份回复",
+       "attachments": [{"filename": "bundle.zip", "data": "<base64>"}],
+       "attachments_manifest": [
+         {"name": "shot.png",  "status": "embedded", "sha256": "…", "message": "返信 11"},
+         {"name": "debug.log", "status": "linked", "url": "https://…", "message": "返信 12",
+          "reason": "SharePoint download returned 403"}
+       ]}'
+# → {"status": "spawned", …, "attachments": {"verified": true, "complete": false,
+#      "missing": [], "not_delivered": [{"name": "debug.log", "message": "返信 12", …}]}}
+```
+
+| `status` | 含义 |
+|---|---|
+| `embedded`（默认） | 字节包含在本次请求中——ccdb 期望找到与之匹配的文件 |
+| `linked` | 只拿到了一个 URL（没有主机权限、认证墙等） |
+| `skipped` | 有意未发送（体积上限、被过滤掉） |
+| `failed` | 抓取或下载失败 |
+
+ccdb 将每条 `embedded` 记录与实际送达的文件进行匹配，顺序为：**优先 sha256**，然后是文件名精确匹配，然后是打包器在名称冲突时添加的 `4_image.png` 索引前缀，最后是文件大小——并且每个文件最多被消费一次，因此两个都叫 `image.png` 的附件不可能同时认领唯一送达的那个文件。任何无法核实的内容都会通过四种方式暴露出来：**会话提示词顶部**的 ⚠️ 区块（列出缺失文件，并要求会话不要编造其内容；当丢失发生在最新消息上时会另有提示）、与文件写在一起的 `ATTACHMENTS-REPORT.md` 账本、上面响应中的 `attachments` 结论，以及日志中的一条 `WARNING`。提供 `message` 还会让提示词中的路径列表按上游消息分组，并将最新的一组标记为应当优先阅读。
+
+设置 `CCDB_INGEST_REQUIRE_COMPLETE=1`（或 `ingest_require_complete=True`）可在附件丢失时以 `409` **拒绝**该次摄取，而不是基于不完整的证据启动会话——适用于附件本身*就是*请求内容的场景。完全不发送清单则一切照旧：该次摄取会被报告为 `verified: false`，而绝不会被报告为已验证且完整。
+
 ### 启动恢复
 
 如果 Bot 在会话进行中重启，被中断的 Claude 会话会在 Bot 重新上线时自动恢复。会话通过三种方式被标记为待恢复：
@@ -739,6 +768,8 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CCDB_LOG_FILE` | 日志文件路径。设置后，将在默认 stdout 处理器旁边添加一个轮转文件处理器（10 MB × 5 个备份）。对监控和告警很有用。 | （可选） |
 | `API_HOST` | REST API 绑定地址 | `127.0.0.1` |
 | `API_PORT` | REST API 端口（设置后启用 REST API） | （可选） |
+| `CCDB_INGEST_TOKEN` | `POST /api/ingest` 的 Bearer 令牌（独立于 `api_secret`）；未设置时该端点返回 `503` | （可选） |
+| `CCDB_INGEST_REQUIRE_COMPLETE` | 设为 `1` 时，若 `attachments_manifest` 证明附件已丢失，则以 `409` 拒绝该次摄取，而不是基于不完整的证据启动会话 | `0` |
 
 ### 权限模式 — 在 `-p` 模式下哪些有效
 
@@ -1089,6 +1120,7 @@ claude_discord/
     thread_renamer.py      # suggest_title() — 用于自动线程命名的后台 claude -p 调用
   ext/
     api_server.py          # REST API（可选，需要 aiohttp）
+    ingest_manifest.py     # 将 attachments_manifest 与实际送达的文件进行核对
   utils/
     logger.py              # 日志设置
 examples/

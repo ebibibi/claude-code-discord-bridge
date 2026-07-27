@@ -236,6 +236,35 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 
 O endpoint é opt-in: sem `ingest_token` configurado, `POST` responde `503`. Quando a recuperação de resultados está indisponível, `POST` simplesmente omite `result_id` e `GET /api/ingest/{id}` retorna `503` — o comportamento de spawn permanece de resto inalterado. O corpo da requisição e os anexos **não** são persistidos no armazenamento de resultados (apenas status, o texto final e o id da thread); os resultados são limitados a 200 linhas.
 
+#### Entrega de anexos verificada (`attachments_manifest`)
+
+Um anexo perdido do lado do cliente era invisível: o ccdb salvava o que recebia e reportava uma contagem que ninguém podia conferir, então a sessão respondia como se tivesse um arquivo que nunca chegou. Envie um **manifesto** e o ccdb **verifica** a entrega em vez de presumi-la — uma entrada para cada anexo que você encontrou na origem, com `status` informando se os bytes dele estão nesta requisição:
+
+```bash
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "Redija uma resposta",
+       "attachments": [{"filename": "bundle.zip", "data": "<base64>"}],
+       "attachments_manifest": [
+         {"name": "shot.png",  "status": "embedded", "sha256": "…", "message": "返信 11"},
+         {"name": "debug.log", "status": "linked", "url": "https://…", "message": "返信 12",
+          "reason": "SharePoint download returned 403"}
+       ]}'
+# → {"status": "spawned", …, "attachments": {"verified": true, "complete": false,
+#      "missing": [], "not_delivered": [{"name": "debug.log", "message": "返信 12", …}]}}
+```
+
+| `status` | Significado |
+|---|---|
+| `embedded` (padrão) | Os bytes estão nesta requisição — o ccdb espera encontrar um arquivo correspondente |
+| `linked` | Só foi possível obter uma URL (sem permissão no host, barreira de autenticação, …) |
+| `skipped` | Deliberadamente não enviado (limite de tamanho, filtrado) |
+| `failed` | A captura ou o download falhou |
+
+O ccdb casa cada entrada `embedded` com um arquivo entregue usando **primeiro o sha256**, depois o nome exato, depois o prefixo de índice no formato `4_image.png` que um empacotador adiciona em caso de nomes conflitantes, e por fim o tamanho — consumindo cada arquivo no máximo uma vez, de modo que dois anexos chamados `image.png` não possam ambos reivindicar o único arquivo que chegou. Tudo o que ficar sem explicação aparece de quatro formas: um bloco ⚠️ no **topo do prompt da sessão** nomeando os arquivos ausentes e instruindo a sessão a não inventar seu conteúdo (com um aviso extra quando a perda está na mensagem mais recente), um registro `ATTACHMENTS-REPORT.md` gravado ao lado dos arquivos, o veredito `attachments` na resposta acima, e um `WARNING` no log. Fornecer `message` também agrupa a lista de caminhos do prompt por mensagem de origem e marca o grupo mais recente como o que deve ser lido primeiro.
+
+Defina `CCDB_INGEST_REQUIRE_COMPLETE=1` (ou `ingest_require_complete=True`) para **recusar** uma ingestão com perdas retornando `409`, em vez de iniciar uma sessão com evidências parciais — apropriado quando os anexos *são* a requisição. Omita o manifesto por completo e nada muda: a ingestão é reportada como `verified: false`, nunca como verificada e completa.
+
 ### Retomada na Inicialização
 
 Se o bot reiniciar no meio de uma sessão, as sessões Claude interrompidas são automaticamente retomadas quando o bot volta a ficar online. As sessões são marcadas para retomada de três formas:
@@ -739,6 +768,8 @@ No modo somente-chat, solicitações de permissão e prompts de `AskUserQuestion
 | `CCDB_LOG_FILE` | Caminho para um arquivo de log. Quando definido, um manipulador de arquivo rotativo (10 MB × 5 backups) é adicionado ao lado do manipulador stdout padrão. Útil para monitoramento e alertas. | (opcional) |
 | `API_HOST` | Endereço de bind da REST API | `127.0.0.1` |
 | `API_PORT` | Porta da REST API (habilita a REST API quando definida) | (opcional) |
+| `CCDB_INGEST_TOKEN` | Token Bearer para `POST /api/ingest` (independente de `api_secret`); se não definido, o endpoint responde `503` | (opcional) |
+| `CCDB_INGEST_REQUIRE_COMPLETE` | Defina como `1` para recusar uma ingestão com `409` quando seu `attachments_manifest` provar que anexos se perderam, em vez de iniciar uma sessão com evidências parciais | `0` |
 
 ### Modos de Permissão — O Que Funciona no Modo `-p`
 
@@ -1089,6 +1120,7 @@ claude_discord/
     thread_renamer.py      # suggest_title() — background claude -p call for auto thread naming
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
+    ingest_manifest.py     # Concilia attachments_manifest com os arquivos entregues
   utils/
     logger.py              # Logging setup
 examples/
