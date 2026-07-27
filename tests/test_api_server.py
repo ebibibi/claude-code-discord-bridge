@@ -1082,6 +1082,182 @@ class TestIngest:
         # Nothing escapes the ingest dir.
         assert not list(tmp_path.glob("**/evil.txt"))
 
+    @pytest.mark.asyncio
+    async def test_two_attachments_with_the_same_name_both_survive(
+        self, ingest_client: TestClient, tmp_path
+    ) -> None:
+        # Teams names every pasted screenshot "image.png". Writing both to the
+        # same path left one file where two were sent, and the saved count still
+        # said 2 — a loss indistinguishable from success.
+        import base64
+
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "two shots",
+                "attachments": [
+                    {"filename": "image.png", "data": base64.b64encode(b"first").decode()},
+                    {"filename": "image.png", "data": base64.b64encode(b"second").decode()},
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        files = sorted(p.read_bytes() for p in tmp_path.glob("ingest/*/image*.png"))
+        assert files == [b"first", b"second"]
+
+    @pytest.mark.asyncio
+    async def test_zip_members_with_the_same_name_both_survive(
+        self, ingest_client: TestClient, tmp_path
+    ) -> None:
+        import base64
+        import io
+        import zipfile
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("image.png", b"first")
+            zf.writestr("image.png", b"second")
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "dup members",
+                "attachments": [
+                    {
+                        "filename": "b.zip",
+                        "data": base64.b64encode(buf.getvalue()).decode(),
+                    }
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        files = sorted(p.read_bytes() for p in tmp_path.glob("ingest/*/**/image*.png"))
+        assert files == [b"first", b"second"]
+
+    @pytest.mark.asyncio
+    async def test_manifest_shortfall_warns_the_session_and_the_caller(
+        self, ingest_client: TestClient, mock_cog: MagicMock, tmp_path
+    ) -> None:
+        import base64
+
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "See attached",
+                "attachments": [
+                    {"filename": "shot.png", "data": base64.b64encode(b"png").decode()}
+                ],
+                "attachments_manifest": [
+                    {"name": "shot.png", "message": "返信 1"},
+                    {
+                        "name": "MEHJdebug.log",
+                        "status": "linked",
+                        "message": "返信 2",
+                        "reason": "SharePoint download failed",
+                    },
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        data = await resp.json()
+
+        # The caller — the only party that can re-send — is told what is missing.
+        assert data["attachments"]["verified"] is True
+        assert data["attachments"]["complete"] is False
+        assert data["attachments"]["not_delivered"][0]["name"] == "MEHJdebug.log"
+
+        # The session is told before it is asked to do anything.
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert "MEHJdebug.log" in prompt
+        assert "返信 2" in prompt
+        assert prompt.index("⚠️") < prompt.index("See attached")
+
+        # And the ledger is written next to the files.
+        report = list(tmp_path.glob("ingest/*/ATTACHMENTS-REPORT.md"))
+        assert len(report) == 1
+        assert "MEHJdebug.log" in report[0].read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_complete_manifest_adds_no_warning(
+        self, ingest_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        import base64
+
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "See attached",
+                "attachments": [
+                    {"filename": "shot.png", "data": base64.b64encode(b"png").decode()}
+                ],
+                "attachments_manifest": [{"name": "shot.png", "message": "返信 1"}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        assert (await resp.json())["attachments"]["complete"] is True
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert "⚠️" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_ingest_without_a_manifest_still_works_unverified(
+        self, ingest_client: TestClient
+    ) -> None:
+        # Zero-Config: an older client that knows nothing about manifests must
+        # keep working, and must not be reported as verified-complete.
+        resp = await ingest_client.post(
+            "/api/ingest", json={"content": "no manifest"}, headers=self.AUTH
+        )
+        assert resp.status == 201
+        attachments = (await resp.json())["attachments"]
+        assert attachments["verified"] is False
+        assert attachments["complete"] is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_manifest_returns_400(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={"content": "x", "attachments_manifest": "not-a-list"},
+            headers=self.AUTH,
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_strict_mode_refuses_a_lossy_ingest(
+        self,
+        repo: NotificationRepository,
+        bot_with_text_channel: MagicMock,
+        mock_cog: MagicMock,
+        tmp_path,
+    ) -> None:
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+            ingest_require_complete=True,
+        )
+        client = TestClient(TestServer(api.app))
+        await client.start_server()
+        try:
+            resp = await client.post(
+                "/api/ingest",
+                json={
+                    "content": "x",
+                    "attachments_manifest": [{"name": "gone.log", "status": "failed"}],
+                },
+                headers=self.AUTH,
+            )
+            assert resp.status == 409
+            assert (await resp.json())["attachments"]["not_delivered"][0]["name"] == "gone.log"
+            # No session was started on partial evidence.
+            mock_cog.spawn_session.assert_not_called()
+        finally:
+            await client.close()
+
 
 class TestIngestResult:
     """Tests for /api/ingest result capture + GET /api/ingest/{result_id}."""

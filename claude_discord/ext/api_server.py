@@ -38,6 +38,7 @@ from claude_code_core.transcript_search import default_transcripts_root
 from ..discord_ui.file_sender import send_file_blobs
 from ..relay import MODE_INTERRUPT, MODE_QUEUE, VALID_MODES, RelayGuard, build_relay_prompt
 from ..session_view import STATE_IDLE, STATE_RUNNING, build_session_views
+from . import ingest_manifest
 
 if TYPE_CHECKING:
     import discord
@@ -230,6 +231,7 @@ class ApiServer:
         summary_repo: ThreadSummaryRepository | None = None,
         claims_repo: ClaimRepository | None = None,
         transcripts_path: str | None = None,
+        ingest_require_complete: bool | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -253,6 +255,19 @@ class ApiServer:
         # to the standard ~/.claude/projects location so body search is
         # Zero-Config wherever Claude Code has run.
         self.transcripts_path = transcripts_path or default_transcripts_root()
+        # Reject an ingest whose manifest proves attachments went missing,
+        # instead of starting a session on partial evidence. Off by default: a
+        # partial export is usually still worth answering, now that its gaps are
+        # stated in the prompt. Turn on where the attachments *are* the request.
+        if ingest_require_complete is None:
+            ingest_require_complete = os.getenv(
+                "CCDB_INGEST_REQUIRE_COMPLETE", ""
+            ).strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+        self.ingest_require_complete = ingest_require_complete
         # Loop/rate brake for thread-to-thread relays. Process-local by design:
         # after a restart there are no in-flight relay chains to protect.
         self.relay_guard = RelayGuard()
@@ -1438,6 +1453,24 @@ class ApiServer:
         """Directory under which ingested attachments are saved."""
         return Path(self.working_dir or os.getcwd()) / "ingest"
 
+    @staticmethod
+    def _unique_path(path: Path) -> Path:
+        """Return ``path``, or the first free ``name_2.ext``-style variant.
+
+        Two attachments in one request routinely share a filename (Teams names
+        every pasted screenshot ``image.png``). Writing both to the same path
+        would leave one file where two were sent — a silent loss that looks
+        identical to success in the saved count.
+        """
+        if not path.exists():
+            return path
+        stem, suffix = path.stem, path.suffix
+        for n in range(2, 1000):
+            candidate = path.with_name(f"{stem}_{n}{suffix}")
+            if not candidate.exists():
+                return candidate
+        return path.with_name(f"{stem}_{uuid.uuid4().hex[:8]}{suffix}")
+
     def _save_ingest_attachments(
         self, attachments: list[dict], thread_id: str
     ) -> tuple[list[Path], web.Response | None]:
@@ -1479,7 +1512,7 @@ class ApiServer:
                 )
             filename = _safe_attachment_name(att.get("filename"), i)
             dest_dir.mkdir(parents=True, exist_ok=True)
-            path = dest_dir / filename
+            path = self._unique_path(dest_dir / filename)
             try:
                 path.write_bytes(blob)
             except OSError as exc:
@@ -1488,6 +1521,23 @@ class ApiServer:
             saved.append(path)
             logger.info("Saved ingest attachment %s (%d bytes)", _sanitize_log(path), len(blob))
         return saved, None
+
+    def _write_attachment_report(
+        self, result: ingest_manifest.Reconciliation, request_id: str
+    ) -> None:
+        """Write the delivery ledger next to the files it describes.
+
+        The prompt only carries the headline; this is the auditable record of
+        what the client declared versus what landed, so a loss can be diagnosed
+        after the fact instead of being reconstructed from logs. Best-effort:
+        failing to write a report must never fail the ingest.
+        """
+        with contextlib.suppress(OSError):
+            dest_dir = self._ingest_root() / request_id
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            (dest_dir / "ATTACHMENTS-REPORT.md").write_text(
+                ingest_manifest.render_report(result), encoding="utf-8"
+            )
 
     def _expand_zip_bundles(self, saved_paths: list[Path]) -> list[Path]:
         """Expand any ``.zip`` among ``saved_paths`` into its member files.
@@ -1558,6 +1608,10 @@ class ApiServer:
                         )
                         continue
                     dest.parent.mkdir(parents=True, exist_ok=True)
+                    # Two members can carry the same name (some writers allow
+                    # duplicates); overwriting would drop one file while still
+                    # reporting both as extracted.
+                    dest = self._unique_path(dest)
                     with zf.open(info) as src, open(dest, "wb") as out:
                         out.write(src.read())
                     extracted.append(dest)
@@ -1574,6 +1628,7 @@ class ApiServer:
         summary_key: str | None,
         stored_summary: str,
         result_id: str | None,
+        reconciliation: ingest_manifest.Reconciliation | None = None,
     ) -> str:
         """Assemble the session prompt: caller content + attachments + summary.
 
@@ -1585,6 +1640,13 @@ class ApiServer:
         when the summary is saved.
         """
         parts: list[str] = []
+
+        # A missing attachment leads the prompt. Buried at the bottom it reads
+        # as a footnote; at the top it is a precondition on the whole reply.
+        if reconciliation is not None:
+            warning = ingest_manifest.render_prompt_warning(reconciliation)
+            if warning:
+                parts.append(warning)
 
         if summary_key and stored_summary:
             parts.append(
@@ -1604,12 +1666,8 @@ class ApiServer:
         parts.append(content)
 
         if saved_paths:
-            listing = "\n".join(f"- {p}" for p in saved_paths)
-            parts.append(
-                "添付ファイル（ローカルに保存済み）。下記はパス一覧です。"
-                "全部を読み込む必要はありません。返信に必要なものだけ Read ツール等で"
-                f"選択的に開いてください:\n{listing}"
-            )
+            result = reconciliation or ingest_manifest.Reconciliation(verified=False)
+            parts.append(ingest_manifest.render_attachment_section(result, saved_paths))
 
         if summary_key and result_id:
             parts.append(
@@ -1683,6 +1741,14 @@ class ApiServer:
         if not isinstance(attachments, list):
             return web.json_response({"error": "attachments must be a list"}, status=400)
 
+        # What the client says it found upstream, and how each one fared. Used
+        # below to prove the bytes that arrived are the bytes that were meant to.
+        manifest_entries, manifest_err = ingest_manifest.parse_manifest(
+            data.get("attachments_manifest")
+        )
+        if manifest_err is not None:
+            return web.json_response({"error": manifest_err}, status=400)
+
         # Optional running-summary linkage. When the client supplies a stable
         # summary_key, this ingest is one turn of a long upstream thread: ccdb
         # injects the stored summary as context and asks the session to save an
@@ -1727,6 +1793,33 @@ class ApiServer:
         # Expand any bundled .zip so the session reads individual files by path.
         saved_paths = self._expand_zip_bundles(saved_paths)
 
+        # Verify the delivery against the manifest before anything is spawned:
+        # a shortfall changes what the session is told, and (in strict mode)
+        # whether a session is worth starting at all.
+        reconciliation = ingest_manifest.reconcile(
+            manifest_entries, ingest_manifest.hash_files(saved_paths)
+        )
+        self._write_attachment_report(reconciliation, request_id)
+        if not reconciliation.is_complete:
+            logger.warning(
+                "Ingest %s is missing %d attachment(s) the client declared: %s",
+                request_id,
+                len(reconciliation.lost),
+                _sanitize_log(", ".join(e.name for e in reconciliation.lost)),
+            )
+            if self.ingest_require_complete:
+                # Opt-in: refuse a lossy ingest outright so the client retries
+                # with the full set instead of a session answering on partial
+                # evidence. Off by default — a partial export is still useful,
+                # as long as its gaps are stated (which they now are).
+                return web.json_response(
+                    {
+                        "error": "Attachment delivery is incomplete",
+                        "attachments": ingest_manifest.summarize_for_response(reconciliation),
+                    },
+                    status=409,
+                )
+
         thread_name: str | None = data.get("thread_name") or None
         auto_start: bool = data.get("auto_start", True)
 
@@ -1751,6 +1844,7 @@ class ApiServer:
             summary_key=summary_key,
             stored_summary=stored_summary,
             result_id=result_id,
+            reconciliation=reconciliation,
         )
 
         # When result retrieval is available, register a result row up front and
@@ -1837,6 +1931,9 @@ class ApiServer:
             "thread_id": str(thread.id),
             "thread_name": thread.name,
             "attachments_saved": len(saved_paths),
+            # The sender is the only party that can re-send a lost attachment,
+            # so it gets the verdict rather than a bare count it cannot check.
+            "attachments": ingest_manifest.summarize_for_response(reconciliation),
         }
         if result_id is not None:
             # Poll GET /api/ingest/{result_id} to retrieve the final reply.

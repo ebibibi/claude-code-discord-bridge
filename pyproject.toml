@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-code-discord-bridge"
-version = "3.2.9"
+version = "3.3.0"
 description = "Claude & Codex Discord Bridge — drive both Claude Code and OpenAI Codex from Discord with interactive chat, parallel sessions, and CI/CD automation"
 readme = "README.md"
 license = {text = "MIT"}
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-api = ["aiohttp>=3.14.1"]
+api = ["aiohttp>=3.14.3"]
 images = ["pillow>=12.3.0"]
 
 [project.scripts]
@@ -30,8 +30,8 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
-    "ruff>=0.15.22",
-    "aiohttp>=3.14.1",
+    "ruff>=0.16.0",
+    "aiohttp>=3.14.3",
     "pyright>=1.1.411",
     "pillow>=12.3.0",
 ]

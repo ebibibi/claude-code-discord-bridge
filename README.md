@@ -240,6 +240,35 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 
 The endpoint is opt-in: with no `ingest_token` configured, `POST` responds `503`. When result retrieval is unavailable, `POST` simply omits `result_id` and `GET /api/ingest/{id}` returns `503` — the spawn behaviour is otherwise unchanged. The request body and attachments are **not** persisted in the result store (only status, the final text, and the thread id); results are capped at 200 rows.
 
+#### Verified attachment delivery (`attachments_manifest`)
+
+An attachment that goes missing on the client side used to be invisible: ccdb saved what it was given and reported a count nobody could check, so a session answered as though it had a file it never received. Send a **manifest** and ccdb verifies the delivery instead of assuming it — one entry per attachment you found upstream, with `status` telling ccdb whether its bytes are in this request:
+
+```bash
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "Draft a reply",
+       "attachments": [{"filename": "bundle.zip", "data": "<base64>"}],
+       "attachments_manifest": [
+         {"name": "shot.png",  "status": "embedded", "sha256": "…", "message": "返信 11"},
+         {"name": "debug.log", "status": "linked", "url": "https://…", "message": "返信 12",
+          "reason": "SharePoint download returned 403"}
+       ]}'
+# → {"status": "spawned", …, "attachments": {"verified": true, "complete": false,
+#      "missing": [], "not_delivered": [{"name": "debug.log", "message": "返信 12", …}]}}
+```
+
+| `status` | Meaning |
+|---|---|
+| `embedded` (default) | The bytes are in this request — ccdb expects to find a matching file |
+| `linked` | Only a URL was obtained (no host permission, auth wall, …) |
+| `skipped` | Deliberately not sent (size cap, filtered out) |
+| `failed` | Capture or download failed |
+
+ccdb matches each `embedded` entry to a delivered file by **sha256 first**, then exact name, then the `4_image.png` index prefix a bundler adds for colliding names, then size — consuming each file at most once, so two attachments named `image.png` can't both claim the one file that arrived. Anything unaccounted for is surfaced four ways: a ⚠️ block at the **top of the session prompt** naming the missing files and telling the session not to invent their contents (with an extra callout when the loss is on the newest message), an `ATTACHMENTS-REPORT.md` ledger written next to the files, the `attachments` verdict in the response above, and a `WARNING` in the log. Supplying `message` also groups the prompt's path list by upstream message and marks the newest group as the one to read first.
+
+Set `CCDB_INGEST_REQUIRE_COMPLETE=1` (or `ingest_require_complete=True`) to **refuse** a lossy ingest with `409` rather than start a session on partial evidence — appropriate where the attachments *are* the request. Omit the manifest entirely and nothing changes: the ingest is reported as `verified: false`, never as verified-complete.
+
 #### Running per-thread summaries for long ingest threads (`/api/ingest/summary`)
 
 An ingest client that keeps replying in one **upstream** thread for months (notably the Teams browser extension) would otherwise have to re-export the entire history on every run — ccdb's "Thread = Session" model spawns a *fresh* Discord thread + Claude session per ingest and remembers nothing about the upstream thread. Opt into a compact **running summary** keyed by a client-supplied stable `summary_key` (e.g. the upstream thread's root message id), stored in the new `thread_summaries` table, and the client can send only the **diff** while the session still gets full historical context:
@@ -780,6 +809,8 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CCDB_LOG_FILE` | Path to a log file. When set, a rotating file handler (10 MB × 5 backups) is added alongside the default stdout handler. Useful for monitoring and alerting. | (optional) |
 | `API_HOST` | REST API bind address | `127.0.0.1` |
 | `API_PORT` | REST API port (enables REST API when set) | (optional) |
+| `CCDB_INGEST_TOKEN` | Bearer token for `POST /api/ingest` (independent of `api_secret`); unset ⇒ the endpoint responds `503` | (optional) |
+| `CCDB_INGEST_REQUIRE_COMPLETE` | Set to `1` to reject an ingest with `409` when its `attachments_manifest` proves attachments went missing, instead of starting a session on partial evidence | `0` |
 
 ### Permission Modes — What Works in `-p` Mode
 
@@ -1136,6 +1167,7 @@ claude_discord/
     thread_renamer.py      # suggest_title() — background claude -p call for auto thread naming
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
+    ingest_manifest.py     # Reconciles attachments_manifest against delivered files
   utils/
     logger.py              # Logging setup
 examples/
