@@ -1135,6 +1135,19 @@ class TestIngest:
         files = sorted(p.read_bytes() for p in tmp_path.glob("ingest/*/**/image*.png"))
         assert files == [b"first", b"second"]
 
+    def test_unique_path_refuses_a_path_outside_the_ingest_root(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path
+    ) -> None:
+        # Containment is re-established at the filesystem call itself, not only
+        # by the basename sanitiser far upstream.
+        from pathlib import Path
+
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, working_dir=str(tmp_path))
+        assert api._unique_path(Path("/etc/passwd")) is None
+        assert api._unique_path(tmp_path / "ingest" / ".." / ".." / "escape.txt") is None
+        inside = api._unique_path(tmp_path / "ingest" / "req" / "ok.txt")
+        assert inside is not None and str(inside).startswith(str((tmp_path / "ingest").resolve()))
+
     @pytest.mark.asyncio
     async def test_manifest_shortfall_warns_the_session_and_the_caller(
         self, ingest_client: TestClient, mock_cog: MagicMock, tmp_path

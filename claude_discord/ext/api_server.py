@@ -1453,23 +1453,49 @@ class ApiServer:
         """Directory under which ingested attachments are saved."""
         return Path(self.working_dir or os.getcwd()) / "ingest"
 
-    @staticmethod
-    def _unique_path(path: Path) -> Path:
+    def _contained_path(self, path: Path) -> Path | None:
+        """Resolve ``path`` and return it only if it stays inside the ingest root.
+
+        Filenames and zip member names are attacker-controlled. They are already
+        reduced to a safe basename upstream, but that sanitiser lives far from
+        the filesystem calls it protects, so this re-establishes containment
+        *at* the sink: every path ccdb opens, stats or writes under the ingest
+        tree passes through here first. Returns ``None`` for anything that
+        resolves outside the root (or cannot be resolved at all), which callers
+        treat as a refusal rather than a path to use.
+        """
+        try:
+            root = self._ingest_root().resolve()
+            resolved = path.resolve()
+            resolved.relative_to(root)
+        except (OSError, ValueError):
+            return None
+        return resolved
+
+    def _unique_path(self, path: Path) -> Path | None:
         """Return ``path``, or the first free ``name_2.ext``-style variant.
 
         Two attachments in one request routinely share a filename (Teams names
         every pasted screenshot ``image.png``). Writing both to the same path
         would leave one file where two were sent — a silent loss that looks
         identical to success in the saved count.
+
+        Returns ``None`` when the requested path escapes the ingest root; the
+        containment check happens before any filesystem access, and every
+        candidate variant is re-checked because ``with_name`` takes a value
+        derived from the same untrusted filename.
         """
-        if not path.exists():
-            return path
-        stem, suffix = path.stem, path.suffix
+        safe = self._contained_path(path)
+        if safe is None:
+            return None
+        if not safe.exists():
+            return safe
+        stem, suffix = safe.stem, safe.suffix
         for n in range(2, 1000):
-            candidate = path.with_name(f"{stem}_{n}{suffix}")
-            if not candidate.exists():
+            candidate = self._contained_path(safe.with_name(f"{stem}_{n}{suffix}"))
+            if candidate is not None and not candidate.exists():
                 return candidate
-        return path.with_name(f"{stem}_{uuid.uuid4().hex[:8]}{suffix}")
+        return self._contained_path(safe.with_name(f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"))
 
     def _save_ingest_attachments(
         self, attachments: list[dict], thread_id: str
@@ -1513,6 +1539,11 @@ class ApiServer:
             filename = _safe_attachment_name(att.get("filename"), i)
             dest_dir.mkdir(parents=True, exist_ok=True)
             path = self._unique_path(dest_dir / filename)
+            if path is None:
+                logger.warning("Refusing ingest attachment outside the ingest root: %s", i)
+                return [], web.json_response(
+                    {"error": f"Attachment {i} has an unusable filename"}, status=400
+                )
             try:
                 path.write_bytes(blob)
             except OSError as exc:
@@ -1607,14 +1638,21 @@ class ApiServer:
                             _sanitize_log(member),
                         )
                         continue
-                    dest.parent.mkdir(parents=True, exist_ok=True)
                     # Two members can carry the same name (some writers allow
                     # duplicates); overwriting would drop one file while still
-                    # reporting both as extracted.
-                    dest = self._unique_path(dest)
-                    with zf.open(info) as src, open(dest, "wb") as out:
+                    # reporting both as extracted. This also re-checks
+                    # containment right before the write.
+                    unique = self._unique_path(dest)
+                    if unique is None:
+                        logger.warning(
+                            "Skipping zip member escaping the ingest root: %s",
+                            _sanitize_log(member),
+                        )
+                        continue
+                    unique.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(info) as src, open(unique, "wb") as out:
                         out.write(src.read())
-                    extracted.append(dest)
+                    extracted.append(unique)
         except (zipfile.BadZipFile, OSError) as exc:
             logger.error("Failed to extract ingest zip %s: %s", _sanitize_log(zip_path), exc)
             return None
@@ -1796,8 +1834,11 @@ class ApiServer:
         # Verify the delivery against the manifest before anything is spawned:
         # a shortfall changes what the session is told, and (in strict mode)
         # whether a session is worth starting at all.
+        # Only hash files proven to live under the ingest root — the names came
+        # from the client, so containment is re-checked at the read as well.
+        contained = [p for p in (self._contained_path(p) for p in saved_paths) if p is not None]
         reconciliation = ingest_manifest.reconcile(
-            manifest_entries, ingest_manifest.hash_files(saved_paths)
+            manifest_entries, ingest_manifest.hash_files(contained)
         )
         self._write_attachment_report(reconciliation, request_id)
         if not reconciliation.is_complete:
