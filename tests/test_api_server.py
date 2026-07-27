@@ -1148,6 +1148,18 @@ class TestIngest:
         inside = api._unique_path(tmp_path / "ingest" / "req" / "ok.txt")
         assert inside is not None and str(inside).startswith(str((tmp_path / "ingest").resolve()))
 
+    def test_contained_path_rejects_a_sibling_with_the_root_as_a_name_prefix(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path
+    ) -> None:
+        # "/…/ingest-evil" starts with "/…/ingest" as a *string* but is not
+        # inside it. The guard compares against root + os.sep for this reason.
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, working_dir=str(tmp_path))
+        (tmp_path / "ingest").mkdir()
+        sibling = tmp_path / "ingest-evil"
+        sibling.mkdir()
+        assert api._contained_path(sibling / "loot.txt") is None
+        assert api._contained_path(tmp_path / "ingest" / "ok.txt") is not None
+
     @pytest.mark.asyncio
     async def test_manifest_shortfall_warns_the_session_and_the_caller(
         self, ingest_client: TestClient, mock_cog: MagicMock, tmp_path

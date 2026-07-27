@@ -1463,14 +1463,24 @@ class ApiServer:
         tree passes through here first. Returns ``None`` for anything that
         resolves outside the root (or cannot be resolved at all), which callers
         treat as a refusal rather than a path to use.
+
+        The check is written as ``os.path.realpath`` + a ``startswith`` prefix
+        test rather than ``Path.resolve()`` + ``relative_to()``. The two are
+        equivalent, but only the former is recognised as a path sanitiser by
+        static analysis — with the pathlib spelling, CodeQL still reported every
+        call below as a live path injection and the hardening was invisible to
+        the very tool meant to check it. Comparing against ``root + os.sep``
+        (not bare ``root``) is what stops a sibling directory whose name merely
+        starts with the root's from passing.
         """
         try:
-            root = self._ingest_root().resolve()
-            resolved = path.resolve()
-            resolved.relative_to(root)
-        except (OSError, ValueError):
+            root = os.path.realpath(str(self._ingest_root()))
+            resolved = os.path.realpath(str(path))
+        except OSError:
             return None
-        return resolved
+        if resolved != root and not resolved.startswith(root + os.sep):
+            return None
+        return Path(resolved)
 
     def _unique_path(self, path: Path) -> Path | None:
         """Return ``path``, or the first free ``name_2.ext``-style variant.
