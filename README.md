@@ -1167,6 +1167,7 @@ claude_discord/
     thread_renamer.py      # suggest_title() — background claude -p call for auto thread naming
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
+    ingest_manifest.py     # Reconciles attachments_manifest against delivered files
   utils/
     logger.py              # Logging setup
 examples/
