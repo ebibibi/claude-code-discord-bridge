@@ -17,6 +17,8 @@ The bridge's security goal is:
 | Flag injection via prompts | `--` separator prevents `-p`, `--resume` etc. in prompt text |
 | Session hijacking via crafted IDs | Strict regex validation: `^[a-f0-9\-]+$` |
 | Skill name injection | Strict regex validation: `^[\w-]+$` |
+| Path traversal via ingest attachments | Client filenames reduced to a safe basename, then re-checked against the ingest root at every filesystem call (`_contained_path`) |
+| Zip slip via ingest archives | Each archive member is resolved and refused if it escapes the extraction directory or the ingest root |
 | Secrets leaking to Claude subprocess | `_STRIPPED_ENV_KEYS` removes `DISCORD_BOT_TOKEN`, `CLAUDECODE`, etc. from subprocess env |
 | Claude reading Discord secrets via Bash tool | Environment stripping prevents `echo $DISCORD_BOT_TOKEN` in Claude's Bash |
 | Nesting detection bypass | `CLAUDECODE` env var stripped — subprocess won't think it's already inside Claude Code |
@@ -72,6 +74,38 @@ if not re.match(r"^[\w-]+$", name):
 ```
 
 Skill names are passed to Claude Code as `/{name}`. The regex ensures only alphanumeric characters, underscores, and hyphens are allowed.
+
+### Ingest Attachment Paths (api_server.py)
+
+`POST /api/ingest` accepts base64 attachments from untrusted external clients and writes them to disk under an ingest root, so both the filename and any zip member name are attacker-controlled. Two independent guards apply.
+
+First, the filename is reduced to a safe basename:
+
+```python
+name = os.path.basename(str(raw or "")).strip()
+name = _UNSAFE_FILENAME_RE.sub("_", name).lstrip(".")
+return name or f"attachment_{index}"
+```
+
+This strips directory components, replaces anything outside `[\w.\-]`, and drops leading dots so an attachment can't masquerade as a dotfile.
+
+Second, containment is re-established immediately before the filesystem call:
+
+```python
+root = os.path.realpath(str(self._ingest_root()))
+resolved = os.path.realpath(str(path))
+if resolved != root and not resolved.startswith(root + os.sep):
+    return None
+```
+
+Why both:
+- The basename sanitiser lives far from the `open()` calls it protects. `_contained_path` re-checks *at the sink*, so every path ccdb opens, stats or writes under the ingest tree is verified — a future refactor can't silently bypass it
+- Returning `None` is a refusal, not a fallback path: callers skip the file rather than write it somewhere else
+- `_unique_path` re-checks every derived variant (`name_2.ext`), because those names are built from the same untrusted input
+- Comparing against `root + os.sep` — not bare `root` — is what stops a sibling directory like `ingest-evil` from passing a prefix test against `ingest`
+- The check is deliberately spelled `os.path.realpath` + `startswith` rather than `Path.resolve()` + `relative_to()`. The two are equivalent, but only the former is recognised as a path sanitiser by CodeQL; with the pathlib spelling the hardening was invisible to the very tool meant to verify it
+
+Zip attachments are extracted member by member, and a member is skipped if it resolves outside the extraction directory or fails the ingest-root check.
 
 ## Environment Isolation
 
@@ -165,11 +199,12 @@ Key principles:
 
 ## Security Audit Checklist
 
-Before merging changes to `runner.py`, `_run_helper.py`, or any Cog:
+Before merging changes to `runner.py`, `_run_helper.py`, `ext/api_server.py`, or any Cog:
 
 - [ ] No `shell=True` in any subprocess call
 - [ ] `--` separator present before user-supplied arguments
 - [ ] All external input validated (session IDs, skill names, channel IDs)
+- [ ] Any new filesystem write under the ingest root goes through `_contained_path` / `_unique_path`
 - [ ] `_STRIPPED_ENV_KEYS` covers any new secret variables
 - [ ] No string formatting in SQL queries (use `?` placeholders)
 - [ ] `allowed_user_ids` check present in any new message handler
