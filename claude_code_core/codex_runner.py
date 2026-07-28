@@ -465,6 +465,21 @@ class CodexRunner:
         """
         # Always under the `exec` subcommand. `resume` is its sub-subcommand.
         args = [self.command, "exec"]
+
+        if self.dangerously_skip_permissions:
+            # This flag is accepted by both `exec` and `exec resume`.
+            args.append("--dangerously-bypass-approvals-and-sandbox")
+        else:
+            # `--sandbox` belongs to the parent `exec` command and is NOT an
+            # option of `exec resume` in codex-cli 0.145.0. It must therefore
+            # precede the `resume` subcommand:
+            #
+            #   codex exec --sandbox danger-full-access resume ...
+            #
+            # Putting it after `resume` exits with code 2 ("unexpected
+            # argument '--sandbox' found").
+            args.extend(["--sandbox", "danger-full-access"])
+
         if session_id:
             if not re.match(r"^[a-f0-9\-]+$", session_id):
                 raise ValueError(f"Invalid session_id format: {session_id!r}")
@@ -489,27 +504,25 @@ class CodexRunner:
             encoded_prompt = json.dumps(self.append_system_prompt, ensure_ascii=False)
             args.extend(["-c", f"developer_instructions={encoded_prompt}"])
 
-        if self.dangerously_skip_permissions:
-            args.append("--dangerously-bypass-approvals-and-sandbox")
-        else:
-            # `codex exec` has no interactive approval loop (no human present, and
-            # CCDB cannot inject responses over stdin for Codex — see
-            # inject_tool_result). `--ask-for-approval` is a global/interactive-only
-            # flag; codex-cli rejects it on `exec` with "unexpected argument"
-            # (confirmed against codex-cli 0.145.0). The only lever `exec` exposes
-            # is `--sandbox`, which — left unset — falls back to Codex's own
-            # internal fs/network-restricted sandbox. That sandbox spins up its
-            # bundled bwrap-style helper to create an isolated network namespace,
-            # which fails outright on hosts that restrict unprivileged namespace
-            # creation (e.g. Ubuntu's apparmor_restrict_unprivileged_userns),
-            # surfacing as "bwrap: loopback: Failed RTM_NEWADDR: Operation not
-            # permitted" for every command. CCDB already runs each session inside
-            # its own OS-level boundary (systemd unit sandboxing + per-session
-            # worktree) shared identically by ClaudeRunner, which has no OS
-            # sandbox of its own. Deferring fully to that shared outer boundary
-            # here removes the redundant, host-incompatible inner layer and
-            # restores parity with Claude.
-            args.extend(["--sandbox", "danger-full-access"])
+        # `codex exec` has no interactive approval loop (no human present, and
+        # CCDB cannot inject responses over stdin for Codex — see
+        # inject_tool_result). `--ask-for-approval` is a global/interactive-only
+        # flag; codex-cli rejects it on `exec` with "unexpected argument"
+        # (confirmed against codex-cli 0.145.0). The only lever `exec` exposes
+        # is `--sandbox`, which — left unset — falls back to Codex's own
+        # internal fs/network-restricted sandbox. That sandbox spins up its
+        # bundled bwrap-style helper to create an isolated network namespace,
+        # which fails outright on hosts that restrict unprivileged namespace
+        # creation (e.g. Ubuntu's apparmor_restrict_unprivileged_userns),
+        # surfacing as "bwrap: loopback: Failed RTM_NEWADDR: Operation not
+        # permitted" for every command. CCDB already runs each session inside
+        # its own OS-level boundary (systemd unit sandboxing + per-session
+        # worktree) shared identically by ClaudeRunner, which has no OS
+        # sandbox of its own. Deferring fully to that shared outer boundary
+        # here removes the redundant, host-incompatible inner layer and
+        # restores parity with Claude. The flag itself is inserted above,
+        # before the optional `resume` subcommand, because it is an
+        # `exec`-level option.
 
         # --cd is only accepted by `codex exec`, not by `codex exec resume`.
         if self.working_dir and not session_id:

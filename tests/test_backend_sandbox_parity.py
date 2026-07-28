@@ -72,6 +72,14 @@ class TestSandboxParity:
             for token in description.split():
                 assert token in args, f"describe_sandbox() token {token!r} not in real args"
 
+    def test_codex_resume_inherits_parent_full_access_sandbox(self) -> None:
+        """Resume does not accept --sandbox itself, so the exec-level flag must
+        precede the resume subcommand while preserving the same policy."""
+        runner = CodexRunner(dangerously_skip_permissions=False)
+        args = runner._build_args("hi", session_id="019e29a0-d5b0-71f0-bdc0-46f09a06fdaf")
+        assert args[args.index("--sandbox") + 1] == "danger-full-access"
+        assert args.index("--sandbox") < args.index("resume")
+
     def test_codex_never_emits_the_broken_ask_for_approval_flag(self) -> None:
         """`codex exec` rejects `--ask-for-approval` outright (global/interactive-only
         flag on codex-cli >= ~0.13x) — regression guard against reintroducing it."""
