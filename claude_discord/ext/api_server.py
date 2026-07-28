@@ -1611,6 +1611,17 @@ class ApiServer:
         Extraction is bounded (``_MAX_INGEST_UNZIP_*``) and refuses members that
         would escape the target directory (zip-slip). On any failure the zip is
         left untouched in the list so nothing is silently lost.
+
+        The original is deleted **only** when extraction actually produced
+        files. ``zipfile.is_zipfile()`` looks for the end-of-central-directory
+        signature near the end of a file; it does not require the file to start
+        like an archive. Any binary can end up containing a well-formed empty
+        EOCD by chance — Windows event logs (.evtx), dumps and captures are
+        exactly the large opaque blobs where that happens — and such a file was
+        "expanded" into nothing and then unlinked, destroying the attachment
+        while the count still read as a success. Replacing a file with nothing
+        is never an improvement, so if there is nothing to replace it with, it
+        stays.
         """
         result: list[Path] = []
         for path in saved_paths:
@@ -1618,8 +1629,15 @@ class ApiServer:
                 result.append(path)
                 continue
             extracted = self._safe_extract_zip(path)
-            if extracted is None:
-                # Extraction refused/failed — keep the zip so it isn't lost.
+            if not extracted:
+                # Refused, failed, or an "archive" with no members at all —
+                # almost certainly not a bundle. Keep the original.
+                if extracted is not None:
+                    logger.info(
+                        "Ingest attachment %s looks like a zip but holds no files — "
+                        "keeping it as-is",
+                        _sanitize_log(path),
+                    )
                 result.append(path)
                 continue
             result.extend(extracted)

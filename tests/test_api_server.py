@@ -1559,3 +1559,155 @@ class TestIngestResult:
             assert any("<@999>" in s and "回答ができました" in s for s in contents)
         finally:
             await client.close()
+
+
+class TestBinaryAttachmentMisdetectedAsZip:
+    """A binary attachment must survive being mistaken for a zip archive.
+
+    ``zipfile.is_zipfile()`` looks for the end-of-central-directory signature
+    (``PK\\x05\\x06``) near the end of the file — it does not require the file to
+    *start* like a zip. Any binary can contain those four bytes by chance, and
+    Windows event logs (.evtx), memory dumps and packet captures are exactly the
+    kind of large opaque blobs where that happens.
+
+    When it did, the expander treated the file as an archive, "extracted" its
+    zero members, and then deleted the original — destroying the attachment and
+    reporting ``attachments_saved: 0``. Reproduced against the live endpoint
+    with a real 1.1 MB Admin.evtx before this was fixed.
+    """
+
+    INGEST_TOKEN = "ingest-secret-xyz"
+    AUTH = {"Authorization": f"Bearer {INGEST_TOKEN}"}
+
+    @pytest.fixture
+    def mock_cog(self) -> MagicMock:
+        thread = MagicMock()
+        thread.id = 111222333
+        thread.name = "Ingested thread"
+        cog = MagicMock()
+        cog.spawn_session = AsyncMock(return_value=thread)
+        return cog
+
+    @pytest.fixture
+    def bot_with_text_channel(self, mock_cog: MagicMock) -> MagicMock:
+        import discord
+
+        b = MagicMock()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        b.get_channel.return_value = channel
+        b.cogs = {"ClaudeChatCog": mock_cog}
+        return b
+
+    @pytest.fixture
+    async def client(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path
+    ) -> TestClient:
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+        )
+        c = TestClient(TestServer(api.app))
+        await c.start_server()
+        yield c
+        await c.close()
+
+    @staticmethod
+    def _evtx_containing_eocd() -> bytes:
+        """A .evtx-shaped blob ending in a well-formed, empty EOCD record.
+
+        Built deterministically rather than by scribbling the signature into
+        random bytes: ``is_zipfile`` also validates the trailing comment-length
+        field, so a random blob only trips it some of the time and the test
+        would be flaky. This is the worst realistic case — a binary that any
+        zip reader agrees is an archive containing nothing.
+        """
+        import struct
+
+        eocd = b"PK\x05\x06" + struct.pack("<HHHHIIH", 0, 0, 0, 0, 0, 0, 0)
+        return b"ElfFile\x00" + bytes(200_000) + eocd
+
+    @pytest.mark.asyncio
+    async def test_binary_that_looks_like_a_zip_is_not_deleted(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        import base64
+        import hashlib
+
+        raw = self._evtx_containing_eocd()
+        resp = await client.post(
+            "/api/ingest",
+            json={
+                "content": "see log",
+                "attachments": [{"filename": "Admin.evtx", "data": base64.b64encode(raw).decode()}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        assert (await resp.json())["attachments_saved"] == 1
+
+        found = list(tmp_path.glob("ingest/*/Admin.evtx"))
+        assert len(found) == 1, "the attachment must still exist on disk"
+        assert hashlib.sha256(found[0].read_bytes()).hexdigest() == (
+            hashlib.sha256(raw).hexdigest()
+        ), "and must be byte-for-byte intact"
+
+    @pytest.mark.asyncio
+    async def test_a_genuinely_empty_zip_is_kept_rather_than_deleted(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        # Nothing to replace it with, so removing it would leave the session
+        # with strictly less than it was sent.
+        import base64
+        import io
+        import zipfile as zf
+
+        buf = io.BytesIO()
+        with zf.ZipFile(buf, "w"):
+            pass
+        resp = await client.post(
+            "/api/ingest",
+            json={
+                "content": "empty bundle",
+                "attachments": [
+                    {"filename": "b.zip", "data": base64.b64encode(buf.getvalue()).decode()}
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        assert list(tmp_path.glob("ingest/*/b.zip"))
+
+    @pytest.mark.asyncio
+    async def test_a_real_bundle_is_still_expanded_and_the_zip_removed(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        # The behaviour that must not regress.
+        import base64
+        import io
+        import zipfile as zf
+
+        buf = io.BytesIO()
+        with zf.ZipFile(buf, "w") as z:
+            z.writestr("Admin.evtx", b"ElfFile\x00payload")
+        resp = await client.post(
+            "/api/ingest",
+            json={
+                "content": "bundle",
+                "attachments": [
+                    {
+                        "filename": "teams-attachments.zip",
+                        "data": base64.b64encode(buf.getvalue()).decode(),
+                    }
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        member = list(tmp_path.glob("ingest/*/**/Admin.evtx"))
+        assert len(member) == 1
+        assert member[0].read_bytes() == b"ElfFile\x00payload"
+        assert not list(tmp_path.glob("ingest/*/teams-attachments.zip"))
