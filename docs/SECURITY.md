@@ -109,6 +109,8 @@ Why both:
 
 Zip attachments are extracted member by member, and a member is skipped if it resolves outside the extraction directory or fails the ingest-root check.
 
+Extraction never destroys the upload it came from. The original is deleted only once extraction has actually produced files: `zipfile.is_zipfile()` matches an end-of-central-directory record near the *end* of a file, so a large opaque binary — a Windows `.evtx` log, a dump, a capture — can carry a well-formed empty EOCD by chance and be read as an archive it isn't. Expanding such a file yields zero members, and unlinking it then destroyed the attachment while `attachments_saved` still reported success. A zip that yields nothing (empty, refused, or malformed) is kept as it arrived — replacing a file with nothing is never an improvement.
+
 ## Environment Isolation
 
 ### Stripped Environment Variables (runner.py)
