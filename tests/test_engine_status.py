@@ -21,6 +21,20 @@ SAMPLE = {
     }
 }
 
+# Team plans expose a SINGLE window as ``primary`` whose duration is a full
+# week (10080 min) — there is no 5-hour window and ``secondary`` is null.
+# Captured from a real ``codex app-server`` ``account/rateLimits/read`` call.
+TEAM_SAMPLE = {
+    "rateLimits": {
+        "limitId": "codex",
+        "primary": {"usedPercent": 33, "windowDurationMins": 10080, "resetsAt": 1785815516},
+        "secondary": None,
+        "credits": {"hasCredits": False, "unlimited": False, "balance": None},
+        "planType": "team",
+        "rateLimitReachedType": None,
+    }
+}
+
 
 class TestFormat:
     def test_basic_line(self) -> None:
@@ -31,6 +45,36 @@ class TestFormat:
         assert "週次 8%" in line
         assert "クレジット 0" in line
         assert "(prolite)" in line
+
+    def test_team_plan_primary_is_weekly_not_5h(self) -> None:
+        """Team plans have a weekly primary window — must not be labelled '5h'.
+
+        Regression: the label was hardcoded to '5h' for ``primary``, so a team
+        plan showed ``5h 33%`` for what is really a rolling 7-day quota. Users
+        rightly expected a 5-hour reset that never came. The label must derive
+        from ``windowDurationMins``.
+        """
+        line = format_codex_status_line(TEAM_SAMPLE)
+        assert line is not None
+        assert "5h" not in line
+        assert "週次 33%" in line
+        assert "(team)" in line
+
+    @pytest.mark.parametrize(
+        ("mins", "expected_label"),
+        [
+            (300, "5h"),
+            (10080, "週次"),
+            (1440, "1d"),
+            (2880, "2d"),
+        ],
+    )
+    def test_window_label_derived_from_duration(self, mins: int, expected_label: str) -> None:
+        """The window label follows ``windowDurationMins``, not a fixed string."""
+        data = {"rateLimits": {"primary": {"usedPercent": 10, "windowDurationMins": mins}}}
+        line = format_codex_status_line(data)
+        assert line is not None
+        assert f"{expected_label} 10%" in line
 
     def test_unlimited_credits(self) -> None:
         data = {"rateLimits": {"primary": {"usedPercent": 5}, "credits": {"unlimited": True}}}

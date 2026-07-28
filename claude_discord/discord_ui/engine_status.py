@@ -118,6 +118,46 @@ def _fmt_pct(snap: dict | None) -> str | None:
         return None
 
 
+def _window_label(window_duration_mins: object) -> str:
+    """Short label for a rate-limit window given its duration in minutes.
+
+    Codex reports the real window length via ``windowDurationMins``, which
+    varies by plan: Plus/Pro carry a 5-hour ``primary`` (300 min) plus a
+    weekly ``secondary`` (10080 min), while Team plans expose a single weekly
+    ``primary`` (10080 min) with no ``secondary``. Deriving the label from the
+    data — instead of hardcoding ``"5h"`` for ``primary`` — keeps the footer
+    honest: a Team plan no longer masquerades as a 5-hour window that never
+    seems to reset. Returns ``""`` when the duration is missing/unknown so the
+    caller can fall back to a positional label.
+    """
+    if not isinstance(window_duration_mins, (int, float)):
+        return ""
+    try:
+        mins = int(window_duration_mins)
+    except (TypeError, ValueError):
+        return ""
+    if mins <= 0:
+        return ""
+    if mins % 1440 == 0:
+        days = mins // 1440
+        return "週次" if days == 7 else f"{days}d"
+    return f"{mins // 60:g}h"
+
+
+def _segment(snap: dict | None, fallback_label: str) -> str | None:
+    """Format one rate-limit window into ``"<label> <pct>"`` or ``None``.
+
+    The label is taken from the snapshot's ``windowDurationMins``; when that is
+    absent (legacy/unknown payloads) ``fallback_label`` is used instead.
+    """
+    pct = _fmt_pct(snap)
+    if pct is None:
+        return None
+    duration = snap.get("windowDurationMins") if isinstance(snap, dict) else None
+    label = _window_label(duration) or fallback_label
+    return f"{label} {pct}"
+
+
 def format_codex_status_line(data: dict | None) -> str | None:
     """Format a ``account/rateLimits/read`` result into one Discord line.
 
@@ -131,12 +171,12 @@ def format_codex_status_line(data: dict | None) -> str | None:
         return None
 
     segments: list[str] = []
-    primary = _fmt_pct(snap.get("primary"))
+    primary = _segment(snap.get("primary"), "5h")
     if primary is not None:
-        segments.append(f"5h {primary}")
-    secondary = _fmt_pct(snap.get("secondary"))
+        segments.append(primary)
+    secondary = _segment(snap.get("secondary"), "週次")
     if secondary is not None:
-        segments.append(f"週次 {secondary}")
+        segments.append(secondary)
 
     credit_info = snap.get("credits")
     if isinstance(credit_info, dict):
