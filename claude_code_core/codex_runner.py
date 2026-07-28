@@ -28,12 +28,6 @@ logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
-_APPROVAL_MODE_MAP: dict[str, str] = {
-    "acceptEdits": "except-edit",
-    "full": "always",
-    "none": "never",
-}
-
 # Reasoning-effort levels accepted by the Codex CLI / GPT-5.x models. Used to
 # validate the value before it is injected into a `-c model_reasoning_effort=`
 # config override (defence-in-depth against config injection).
@@ -306,7 +300,12 @@ class CodexRunner:
             should_retry_without_resume = False
             saw_progress = False
 
-            logger.info("Starting Codex CLI: %s (cwd=%s)", " ".join(args[:6]) + " ...", cwd)
+            logger.info(
+                "Starting Codex CLI: %s ... (cwd=%s, effective_sandbox=%s)",
+                " ".join(args[:6]),
+                cwd,
+                self.describe_sandbox(),
+            )
 
             self._process = await asyncio.create_subprocess_exec(
                 *args,
@@ -492,8 +491,25 @@ class CodexRunner:
 
         if self.dangerously_skip_permissions:
             args.append("--dangerously-bypass-approvals-and-sandbox")
-        elif self.permission_mode in _APPROVAL_MODE_MAP:
-            args.extend(["--ask-for-approval", _APPROVAL_MODE_MAP[self.permission_mode]])
+        else:
+            # `codex exec` has no interactive approval loop (no human present, and
+            # CCDB cannot inject responses over stdin for Codex — see
+            # inject_tool_result). `--ask-for-approval` is a global/interactive-only
+            # flag; codex-cli rejects it on `exec` with "unexpected argument"
+            # (confirmed against codex-cli 0.145.0). The only lever `exec` exposes
+            # is `--sandbox`, which — left unset — falls back to Codex's own
+            # internal fs/network-restricted sandbox. That sandbox spins up its
+            # bundled bwrap-style helper to create an isolated network namespace,
+            # which fails outright on hosts that restrict unprivileged namespace
+            # creation (e.g. Ubuntu's apparmor_restrict_unprivileged_userns),
+            # surfacing as "bwrap: loopback: Failed RTM_NEWADDR: Operation not
+            # permitted" for every command. CCDB already runs each session inside
+            # its own OS-level boundary (systemd unit sandboxing + per-session
+            # worktree) shared identically by ClaudeRunner, which has no OS
+            # sandbox of its own. Deferring fully to that shared outer boundary
+            # here removes the redundant, host-incompatible inner layer and
+            # restores parity with Claude.
+            args.extend(["--sandbox", "danger-full-access"])
 
         # --cd is only accepted by `codex exec`, not by `codex exec resume`.
         if self.working_dir and not session_id:
@@ -533,6 +549,16 @@ class CodexRunner:
             host = urlparse(base_url).hostname or base_url
             return f"Custom endpoint ({host})"
         return "OpenAI API (direct)"
+
+    def describe_sandbox(self) -> str:
+        """Return the actual CLI flag that will govern OS-level sandboxing.
+
+        Mirrors the branch in ``_build_args`` exactly, so logs/status output can
+        never drift from what is really passed to the ``codex`` subprocess.
+        """
+        if self.dangerously_skip_permissions:
+            return "--dangerously-bypass-approvals-and-sandbox"
+        return "--sandbox danger-full-access"
 
     async def _read_stream(self) -> AsyncGenerator[StreamEvent, None]:
         """Read and parse stdout line by line."""

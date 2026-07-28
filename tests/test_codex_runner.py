@@ -79,15 +79,38 @@ class TestCodexRunnerBuildArgs:
         assert "resume" in args
         assert "0199a213-81c0-7800-8aa1-bbab2a035a53" in args
 
-    def test_approval_mode_mapping(self) -> None:
+    def test_default_permission_mode_uses_full_access_sandbox(self) -> None:
+        """``codex exec`` does not accept ``--ask-for-approval`` (global/interactive-only
+        flag, rejected by ``exec`` since codex-cli >= ~0.13x — see
+        TestCodexRunnerArgvStructure docstring). The only lever ``exec`` exposes is
+        ``--sandbox``, and ccdb defers entirely to its own outer isolation (matching
+        ClaudeRunner, which has no OS-level sandbox of its own)."""
         runner = CodexRunner(command="codex", model="o4-mini", permission_mode="acceptEdits")
         args = runner._build_args("hello", session_id=None)
-        assert any(a in args for a in ["--ask-for-approval", "-a"])
+        assert "--ask-for-approval" not in args
+        assert "-a" not in args
+        assert "--sandbox" in args
+        assert "danger-full-access" in args
 
     def test_dangerously_skip_permissions(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini", dangerously_skip_permissions=True)
         args = runner._build_args("hello", session_id=None)
         assert "--yolo" in args or "--dangerously-bypass-approvals-and-sandbox" in args
+        # The bypass flag already disables sandboxing; --sandbox must not also be added.
+        assert "--sandbox" not in args
+
+    @pytest.mark.parametrize(
+        "permission_mode", ["acceptEdits", "full", "none", "default", "auto", "plan", "bogus"]
+    )
+    def test_full_access_sandbox_regardless_of_permission_mode(self, permission_mode: str) -> None:
+        """Codex's inner sandbox is disabled unconditionally (unless the
+        ``--dangerously-bypass-approvals-and-sandbox`` path is active) — ``permission_mode``
+        has no OS-level meaning for Codex since ``codex exec`` has no interactive
+        approval loop (no stdin injection support; see ``inject_tool_result``)."""
+        runner = CodexRunner(command="codex", model="o4-mini", permission_mode=permission_mode)
+        args = runner._build_args("hello", session_id=None)
+        assert "--sandbox" in args
+        assert "danger-full-access" in args
 
     def test_working_dir_flag(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini", working_dir="/tmp/work")
@@ -642,10 +665,15 @@ class TestCodexRunnerArgvStructure:
         codex exec [OPTIONS] [PROMPT]
         codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
 
-    ``exec`` accepts: ``--json``, ``--model``, ``--ask-for-approval``,
+    ``exec`` accepts: ``--json``, ``--model``, ``--sandbox``,
     ``--dangerously-bypass-approvals-and-sandbox``, ``--cd``.
     ``exec resume`` accepts the same flags EXCEPT ``--cd`` (causes exit code 2).
     The resume positional args come AFTER all flags, with SESSION_ID before PROMPT.
+
+    NOTE: ``--ask-for-approval``/``-a`` is a global/interactive-only flag — codex-cli
+    rejects it on ``exec`` with ``error: unexpected argument '--ask-for-approval' found``
+    (confirmed against codex-cli 0.145.0). ``exec`` has no approval loop at all (no
+    human present, no stdin injection support), so ``--sandbox`` is the only lever.
 
     These tests guard against regressions like the one that shipped briefly
     in 3.0.0 where resume was invoked as ``codex resume <id> --json …`` —
@@ -681,9 +709,9 @@ class TestCodexRunnerArgvStructure:
         )
         args = runner._build_args("hello", session_id=sid)
         sid_idx = args.index(sid)
-        # --json, --model, --ask-for-approval must all come before SESSION_ID.
+        # --json, --model, --sandbox must all come before SESSION_ID.
         # NOTE: --cd is NOT supported by `codex exec resume` (only by `codex exec`).
-        for flag in ("--json", "--model", "--ask-for-approval"):
+        for flag in ("--json", "--model", "--sandbox"):
             assert flag in args, f"{flag} missing from resume args"
             assert args.index(flag) < sid_idx, (
                 f"{flag} should appear before SESSION_ID in codex exec resume"
