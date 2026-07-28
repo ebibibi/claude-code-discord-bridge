@@ -240,6 +240,12 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 
 The endpoint is opt-in: with no `ingest_token` configured, `POST` responds `503`. When result retrieval is unavailable, `POST` simply omits `result_id` and `GET /api/ingest/{id}` returns `503` — the spawn behaviour is otherwise unchanged. The request body and attachments are **not** persisted in the result store (only status, the final text, and the thread id); results are capped at 200 rows.
 
+#### Zip bundles are expanded on arrival
+
+A client can pack a whole thread's files into one `.zip` to stay under the 20-attachment / 50 MB request caps: ccdb extracts it into a sibling `<name>_files/` directory and gives the session the member paths instead of the archive, so the prompt stays paths-only and the session reads what it needs. Extraction is bounded (5000 members, 200 MB uncompressed) and skips any member that would escape its directory.
+
+The archive is replaced **only** when extraction actually produced files. `zipfile.is_zipfile()` matches an end-of-central-directory record near the *end* of a file — it does not require the file to *start* like an archive — so a large opaque binary (a Windows `.evtx` log, a memory dump, a packet capture) can be taken for an empty archive by chance. Such a file, and a genuinely empty zip, is kept exactly as it arrived rather than "expanded" into nothing and deleted; a refused or malformed archive is likewise left untouched. Nothing is dropped on the way in.
+
 #### Verified attachment delivery (`attachments_manifest`)
 
 An attachment that goes missing on the client side used to be invisible: ccdb saved what it was given and reported a count nobody could check, so a session answered as though it had a file it never received. Send a **manifest** and ccdb verifies the delivery instead of assuming it — one entry per attachment you found upstream, with `status` telling ccdb whether its bytes are in this request:
