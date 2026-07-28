@@ -1148,6 +1148,30 @@ class TestIngest:
         inside = api._unique_path(tmp_path / "ingest" / "req" / "ok.txt")
         assert inside is not None and str(inside).startswith(str((tmp_path / "ingest").resolve()))
 
+    def test_unique_path_walks_past_existing_collisions(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path
+    ) -> None:
+        # The disambiguation loop is what stops a same-named attachment from
+        # overwriting an earlier one, so it has to keep stepping past every name
+        # already taken — not just the first.
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, working_dir=str(tmp_path))
+        dest = tmp_path / "ingest" / "req"
+        dest.mkdir(parents=True)
+        (dest / "image.png").write_bytes(b"a")
+        (dest / "image_2.png").write_bytes(b"b")
+        got = api._unique_path(dest / "image.png")
+        assert got is not None and got.name == "image_3.png"
+
+    def test_unique_path_refuses_rather_than_inventing_a_name_when_exhausted(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path, monkeypatch
+    ) -> None:
+        # Every candidate taken → refuse (the caller turns this into a 400)
+        # rather than fall back to a random name nothing else can predict.
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, working_dir=str(tmp_path))
+        (tmp_path / "ingest").mkdir()
+        monkeypatch.setattr(os.path, "exists", lambda _p: True)
+        assert api._unique_path(tmp_path / "ingest" / "image.png") is None
+
     def test_contained_path_rejects_a_sibling_with_the_root_as_a_name_prefix(
         self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path
     ) -> None:

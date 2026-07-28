@@ -1494,18 +1494,36 @@ class ApiServer:
         containment check happens before any filesystem access, and every
         candidate variant is re-checked because ``with_name`` takes a value
         derived from the same untrusted filename.
+
+        The check is written out here rather than delegated to
+        ``_contained_path``. The two are identical, but a guard that lives in a
+        helper does not propagate across the call boundary for static analysis:
+        with the delegated version CodeQL still reported both ``exists()`` calls
+        below as live path injections. Keeping the ``realpath`` + prefix test in
+        the same function as the filesystem call it protects makes the guarantee
+        local — to a reader and to the analyser alike.
         """
-        safe = self._contained_path(path)
-        if safe is None:
+        try:
+            root = os.path.realpath(str(self._ingest_root()))
+        except OSError:
             return None
-        if not safe.exists():
-            return safe
-        stem, suffix = safe.stem, safe.suffix
-        for n in range(2, 1000):
-            candidate = self._contained_path(safe.with_name(f"{stem}_{n}{suffix}"))
-            if candidate is not None and not candidate.exists():
-                return candidate
-        return self._contained_path(safe.with_name(f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"))
+
+        stem, suffix = path.stem, path.suffix
+        candidates = [path] + [path.with_name(f"{stem}_{n}{suffix}") for n in range(2, 1001)]
+        for candidate in candidates:
+            try:
+                resolved = os.path.realpath(str(candidate))
+            except OSError:
+                return None
+            # root + os.sep, not bare root: "/…/ingest-evil" has "/…/ingest" as
+            # a string prefix without being inside it.
+            if resolved != root and not resolved.startswith(root + os.sep):
+                return None
+            if not os.path.exists(resolved):
+                return Path(resolved)
+        # 1000 files of the same name in one request is not a real export; refuse
+        # it rather than inventing a random name nothing else can predict.
+        return None
 
     def _save_ingest_attachments(
         self, attachments: list[dict], thread_id: str
