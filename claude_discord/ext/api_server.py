@@ -2201,8 +2201,12 @@ class ApiServer:
         store = self._teams_store()
         thread_dir = store.find_thread_dir(ref)
         stored = store.load_stored(thread_dir) if thread_dir else {}
-        plan = teams_sync.build_plan(messages, stored)
         meta = store.read_meta(thread_dir) if thread_dir else {}
+        plan = teams_sync.build_plan(
+            messages,
+            stored,
+            pending=meta.get("pending_attachments") or [],
+        )
         return web.json_response(
             {
                 "folder": str(thread_dir) if thread_dir else None,
@@ -2266,7 +2270,7 @@ class ApiServer:
             attachments_saved += report["attachments_saved"]
             fresh_pending.extend(report["pending"])
 
-        pending = store.merge_pending(thread_dir, fresh_pending)
+        pending = store.merge_pending(thread_dir, fresh_pending, pushed=ordered)
         meta = store.write_meta(thread_dir, ref, pending=pending, coverage=coverage)
         logger.info(
             "Teams sync: %s (+%d new, %d updated, %d attachments, %d pending)",

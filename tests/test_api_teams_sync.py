@@ -346,6 +346,115 @@ async def test_pending_clears_once_the_bytes_arrive(client: TestClient) -> None:
     assert (await resp.json())["pending"] == []
 
 
+async def test_obsolete_pending_clears_when_the_message_inventory_changes(
+    client: TestClient,
+) -> None:
+    """A corrected client inventory is authoritative for the pushed message."""
+    await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "x",
+                    "h1",
+                    attachments=[{"name": "1.txt", "status": "failed", "reason": "誤検出"}],
+                )
+            ]
+        ),
+    )
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "x",
+                    "h2",
+                    attachments=[
+                        {
+                            "name": "テスト1.txt",
+                            "status": "embedded",
+                            "data": base64.b64encode(b"ok").decode(),
+                        }
+                    ],
+                )
+            ]
+        ),
+    )
+    body = await resp.json()
+    assert body["pending"] == []
+    meta = json.loads((Path(body["folder"]) / "thread.json").read_text())
+    assert meta["pending_attachments"] == []
+
+
+async def test_partial_push_preserves_pending_for_an_untouched_message(
+    client: TestClient,
+) -> None:
+    """A partial batch must not erase gaps for messages outside that batch."""
+    await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "x",
+                    "h1",
+                    attachments=[{"name": "a.log", "status": "failed", "reason": "取得失敗"}],
+                )
+            ]
+        ),
+    )
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(messages=[msg("1784885000000", "reply", "h2")]),
+    )
+    assert (await resp.json())["pending"] == [
+        {"mid": ROOT, "name": "a.log", "reason": "取得失敗", "url": ""}
+    ]
+
+
+async def test_plan_requests_a_message_with_obsolete_pending_metadata(
+    client: TestClient,
+) -> None:
+    """Vaults affected before the fix self-heal on the next ordinary retry."""
+    payload = base64.b64encode(b"ok").decode()
+    push = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "x",
+                    "h2",
+                    attachments=[{"name": "テスト1.txt", "status": "embedded", "data": payload}],
+                )
+            ]
+        ),
+    )
+    folder = Path((await push.json())["folder"])
+    meta_path = folder / "thread.json"
+    meta = json.loads(meta_path.read_text())
+    meta["pending_attachments"] = [
+        {"mid": ROOT, "name": "1.txt", "reason": "old client false positive", "url": ""}
+    ]
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
+
+    plan = await client.post(
+        "/api/teams/sync/plan",
+        headers=AUTH,
+        json=thread_body(messages=[{"mid": ROOT, "hash": "h2", "attachments": ["テスト1.txt"]}]),
+    )
+    body = await plan.json()
+    assert body["want_messages"] == [ROOT]
+    assert body["want_attachments"] == []
+
+
 # ---------------------------------------------------------------------------
 # self-healing + safety
 # ---------------------------------------------------------------------------
