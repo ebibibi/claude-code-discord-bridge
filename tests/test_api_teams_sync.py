@@ -457,8 +457,32 @@ def test_yaml_scalars_survive_a_japanese_title_with_a_colon() -> None:
     assert f'mid: "{ROOT}"' in rendered
 
 
-def test_store_defaults_to_the_vault(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_store_defaults_beside_the_ingest_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default must be somewhere every deployment already has.
+
+    ccdb is a framework: a default pointing at one operator's note vault would
+    create directories on machines that have no such vault. Personal locations
+    are what the environment variable is for.
+    """
     monkeypatch.delenv("CCDB_TEAMS_VAULT_ROOT", raising=False)
-    assert TeamsVaultStore().root == Path.home() / "obsidian/03_Resources/Teams"
+    assert TeamsVaultStore(working_dir="/srv/bot").root == Path("/srv/bot/teams")
     monkeypatch.setenv("CCDB_TEAMS_VAULT_ROOT", "/tmp/elsewhere")
-    assert TeamsVaultStore().root == Path("/tmp/elsewhere")
+    assert TeamsVaultStore(working_dir="/srv/bot").root == Path("/tmp/elsewhere")
+
+
+async def test_sync_writes_under_the_working_dir_by_default(
+    db_path: str, vault: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no override configured, threads land in {working_dir}/teams."""
+    monkeypatch.delenv("CCDB_TEAMS_VAULT_ROOT", raising=False)
+    repo = NotificationRepository(db_path)
+    await repo.init_db()
+    api = ApiServer(repo=repo, bot=MagicMock(), ingest_token=TOKEN, working_dir=str(vault))
+    async with TestClient(TestServer(api.app)) as c:
+        resp = await c.post(
+            "/api/teams/sync/push",
+            headers=AUTH,
+            json=thread_body(messages=[msg(ROOT, "本文", "h1")]),
+        )
+        folder = Path((await resp.json())["folder"])
+    assert folder.parent == vault / "teams"

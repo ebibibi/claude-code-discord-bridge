@@ -7,7 +7,7 @@ makes the protocol self-healing — delete a message file by hand and the next
 sync fetches it again; a half-finished sync simply leaves less on disk and the
 next one completes it.
 
-Layout under the vault root (default ``~/obsidian/03_Resources/Teams``)::
+Layout under the sync root (default ``{working_dir}/teams``, beside ``ingest``)::
 
     {title-slug}--{root_mid}/
         thread.json          identity, coverage, pending attachments
@@ -31,28 +31,33 @@ from .teams_sync import IncomingMessage, StoredMessage, ThreadRef
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_VAULT_SUBPATH = "obsidian/03_Resources/Teams"
+DEFAULT_SYNC_SUBDIR = "teams"
 _MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 
-def default_vault_root() -> Path:
+def default_vault_root(working_dir: str | Path | None = None) -> Path:
     """Where synced threads live.
 
-    ``CCDB_TEAMS_VAULT_ROOT`` overrides it; otherwise the Obsidian vault's
-    ``03_Resources`` tree, which the vault documents as the home of raw,
-    automatically-collected source material.
+    ``CCDB_TEAMS_VAULT_ROOT`` overrides it; otherwise ``{working_dir}/teams``,
+    the sibling of the ``ingest/`` directory attachments already land in. The
+    default has to be somewhere every deployment already has — pointing it at a
+    note-taking vault would bake one operator's filing system into the
+    framework, and create a directory on machines that have no such vault.
+    Somewhere personal is exactly what the environment variable is for.
     """
     override = os.getenv("CCDB_TEAMS_VAULT_ROOT", "").strip()
     if override:
         return Path(override).expanduser()
-    return Path.home() / DEFAULT_VAULT_SUBPATH
+    return Path(working_dir or os.getcwd()) / DEFAULT_SYNC_SUBDIR
 
 
 class TeamsVaultStore:
     """Reads and writes one thread folder per Teams thread."""
 
-    def __init__(self, root: Path | str | None = None) -> None:
-        self.root = Path(root).expanduser() if root else default_vault_root()
+    def __init__(
+        self, root: Path | str | None = None, working_dir: str | Path | None = None
+    ) -> None:
+        self.root = Path(root).expanduser() if root else default_vault_root(working_dir)
 
     # -- paths ----------------------------------------------------------
 

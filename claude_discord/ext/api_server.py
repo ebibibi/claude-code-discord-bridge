@@ -271,9 +271,9 @@ class ApiServer:
                 "yes",
             )
         self.ingest_require_complete = ingest_require_complete
-        # Where /api/teams/sync mirrors upstream threads. Defaults to the
-        # Obsidian vault's raw-source tree; overridable for tests and for
-        # deployments that keep the vault elsewhere.
+        # Where /api/teams/sync mirrors upstream threads. Defaults to
+        # {working_dir}/teams, beside the ingest tree; point it at a notes vault
+        # or anywhere else with CCDB_TEAMS_VAULT_ROOT.
         self.teams_vault_root = teams_vault_root
         # Loop/rate brake for thread-to-thread relays. Process-local by design:
         # after a restart there are no in-flight relay chains to protect.
@@ -2153,7 +2153,7 @@ class ApiServer:
     # ------------------------------------------------------------------
 
     def _teams_store(self) -> TeamsVaultStore:
-        return TeamsVaultStore(self.teams_vault_root)
+        return TeamsVaultStore(self.teams_vault_root, working_dir=self.working_dir)
 
     async def _read_teams_request(
         self, request: web.Request, *, require_body: bool

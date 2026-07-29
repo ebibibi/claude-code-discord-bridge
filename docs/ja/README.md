@@ -311,7 +311,7 @@ ccdb は各 `embedded` エントリを、届いたファイルに対して **sha
 
 このディレクトリが唯一の真実です — `plan` はディレクトリを読んで答えます。メッセージファイルを削除すれば次回の sync で再取得され、中断された push は次回の sync で完了し、ボタンを 2 回押しても何も起きません（冪等）。保存できなかった添付ファイルが成功として報告されることは**決してありません**: `thread.json`、フォルダの `README.md`、push のレスポンスに記載され、実際にバイト列が届くまで `want_attachments` に現れ続けます。
 
-スレッドはデフォルトで `~/obsidian/03_Resources/Teams` 配下に置かれます — 変更するには `CCDB_TEAMS_VAULT_ROOT`（または `teams_vault_root=`）を設定してください。両ルートとも `/api/ingest` と同じ ingest bearer トークンで保護され、外部リスナーからも利用でき、セッションのスポーンは一切行いません。
+スレッドはデフォルトで `{working_dir}/teams` 配下（`ingest/` の隣）に置かれます — エディタで普段読んでいるノート vault など別の場所に置きたい場合は `CCDB_TEAMS_VAULT_ROOT`（または `teams_vault_root=`）を設定してください。両ルートとも `/api/ingest` と同じ ingest bearer トークンで保護され、外部リスナーからも利用でき、セッションのスポーンは一切行いません。
 
 ### スタートアップリジューム
 
@@ -844,7 +844,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `API_PORT` | REST API ポート（設定すると REST API が有効になる） | （オプション） |
 | `CCDB_INGEST_TOKEN` | `POST /api/ingest` 用の Bearer トークン（`api_secret` とは独立）。未設定ならこのエンドポイントは `503` を返す | （オプション） |
 | `CCDB_INGEST_REQUIRE_COMPLETE` | `1` を設定すると、`attachments_manifest` によって添付ファイルの欠落が判明したインジェストを、部分的な証拠でセッションを開始せずに `409` で拒否する | `0` |
-| `CCDB_TEAMS_VAULT_ROOT` | `POST /api/teams/sync` が上流スレッドをミラーリングする先のディレクトリ（メッセージ 1 件につき 1 ファイル）。`CCDB_INGEST_TOKEN` で保護される | `~/obsidian/03_Resources/Teams` |
+| `CCDB_TEAMS_VAULT_ROOT` | `POST /api/teams/sync` が上流スレッドをミラーリングする先のディレクトリ（メッセージ 1 件につき 1 ファイル）。`CCDB_INGEST_TOKEN` で保護される | `{working_dir}/teams` |
 
 ### パーミッションモード — `-p` モードで動作するもの
 
