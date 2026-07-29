@@ -308,7 +308,7 @@ A *changed* hash and a *never-seen* id are the same question, so following an up
 
 The directory is the single source of truth — `plan` is answered by reading it. Delete a message file and the next sync fetches it again; an interrupted push completes on the next one; pressing the button twice is a no-op. An attachment that could not be stored is **never** reported as success: it is listed in `thread.json`, in the folder's `README.md`, in the push response, and it keeps appearing in `want_attachments` until its bytes actually arrive.
 
-Threads live under `~/obsidian/03_Resources/Teams` by default — set `CCDB_TEAMS_VAULT_ROOT` (or `teams_vault_root=`) to relocate. Both routes use the same ingest bearer token as `/api/ingest`, are available on the external listener, and spawn nothing.
+Threads live under `{working_dir}/teams` by default, beside the `ingest/` tree — set `CCDB_TEAMS_VAULT_ROOT` (or `teams_vault_root=`) to keep them somewhere else, such as a notes vault you already read in an editor. Both routes use the same ingest bearer token as `/api/ingest`, are available on the external listener, and spawn nothing.
 
 ### Startup Resume
 
@@ -842,7 +842,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `API_PORT` | REST API port (enables REST API when set) | (optional) |
 | `CCDB_INGEST_TOKEN` | Bearer token for `POST /api/ingest` (independent of `api_secret`); unset ⇒ the endpoint responds `503` | (optional) |
 | `CCDB_INGEST_REQUIRE_COMPLETE` | Set to `1` to reject an ingest with `409` when its `attachments_manifest` proves attachments went missing, instead of starting a session on partial evidence | `0` |
-| `CCDB_TEAMS_VAULT_ROOT` | Directory where `POST /api/teams/sync` mirrors upstream threads (one file per message). Gated by `CCDB_INGEST_TOKEN` | `~/obsidian/03_Resources/Teams` |
+| `CCDB_TEAMS_VAULT_ROOT` | Directory where `POST /api/teams/sync` mirrors upstream threads (one file per message). Gated by `CCDB_INGEST_TOKEN` | `{working_dir}/teams` |
 
 ### Permission Modes — What Works in `-p` Mode
 
