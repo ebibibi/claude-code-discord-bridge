@@ -32,6 +32,7 @@ class TestSessionBackendProtocol:
 
     def test_protocol_has_required_properties(self) -> None:
         runner = ClaudeRunner(command="claude", model="sonnet")
+        assert runner.backend == "claude"
         assert hasattr(runner, "model")
         assert hasattr(runner, "working_dir")
         assert hasattr(runner, "permission_mode")
@@ -54,6 +55,7 @@ class TestCreateBackend:
 
         backend = create_backend(backend="codex", model="o4-mini")
         assert isinstance(backend, CodexRunner)
+        assert backend.backend == "codex"
 
     def test_unknown_backend_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown backend"):

@@ -118,6 +118,26 @@ def _fmt_pct(snap: dict | None) -> str | None:
         return None
 
 
+def _window_label(snap: dict | None, fallback: str) -> str:
+    """Return the quota window label from its reported duration."""
+    if not isinstance(snap, dict):
+        return fallback
+    duration = snap.get("windowDurationMins")
+    try:
+        minutes = round(float(duration))
+    except (TypeError, ValueError):
+        return fallback
+    if minutes == 300:
+        return "5h"
+    if minutes == 10080:
+        return "週次"
+    if minutes > 0 and minutes % 1440 == 0:
+        return f"{minutes // 1440}日"
+    if minutes > 0 and minutes % 60 == 0:
+        return f"{minutes // 60}h"
+    return f"{minutes}分"
+
+
 def format_codex_status_line(data: dict | None) -> str | None:
     """Format a ``account/rateLimits/read`` result into one Discord line.
 
@@ -131,12 +151,14 @@ def format_codex_status_line(data: dict | None) -> str | None:
         return None
 
     segments: list[str] = []
-    primary = _fmt_pct(snap.get("primary"))
+    primary_snap = snap.get("primary")
+    primary = _fmt_pct(primary_snap)
     if primary is not None:
-        segments.append(f"5h {primary}")
-    secondary = _fmt_pct(snap.get("secondary"))
+        segments.append(f"{_window_label(primary_snap, '5h')} {primary}")
+    secondary_snap = snap.get("secondary")
+    secondary = _fmt_pct(secondary_snap)
     if secondary is not None:
-        segments.append(f"週次 {secondary}")
+        segments.append(f"{_window_label(secondary_snap, '週次')} {secondary}")
 
     credit_info = snap.get("credits")
     if isinstance(credit_info, dict):

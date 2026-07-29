@@ -72,6 +72,8 @@ def _resolve_windows_cmd(cmd_path: Path) -> list[str] | None:
 class ClaudeRunner:
     """Manages Claude Code CLI subprocess execution."""
 
+    backend = "claude"
+
     def __init__(
         self,
         command: str = "claude",

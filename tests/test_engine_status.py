@@ -44,6 +44,37 @@ class TestFormat:
         assert line is not None
         assert "5h 13%" in line
 
+    def test_primary_weekly_window_uses_reported_duration(self) -> None:
+        data = {
+            "rateLimits": {
+                "primary": {
+                    "usedPercent": 3,
+                    "windowDurationMins": 10080,
+                }
+            }
+        }
+
+        line = format_codex_status_line(data)
+
+        assert line is not None
+        assert "週次 3%" in line
+        assert "5h 3%" not in line
+
+    def test_unknown_window_uses_duration_instead_of_slot_name(self) -> None:
+        data = {
+            "rateLimits": {
+                "primary": {
+                    "usedPercent": 7,
+                    "windowDurationMins": 1440,
+                }
+            }
+        }
+
+        line = format_codex_status_line(data)
+
+        assert line is not None
+        assert "1日 7%" in line
+
     def test_rate_limit_reached_warning(self) -> None:
         data = {
             "rateLimits": {

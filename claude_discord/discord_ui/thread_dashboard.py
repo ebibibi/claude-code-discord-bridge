@@ -63,6 +63,7 @@ class _ThreadInfo:
     thread_id: int
     description: str
     state: ThreadState
+    backend: str = "claude"
     started_at: float = field(default_factory=time.monotonic)
     state_changed_at: float = field(default_factory=time.monotonic)
 
@@ -111,6 +112,7 @@ class ThreadStatusDashboard:
         state: ThreadState,
         description: str,
         thread: discord.Thread | discord.TextChannel | None = None,
+        backend: str | None = None,
     ) -> None:
         """Update a thread's state and refresh the dashboard embed.
 
@@ -128,6 +130,9 @@ class ThreadStatusDashboard:
             Short human-readable summary (e.g. the first 100 chars of the prompt).
         thread:
             The ``discord.Thread`` object, required for owner mentions.
+        backend:
+            Backend running this turn. Used to name the engine in the owner
+            mention; omitted values preserve the thread's previous backend.
         """
         async with self._lock:
             prev_state = self._threads[thread_id].state if thread_id in self._threads else None
@@ -137,6 +142,7 @@ class ThreadStatusDashboard:
                     thread_id=thread_id,
                     description=description,
                     state=state,
+                    backend=backend or "claude",
                 )
             else:
                 info = self._threads[thread_id]
@@ -144,6 +150,8 @@ class ThreadStatusDashboard:
                 info.state_changed_at = time.monotonic()
                 if description:
                     info.description = description
+                if backend:
+                    info.backend = backend
 
             # Mention owner on first WAITING_INPUT transition
             should_mention = (
@@ -152,6 +160,7 @@ class ThreadStatusDashboard:
                 and self._owner_id is not None
                 and thread is not None
             )
+            engine = "Codex" if self._threads[thread_id].backend == "codex" else "Claude"
 
             await self._refresh_dashboard()
 
@@ -159,7 +168,7 @@ class ThreadStatusDashboard:
         if should_mention and thread is not None:
             try:
                 await thread.send(
-                    f"🟡 <@{self._owner_id}> Claude has finished — your reply is needed here."
+                    f"🟡 <@{self._owner_id}> {engine} has finished — your reply is needed here."
                 )
             except (discord.HTTPException, RuntimeError):
                 logger.debug("Failed to send owner mention in thread %d", thread_id, exc_info=True)
