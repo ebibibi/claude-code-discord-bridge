@@ -1,4 +1,4 @@
-"""Tests for _post_engine_status_footer (Claude statusLine + Codex line gating)."""
+"""Tests for _post_engine_status_footer active-backend usage gating."""
 
 from __future__ import annotations
 
@@ -67,12 +67,12 @@ class TestGating:
         assert "Ctx 4%" in body
         assert "API:" in body
 
-    async def test_auto_claude_turn_shows_both(self) -> None:
+    async def test_auto_claude_turn_shows_only_claude(self) -> None:
         body = await _run(
             backend="claude", mode="auto", codex_line="🤖 Codex: 5h 1%", statusline="Ctx 4%"
         )
         assert body is not None
-        assert "Codex: 5h 1%" in body
+        assert "Codex" not in body
         assert "Ctx 4%" in body
 
     async def test_auto_codex_turn_no_api_label_but_shows_codex(self) -> None:
@@ -83,6 +83,7 @@ class TestGating:
         assert "Codex: 5h 1%" in body
         # API label is Claude-specific; suppressed on codex turns.
         assert "API:" not in body
+        assert "Ctx 0%" not in body
 
     async def test_auto_codex_turn_fetch_fails_posts_nothing(self) -> None:
         body = await _run(backend="codex", mode="auto", codex_line=None, statusline=None)

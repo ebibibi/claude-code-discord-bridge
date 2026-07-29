@@ -485,7 +485,7 @@ class BackendCommandCog(commands.Cog):
 
     @app_commands.command(
         name="engine-status",
-        description="Show/set whether the Codex usage line appears after each turn",
+        description="Show/set the usage line shown after Codex turns",
     )
     @app_commands.choices(
         mode=[Choice(name=m, value=m) for m in CODEX_STATUS_MODES],
@@ -496,7 +496,7 @@ class BackendCommandCog(commands.Cog):
     )
     @app_commands.describe(
         mode=(
-            "auto: show Codex usage only when it can be fetched; "
+            "auto: show usage on Codex turns when it can be fetched; "
             "on: always; off: never. Omit to show current setting."
         ),
         scope=(
@@ -521,7 +521,7 @@ class BackendCommandCog(commands.Cog):
                 tag = " (thread override)" if current_t != current_g else ""
                 lines.append(f"\U0001f9f5 **This thread**: `{current_t}`{tag}")
             lines.append(
-                f"-# auto = show Codex usage only when reachable (default: "
+                f"-# Applies only to Codex turns; auto = show when reachable (default: "
                 f"`{CODEX_STATUS_DEFAULT}`)."
             )
             await interaction.response.send_message("\n".join(lines), ephemeral=True)

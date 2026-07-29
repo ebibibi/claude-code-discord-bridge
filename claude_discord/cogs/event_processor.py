@@ -563,11 +563,10 @@ class EventProcessor:
                 # - Codex status line surfaces Codex usage via `codex
                 #   app-server` (account/rateLimits/read).
                 #
-                # When the 2-layer Codex toggle (status.codex) is enabled both
-                # are shown after every turn, so the user can compare usage and
-                # decide which engine to use. The Codex probe only runs for
-                # interactive chat (backend_settings is wired) — headless flows
-                # leave it None and incur no extra subprocess.
+                # Only the active backend's status is shown. The Codex probe
+                # runs only on Codex turns in interactive chat
+                # (backend_settings is wired); headless flows leave it None
+                # and incur no extra subprocess.
                 asyncio.create_task(
                     _post_engine_status_footer(
                         thread=self._config.thread,
@@ -963,17 +962,17 @@ async def _post_engine_status_footer(
     codex_command: str,
     thread_id: int | None,
 ) -> None:
-    """Post the per-turn engine status footer (Claude statusLine + Codex line).
+    """Post the active backend's per-turn engine status footer.
 
-    The Codex status line is gated by the 2-layer ``status.codex`` toggle:
+    On Codex turns, the status line is gated by the 2-layer ``status.codex`` toggle:
       - ``off``  → never shown
       - ``auto`` → shown only when it can be fetched (codex installed +
         logged in); silently hidden otherwise
       - ``on``   → always attempted; a short hint is shown when it fails
 
-    The Claude statusLine renders on Claude turns as before. It is *also*
-    rendered on Codex turns when the Codex status line is active, so the
-    Anthropic quota stays visible for side-by-side comparison.
+    The Claude statusLine and API label render only on Claude turns. Codex
+    account usage renders only on Codex turns, preventing another backend's
+    account-wide quota from being mistaken for the active session's quota.
     """
     from ..backend_settings import BackendSettings
     from ..discord_ui.engine_status import get_codex_status_line
@@ -981,7 +980,7 @@ async def _post_engine_status_footer(
     # Resolve the Codex-status mode (off when no settings resolver is wired,
     # e.g. headless flows).
     mode = "off"
-    if isinstance(backend_settings, BackendSettings):
+    if backend == "codex" and isinstance(backend_settings, BackendSettings):
         mode = await backend_settings.codex_status_mode(thread_id)
     show_codex = mode in ("auto", "on")
 
@@ -992,10 +991,8 @@ async def _post_engine_status_footer(
         if codex_line is None and mode == "on":
             codex_line = "\U0001f916 Codex: 残量取得失敗（codex login 済みか確認）"
 
-    # Render the Claude statusLine on Claude turns, or whenever the Codex line
-    # is being shown (so both engines appear together). On non-Claude turns the
-    # session model id is not a Claude model, so suppress the model label.
-    render_claude_sl = backend == "claude" or codex_line is not None
+    # Render Claude status only for Claude turns.
+    render_claude_sl = backend == "claude"
     statusline_text: str | None = None
     if render_claude_sl:
         statusline_text = await _render_claude_statusline_text(
