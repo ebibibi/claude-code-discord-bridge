@@ -6,11 +6,17 @@ import pytest
 
 from claude_discord.discord_ui.engine_status import (
     CodexStatusProvider,
+    _account_display_enabled,
     format_codex_status_line,
 )
 
 # Representative `account/rateLimits/read` result (trimmed to what we read).
 SAMPLE = {
+    "account": {
+        "type": "chatgpt",
+        "email": "user@example.com",
+        "planType": "prolite",
+    },
     "rateLimits": {
         "limitId": "codex",
         "primary": {"usedPercent": 1, "windowDurationMins": 300, "resetsAt": 1782198285},
@@ -18,7 +24,7 @@ SAMPLE = {
         "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
         "planType": "prolite",
         "rateLimitReachedType": None,
-    }
+    },
 }
 
 
@@ -27,10 +33,46 @@ class TestFormat:
         line = format_codex_status_line(SAMPLE)
         assert line is not None
         assert "Codex" in line
+        assert "user@example.com" not in line
         assert "5h 1%" in line
         assert "週次 8%" in line
         assert "クレジット 0" in line
         assert "(prolite)" in line
+
+    def test_account_email_is_opt_in(self) -> None:
+        line = format_codex_status_line(SAMPLE, show_account=True)
+
+        assert line is not None
+        assert "Codex (user@example.com)" in line
+
+    def test_prefers_account_name_over_email(self) -> None:
+        data = {
+            "account": {
+                "displayName": "  Example   User  ",
+                "email": "user@example.com",
+            },
+            "rateLimits": {"primary": {"usedPercent": 5}},
+        }
+
+        line = format_codex_status_line(data, show_account=True)
+
+        assert line is not None
+        assert "Codex (Example User)" in line
+        assert "user@example.com" not in line
+
+    def test_missing_account_keeps_usage_line(self) -> None:
+        data = {"rateLimits": {"primary": {"usedPercent": 5}}}
+
+        line = format_codex_status_line(data, show_account=True)
+
+        assert line == "🤖 Codex: 5h 5%"
+
+    def test_account_display_env_is_opt_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CCDB_CODEX_STATUS_ACCOUNT", raising=False)
+        assert not _account_display_enabled()
+
+        monkeypatch.setenv("CCDB_CODEX_STATUS_ACCOUNT", "yes")
+        assert _account_display_enabled()
 
     def test_unlimited_credits(self) -> None:
         data = {"rateLimits": {"primary": {"usedPercent": 5}, "credits": {"unlimited": True}}}
