@@ -55,6 +55,10 @@ class TestExternalAppSurface:
             "/api/ingest",
             "/api/ingest/summary",
             "/api/ingest/{result_id}",
+            # Teams thread sync: token-gated like /api/ingest, writes only under
+            # the vault root, spawns nothing.
+            "/api/teams/sync/plan",
+            "/api/teams/sync/push",
         }
 
     def test_does_not_expose_control_plane(
