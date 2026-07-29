@@ -10,6 +10,8 @@ from claude_discord.discord_ui.engine_status import (
     format_codex_status_line,
 )
 
+NOW = 1_780_000_000
+
 # Representative `account/rateLimits/read` result (trimmed to what we read).
 SAMPLE = {
     "account": {
@@ -19,8 +21,16 @@ SAMPLE = {
     },
     "rateLimits": {
         "limitId": "codex",
-        "primary": {"usedPercent": 1, "windowDurationMins": 300, "resetsAt": 1782198285},
-        "secondary": {"usedPercent": 8, "windowDurationMins": 10080, "resetsAt": 1782361421},
+        "primary": {
+            "usedPercent": 1,
+            "windowDurationMins": 300,
+            "resetsAt": NOW + 28 * 60,
+        },
+        "secondary": {
+            "usedPercent": 8,
+            "windowDurationMins": 10080,
+            "resetsAt": NOW + 23 * 60 * 60 + 58 * 60,
+        },
         "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
         "planType": "prolite",
         "rateLimitReachedType": None,
@@ -29,21 +39,25 @@ SAMPLE = {
 
 
 class TestFormat:
-    def test_basic_line(self) -> None:
-        line = format_codex_status_line(SAMPLE)
-        assert line is not None
-        assert "Codex" in line
+    def test_basic_multiline_status(self) -> None:
+        line = format_codex_status_line(SAMPLE, now=NOW)
+
+        assert line == (
+            "Codex · prolite subscription\n"
+            "5h  used 1% — resets in 28m\n"
+            "7d  used 8% — resets in 23h 58m"
+        )
         assert "user@example.com" not in line
-        assert "5h 1%" in line
-        assert "週次 8%" in line
-        assert "クレジット 0" in line
-        assert "(prolite)" in line
+        assert "credit" not in line.lower()
 
     def test_account_email_is_opt_in(self) -> None:
-        line = format_codex_status_line(SAMPLE, show_account=True)
+        line = format_codex_status_line(SAMPLE, show_account=True, now=NOW)
 
-        assert line is not None
-        assert "Codex (user@example.com)" in line
+        assert line == (
+            "Codex · prolite subscription (user@example.com)\n"
+            "5h  used 1% — resets in 28m\n"
+            "7d  used 8% — resets in 23h 58m"
+        )
 
     def test_prefers_account_name_over_email(self) -> None:
         data = {
@@ -65,7 +79,7 @@ class TestFormat:
 
         line = format_codex_status_line(data, show_account=True)
 
-        assert line == "🤖 Codex: 5h 5%"
+        assert line == "Codex\n5h  used 5%"
 
     def test_account_display_env_is_opt_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CCDB_CODEX_STATUS_ACCOUNT", raising=False)
@@ -74,17 +88,54 @@ class TestFormat:
         monkeypatch.setenv("CCDB_CODEX_STATUS_ACCOUNT", "yes")
         assert _account_display_enabled()
 
-    def test_unlimited_credits(self) -> None:
+    def test_credit_only_payload_is_not_usage(self) -> None:
         data = {"rateLimits": {"primary": {"usedPercent": 5}, "credits": {"unlimited": True}}}
         line = format_codex_status_line(data)
         assert line is not None
-        assert "クレジット 無制限" in line
+        assert "credit" not in line.lower()
 
     def test_rounds_fractional_percent(self) -> None:
         data = {"rateLimits": {"primary": {"usedPercent": 12.6}}}
         line = format_codex_status_line(data)
         assert line is not None
-        assert "5h 13%" in line
+        assert "5h  used 13%" in line
+
+    def test_window_label_comes_from_duration_not_slot(self) -> None:
+        data = {
+            "rateLimits": {
+                "primary": {
+                    "usedPercent": 3,
+                    "windowDurationMins": 10080,
+                    "resetsAt": NOW + 60,
+                }
+            }
+        }
+
+        line = format_codex_status_line(data, now=NOW)
+
+        assert line == "Codex\n7d  used 3% — resets in 1m"
+
+    def test_unknown_window_uses_reported_duration(self) -> None:
+        data = {"rateLimits": {"primary": {"usedPercent": 7, "windowDurationMins": 1440}}}
+
+        line = format_codex_status_line(data)
+
+        assert line == "Codex\n1d  used 7%"
+
+    def test_reset_countdown_supports_days(self) -> None:
+        data = {
+            "rateLimits": {
+                "secondary": {
+                    "usedPercent": 42,
+                    "windowDurationMins": 10080,
+                    "resetsAt": NOW + 2 * 86400 + 3 * 3600 + 4 * 60,
+                }
+            }
+        }
+
+        line = format_codex_status_line(data, now=NOW)
+
+        assert line == "Codex\n7d  used 42% — resets in 2d 3h 4m"
 
     def test_rate_limit_reached_warning(self) -> None:
         data = {
@@ -95,7 +146,7 @@ class TestFormat:
         }
         line = format_codex_status_line(data)
         assert line is not None
-        assert "上限到達" in line
+        assert "limit reached" in line
 
     @pytest.mark.parametrize("bad", [None, {}, {"rateLimits": None}, {"rateLimits": {}}, "x"])
     def test_returns_none_for_unusable(self, bad: object) -> None:
