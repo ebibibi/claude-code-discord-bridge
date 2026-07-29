@@ -81,6 +81,11 @@ SUGGESTED_MODELS: dict[str, list[tuple[str, str]]] = {
 }
 
 
+def _codex_profile_description(model: str, profile: str) -> str:
+    """Describe an available routed Codex model in the Discord dropdown."""
+    return f"{model} (available via `{profile}` profile)"
+
+
 def _model_label(model: str | None) -> str:
     """Human-readable model label; ``None`` means the backend CLI's own default."""
     return f"`{model}`" if model else "_(CLI default)_"
@@ -278,10 +283,20 @@ class BackendCommandCog(commands.Cog):
             suggestions = await claude_model_choices(fallback=SUGGESTED_MODELS["claude"])
         else:
             suggestions = SUGGESTED_MODELS.get(backend, [])
+            if backend == "codex":
+                routed = self._factory.usable_codex_model_profiles()
+                routed_suggestions = [
+                    (model, _codex_profile_description(model, profile))
+                    for model, profile in routed.items()
+                ]
+                routed_models = set(routed)
+                suggestions = routed_suggestions + [
+                    suggestion for suggestion in suggestions if suggestion[0] not in routed_models
+                ]
         current_lower = current.lower()
         choices: list[Choice[str]] = []
         for value, desc in suggestions:
-            if current_lower and current_lower not in value.lower():
+            if current_lower and current_lower not in f"{value} {desc}".lower():
                 continue
             label = f"{value} — {desc}"
             choices.append(Choice(name=label[:100], value=value))

@@ -15,6 +15,7 @@ from claude_discord.backend_factory import (
     DEFAULT_MODEL,
     BackendFactory,
     parse_codex_model_profiles,
+    usable_codex_model_profiles,
 )
 
 
@@ -62,6 +63,55 @@ def test_factory_leaves_unmapped_codex_model_on_default_profile() -> None:
 
     assert isinstance(runner, CodexRunner)
     assert runner.profile is None
+
+
+def _write_fugu_config(tmp_path) -> dict[str, str]:
+    codex_home = tmp_path / ".codex"
+    codex_home.mkdir()
+    (codex_home / "config.toml").write_text(
+        """
+[model_providers.sakana]
+env_key = "SAKANA_API_KEY"
+base_url = "https://api.sakana.example/v1"
+""".strip(),
+        encoding="utf-8",
+    )
+    (codex_home / "fugu.config.toml").write_text(
+        """
+model_provider = "sakana"
+model_catalog_json = "fugu.json"
+""".strip(),
+        encoding="utf-8",
+    )
+    (codex_home / "fugu.json").write_text(
+        '{"models":[{"slug":"fugu"},{"slug":"fugu-ultra"}]}',
+        encoding="utf-8",
+    )
+    return {
+        "HOME": str(tmp_path),
+        "CODEX_HOME": str(codex_home),
+        "SAKANA_API_KEY": "configured",
+    }
+
+
+def test_usable_profiles_require_profile_catalog_and_credential(tmp_path) -> None:
+    env = _write_fugu_config(tmp_path)
+    profiles = {"fugu": "fugu", "fugu-ultra": "fugu"}
+
+    assert usable_codex_model_profiles(profiles, env=env) == profiles
+
+
+def test_usable_profiles_hide_models_without_provider_credential(tmp_path) -> None:
+    env = _write_fugu_config(tmp_path)
+    env.pop("SAKANA_API_KEY")
+
+    assert usable_codex_model_profiles({"fugu-ultra": "fugu"}, env=env) == {}
+
+
+def test_usable_profiles_hide_models_missing_from_catalog(tmp_path) -> None:
+    env = _write_fugu_config(tmp_path)
+
+    assert usable_codex_model_profiles({"fugu-preview": "fugu"}, env=env) == {}
 
 
 class TestCodexDefaultModel:

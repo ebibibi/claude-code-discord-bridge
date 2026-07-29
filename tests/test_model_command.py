@@ -160,6 +160,39 @@ class TestModelAutocomplete:
 
         assert choices[0].value == "gpt-5.6-sol"
 
+    async def test_codex_backend_prepends_usable_sakana_models(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = await _settings()
+        await settings.set_backend("codex")
+        cog = _make_cog(settings)
+        monkeypatch.setattr(
+            cog._factory,
+            "usable_codex_model_profiles",
+            lambda: {"fugu": "fugu", "fugu-ultra": "fugu"},
+        )
+
+        choices = await cog._model_name_autocomplete(_channel_interaction(), "")
+
+        assert [choice.value for choice in choices[:2]] == ["fugu", "fugu-ultra"]
+        assert all("available via" in choice.name for choice in choices[:2])
+
+    async def test_codex_backend_filters_routed_models_by_profile_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        settings = await _settings()
+        await settings.set_backend("codex")
+        cog = _make_cog(settings)
+        monkeypatch.setattr(
+            cog._factory,
+            "usable_codex_model_profiles",
+            lambda: {"fugu": "sakana", "fugu-ultra": "sakana"},
+        )
+
+        choices = await cog._model_name_autocomplete(_channel_interaction(), "sakana")
+
+        assert [choice.value for choice in choices] == ["fugu", "fugu-ultra"]
+
     async def test_filters_by_current_substring(self) -> None:
         settings = await _settings()
         cog = _make_cog(settings)
