@@ -408,5 +408,17 @@ class TeamsVaultStore:
                 continue
             if name in self._attachments_present(thread_dir, mid):
                 continue
-            merged[(mid, name)] = {**item, "mid": mid, "name": name}
+            candidate = {**item, "mid": mid, "name": name}
+            key = (mid, name)
+            current = merged.get(key)
+            candidate_priority = (
+                bool(candidate.get("url")),
+                bool(candidate.get("reason")),
+            )
+            current_priority = (
+                bool(current and current.get("url")),
+                bool(current and current.get("reason")),
+            )
+            if current is None or candidate_priority >= current_priority:
+                merged[key] = candidate
         return sorted(merged.values(), key=lambda i: (i["mid"], i["name"]))

@@ -418,6 +418,47 @@ async def test_partial_push_preserves_pending_for_an_untouched_message(
     ]
 
 
+async def test_pending_merge_prefers_a_real_link_over_a_provisional_failure(
+    client: TestClient,
+) -> None:
+    """A late provisional DOM fallback must not hide the actionable SharePoint URL."""
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "x",
+                    "h1",
+                    attachments=[
+                        {
+                            "name": "admin.evtx",
+                            "status": "linked",
+                            "url": "https://contoso.sharepoint.com/sites/team/admin.evtx",
+                            "reason": "HTTP 404",
+                        },
+                        {
+                            "name": "admin.evtx",
+                            "status": "failed",
+                            "reason": "本文で言及されていますが添付カードを検出できません",
+                        },
+                    ],
+                )
+            ]
+        ),
+    )
+
+    assert (await resp.json())["pending"] == [
+        {
+            "mid": ROOT,
+            "name": "admin.evtx",
+            "reason": "HTTP 404",
+            "url": "https://contoso.sharepoint.com/sites/team/admin.evtx",
+        }
+    ]
+
+
 async def test_plan_requests_a_message_with_obsolete_pending_metadata(
     client: TestClient,
 ) -> None:
