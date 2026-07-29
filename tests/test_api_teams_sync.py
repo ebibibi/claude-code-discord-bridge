@@ -1,0 +1,464 @@
+"""Tests for the Teams thread sync API (/api/teams/sync/{plan,push}).
+
+The behaviour that matters here is not "does it write a file" but the three
+properties the design rests on:
+
+- **idempotence** — pushing the same thread twice must not duplicate anything,
+  because the client keeps no record of what it sent.
+- **edits are the same mechanism as new messages** — a changed hash is wanted,
+  and the old version survives in ``_history``.
+- **nothing goes missing quietly** — an attachment that could not be stored is
+  reported, keeps being reported, and is asked for again on the next plan.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import pytest
+from aiohttp.test_utils import TestClient, TestServer
+
+from claude_discord.database.notification_repo import NotificationRepository
+from claude_discord.ext import teams_sync
+from claude_discord.ext.api_server import ApiServer
+from claude_discord.ext.teams_store import TeamsVaultStore
+
+TOKEN = "test-ingest-token"  # noqa: S105 - test fixture, not a real credential
+TEAM = "3a2b1c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+ROOT = "1784110000000"
+AUTH = {"Authorization": f"Bearer {TOKEN}"}
+
+
+@pytest.fixture
+def vault() -> Iterator[Path]:
+    with tempfile.TemporaryDirectory() as tmp:
+        yield Path(tmp)
+
+
+@pytest.fixture
+def db_path() -> Iterator[str]:
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    yield path
+    os.unlink(path)
+
+
+@pytest.fixture
+async def client(db_path: str, vault: Path) -> Iterator[TestClient]:
+    repo = NotificationRepository(db_path)
+    await repo.init_db()
+    api = ApiServer(
+        repo=repo,
+        bot=MagicMock(),
+        default_channel_id=1,
+        ingest_token=TOKEN,
+        teams_vault_root=str(vault),
+    )
+    async with TestClient(TestServer(api.app)) as c:
+        yield c
+
+
+def thread_body(**over) -> dict:
+    body = {
+        "thread": {
+            "team": TEAM,
+            "root_mid": ROOT,
+            "title": "MEHJ後のIntune登録に関して",
+            "url": "https://teams.cloud.microsoft/x",
+        },
+        "messages": [],
+    }
+    body.update(over)
+    return body
+
+
+def msg(mid: str, text: str, digest: str, **over) -> dict:
+    out = {
+        "mid": mid,
+        "hash": digest,
+        "text": text,
+        "author": "高橋 太郎",
+        "timestamp": "2026-07-28T10:12:00+09:00",
+    }
+    out.update(over)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# have / want
+# ---------------------------------------------------------------------------
+
+
+async def test_plan_wants_everything_on_a_first_sync(client: TestClient) -> None:
+    resp = await client.post(
+        "/api/teams/sync/plan",
+        headers=AUTH,
+        json=thread_body(
+            messages=[{"mid": ROOT, "hash": "h1"}, {"mid": "1784885000000", "hash": "h2"}]
+        ),
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["exists"] is False
+    assert body["have"] == 0
+    assert body["want_messages"] == [ROOT, "1784885000000"]
+    assert body["newest_have_mid"] is None
+
+
+async def test_plan_after_push_wants_nothing_new(client: TestClient) -> None:
+    await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(messages=[msg(ROOT, "最初の投稿", "h1")]),
+    )
+    resp = await client.post(
+        "/api/teams/sync/plan",
+        headers=AUTH,
+        json=thread_body(
+            messages=[{"mid": ROOT, "hash": "h1"}, {"mid": "1784885000000", "hash": "h2"}]
+        ),
+    )
+    body = await resp.json()
+    assert body["have"] == 1
+    assert body["want_messages"] == ["1784885000000"]
+    assert body["newest_have_mid"] == ROOT
+
+
+async def test_changed_hash_is_wanted_again(client: TestClient) -> None:
+    """An edit upstream is detected by the same comparison as a new message."""
+    await client.post(
+        "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "before", "h1")])
+    )
+    resp = await client.post(
+        "/api/teams/sync/plan",
+        headers=AUTH,
+        json=thread_body(messages=[{"mid": ROOT, "hash": "h2"}]),
+    )
+    assert (await resp.json())["want_messages"] == [ROOT]
+
+
+# ---------------------------------------------------------------------------
+# push
+# ---------------------------------------------------------------------------
+
+
+async def test_push_writes_one_file_per_message(client: TestClient, vault: Path) -> None:
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[msg(ROOT, "ルート投稿", "h1"), msg("1784885000000", "返信です", "h2")]
+        ),
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["created"] == 2
+
+    folder = Path(body["folder"])
+    assert (folder / "messages" / f"{ROOT}.md").exists()
+    assert "返信です" in (folder / "messages" / "1784885000000.md").read_text()
+    # mid is fixed width, so the filenames sort into chronological order.
+    names = sorted(p.stem for p in (folder / "messages").glob("*.md"))
+    assert names == [ROOT, "1784885000000"]
+
+
+async def test_chain_records_order_and_prev(client: TestClient) -> None:
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[msg("1784885000000", "二番目", "h2"), msg(ROOT, "ルート", "h1")]
+        ),
+    )
+    folder = Path((await resp.json())["folder"])
+    chain = [json.loads(line) for line in (folder / "chain.jsonl").read_text().splitlines()]
+    assert [c["mid"] for c in chain] == [ROOT, "1784885000000"]
+    assert chain[0]["prev"] is None
+    assert chain[1]["prev"] == ROOT
+    # `next` is deliberately not stored anywhere: it would require rewriting an
+    # existing file on every new reply.
+    assert "next" not in chain[0]
+    front = (folder / "messages" / f"{ROOT}.md").read_text()
+    assert "next:" not in front
+
+
+async def test_pushing_twice_is_idempotent(client: TestClient) -> None:
+    body = thread_body(messages=[msg(ROOT, "同じ本文", "h1")])
+    first = await client.post("/api/teams/sync/push", headers=AUTH, json=body)
+    folder = Path((await first.json())["folder"])
+    second = await client.post("/api/teams/sync/push", headers=AUTH, json=body)
+
+    assert (await second.json())["folder"] == str(folder)
+    assert len(list(Path(folder / "messages").glob("*.md"))) == 1
+    assert sorted(p.name for p in folder.parent.iterdir()) == [folder.name]
+    meta = json.loads((folder / "thread.json").read_text())
+    assert meta["message_count"] == 1
+
+
+async def test_edit_archives_the_previous_version(client: TestClient) -> None:
+    await client.post(
+        "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "旧本文", "h1")])
+    )
+    resp = await client.post(
+        "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "新本文", "h2")])
+    )
+    folder = Path((await resp.json())["folder"])
+    note = (folder / "messages" / f"{ROOT}.md").read_text()
+    assert "新本文" in note
+    assert "edited: true" in note
+    archived = list((folder / "_history").glob(f"{ROOT}.*.md"))
+    assert len(archived) == 1
+    assert "旧本文" in archived[0].read_text()
+    chain = [json.loads(line) for line in (folder / "chain.jsonl").read_text().splitlines()]
+    assert [c["rev"] for c in chain] == [1, 2]
+
+
+async def test_deleted_message_keeps_its_file(client: TestClient) -> None:
+    await client.post(
+        "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "本文", "h1")])
+    )
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[msg(ROOT, "このメッセージは削除されました", "h2", deleted=True)]
+        ),
+    )
+    folder = Path((await resp.json())["folder"])
+    note = (folder / "messages" / f"{ROOT}.md").read_text()
+    assert "deleted: true" in note
+    assert list((folder / "_history").glob("*.md"))
+
+
+# ---------------------------------------------------------------------------
+# attachments — the part that has failed silently before
+# ---------------------------------------------------------------------------
+
+
+async def test_embedded_attachment_lands_next_to_its_message(
+    client: TestClient,
+) -> None:
+    payload = base64.b64encode(b"evtx-bytes").decode()
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "取り急ぎ admin.evtx を確認しました",
+                    "h1",
+                    attachments=[{"name": "admin.evtx", "status": "embedded", "data": payload}],
+                )
+            ]
+        ),
+    )
+    body = await resp.json()
+    folder = Path(body["folder"])
+    assert body["attachments_saved"] == 1
+    assert body["pending"] == []
+    assert (folder / "messages" / ROOT / "admin.evtx").read_bytes() == b"evtx-bytes"
+
+
+async def test_unfetched_attachment_is_reported_and_asked_for_again(
+    client: TestClient,
+) -> None:
+    """The failure mode that produced a false "✅ 完全" must not recur."""
+    push = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "ログを添付します",
+                    "h1",
+                    attachments=[
+                        {"name": "admin.evtx", "status": "failed", "reason": "URLを取得できず"}
+                    ],
+                )
+            ]
+        ),
+    )
+    body = await push.json()
+    assert body["attachments_saved"] == 0
+    assert body["pending"] == [
+        {"mid": ROOT, "name": "admin.evtx", "reason": "URLを取得できず", "url": ""}
+    ]
+
+    folder = Path(body["folder"])
+    assert "admin.evtx" in (folder / "README.md").read_text()
+    assert "⚠️ 添付未取得" in (folder / "messages" / f"{ROOT}.md").read_text()
+
+    # And the next plan asks for it again — a gap that stays visible is a gap
+    # that can be closed by pressing the button once more.
+    plan = await client.post(
+        "/api/teams/sync/plan",
+        headers=AUTH,
+        json=thread_body(messages=[{"mid": ROOT, "hash": "h1", "attachments": ["admin.evtx"]}]),
+    )
+    plan_body = await plan.json()
+    assert plan_body["want_messages"] == []
+    assert plan_body["want_attachments"] == [{"mid": ROOT, "name": "admin.evtx"}]
+
+
+async def test_pending_clears_once_the_bytes_arrive(client: TestClient) -> None:
+    await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "x",
+                    "h1",
+                    attachments=[{"name": "a.log", "status": "failed", "reason": "取得失敗"}],
+                )
+            ]
+        ),
+    )
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "x",
+                    "h1",
+                    attachments=[
+                        {
+                            "name": "a.log",
+                            "status": "embedded",
+                            "data": base64.b64encode(b"ok").decode(),
+                        }
+                    ],
+                )
+            ]
+        ),
+    )
+    assert (await resp.json())["pending"] == []
+
+
+# ---------------------------------------------------------------------------
+# self-healing + safety
+# ---------------------------------------------------------------------------
+
+
+async def test_a_deleted_file_is_fetched_again(client: TestClient) -> None:
+    """The filesystem is the source of truth, not the chain journal."""
+    push = await client.post(
+        "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "本文", "h1")])
+    )
+    folder = Path((await push.json())["folder"])
+    (folder / "messages" / f"{ROOT}.md").unlink()
+
+    plan = await client.post(
+        "/api/teams/sync/plan",
+        headers=AUTH,
+        json=thread_body(messages=[{"mid": ROOT, "hash": "h1"}]),
+    )
+    assert (await plan.json())["want_messages"] == [ROOT]
+
+
+async def test_thread_is_found_after_the_folder_is_renamed(client: TestClient, vault: Path) -> None:
+    """Identity lives in thread.json, so a hand-renamed folder keeps syncing."""
+    push = await client.post(
+        "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "本文", "h1")])
+    )
+    folder = Path((await push.json())["folder"])
+    renamed = folder.parent / "胡田が名前を変えたフォルダ"
+    folder.rename(renamed)
+
+    plan = await client.post(
+        "/api/teams/sync/plan",
+        headers=AUTH,
+        json=thread_body(messages=[{"mid": ROOT, "hash": "h1"}]),
+    )
+    body = await plan.json()
+    assert body["folder"] == str(renamed)
+    assert body["want_messages"] == []
+
+
+async def test_traversal_in_ids_is_refused(client: TestClient) -> None:
+    for bad_thread in ({"team": "../../etc", "root_mid": ROOT}, {"team": TEAM, "root_mid": "../x"}):
+        resp = await client.post(
+            "/api/teams/sync/plan", headers=AUTH, json={"thread": bad_thread, "messages": []}
+        )
+        assert resp.status == 400
+
+
+async def test_traversal_in_an_attachment_name_is_flattened(
+    client: TestClient, vault: Path
+) -> None:
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "x",
+                    "h1",
+                    attachments=[
+                        {
+                            "name": "../../../../etc/passwd",
+                            "status": "embedded",
+                            "data": base64.b64encode(b"nope").decode(),
+                        }
+                    ],
+                )
+            ]
+        ),
+    )
+    folder = Path((await resp.json())["folder"])
+    written = list((folder / "messages" / ROOT).iterdir())
+    assert [p.name for p in written] == ["passwd"]
+    assert not (vault.parent / "etc").exists()
+
+
+async def test_sync_requires_the_ingest_token(client: TestClient) -> None:
+    for path in ("/api/teams/sync/plan", "/api/teams/sync/push"):
+        assert (await client.post(path, json=thread_body())).status == 401
+        bad = {"Authorization": "Bearer wrong"}
+        assert (await client.post(path, headers=bad, json=thread_body())).status == 401
+
+
+# ---------------------------------------------------------------------------
+# pure helpers
+# ---------------------------------------------------------------------------
+
+
+def test_thread_dirname_is_readable_and_unique() -> None:
+    name = teams_sync.thread_dirname("MEHJ後のIntune登録に関して", ROOT)
+    assert name == f"MEHJ後のIntune登録に関して--{ROOT}"
+    # Path- and Obsidian-hostile characters never reach the filesystem.
+    assert "/" not in teams_sync.thread_dirname("a/b:c*d?[e]", ROOT)
+
+
+def test_yaml_scalars_survive_a_japanese_title_with_a_colon() -> None:
+    rendered = teams_sync.render_message(
+        teams_sync.IncomingMessage(mid=ROOT, hash="h1", text="本文", author="胡田: テスト"),
+        teams_sync.ThreadRef(team=TEAM, root_mid=ROOT, title="件名: あり"),
+        prev_mid=None,
+        edited=False,
+        first_synced_at="t",
+        last_synced_at="t",
+        pending=[],
+    )
+    assert 'author: "胡田: テスト"' in rendered
+    # A quoted mid stays a string, so it keeps matching its filename.
+    assert f'mid: "{ROOT}"' in rendered
+
+
+def test_store_defaults_to_the_vault(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CCDB_TEAMS_VAULT_ROOT", raising=False)
+    assert TeamsVaultStore().root == Path.home() / "obsidian/03_Resources/Teams"
+    monkeypatch.setenv("CCDB_TEAMS_VAULT_ROOT", "/tmp/elsewhere")
+    assert TeamsVaultStore().root == Path("/tmp/elsewhere")

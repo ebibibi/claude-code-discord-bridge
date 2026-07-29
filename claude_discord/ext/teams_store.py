@@ -1,0 +1,392 @@
+"""Filesystem side of the Teams thread sync — one message, one file.
+
+The vault is the single source of truth. There is no database row and no
+client-side marker recording what has been synced: the answer to "what do you
+already have?" is computed by looking at the files, every time. That is what
+makes the protocol self-healing — delete a message file by hand and the next
+sync fetches it again; a half-finished sync simply leaves less on disk and the
+next one completes it.
+
+Layout under the vault root (default ``~/obsidian/03_Resources/Teams``)::
+
+    {title-slug}--{root_mid}/
+        thread.json          identity, coverage, pending attachments
+        chain.jsonl          append-only order + revision journal
+        README.md            how an agent should read this folder
+        messages/{mid}.md    one message
+        messages/{mid}/...   that message's attachments
+        _history/{mid}.{hash8}.md   superseded versions of an edited message
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+
+from . import teams_sync
+from .teams_sync import IncomingMessage, StoredMessage, ThreadRef
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_VAULT_SUBPATH = "obsidian/03_Resources/Teams"
+_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+
+def default_vault_root() -> Path:
+    """Where synced threads live.
+
+    ``CCDB_TEAMS_VAULT_ROOT`` overrides it; otherwise the Obsidian vault's
+    ``03_Resources`` tree, which the vault documents as the home of raw,
+    automatically-collected source material.
+    """
+    override = os.getenv("CCDB_TEAMS_VAULT_ROOT", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / DEFAULT_VAULT_SUBPATH
+
+
+class TeamsVaultStore:
+    """Reads and writes one thread folder per Teams thread."""
+
+    def __init__(self, root: Path | str | None = None) -> None:
+        self.root = Path(root).expanduser() if root else default_vault_root()
+
+    # -- paths ----------------------------------------------------------
+
+    def _contained(self, base: Path, path: Path) -> Path | None:
+        """Return ``path`` only if it really resolves inside ``base``.
+
+        mids and attachment names come from the network. They are pattern-checked
+        upstream, but the guarantee is re-established here, next to the write
+        that depends on it: a sanitiser three call frames away protects nothing
+        that a later refactor cannot quietly remove.
+        """
+        try:
+            root = os.path.realpath(str(base))
+            resolved = os.path.realpath(str(path))
+        except OSError:
+            return None
+        if resolved != root and not resolved.startswith(root + os.sep):
+            return None
+        return Path(resolved)
+
+    def find_thread_dir(self, ref: ThreadRef) -> Path | None:
+        """Locate an existing folder for this thread by reading thread.json.
+
+        Identity lives in the file, not in the folder name, so a folder the user
+        renamed in Obsidian is still found. There is deliberately no index file:
+        an index would be a second ledger that can drift from the directory it
+        describes.
+        """
+        if not self.root.is_dir():
+            return None
+        for entry in sorted(self.root.iterdir()):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            meta = self._read_json(entry / "thread.json")
+            if not meta:
+                continue
+            if (
+                str(meta.get("team", "")).lower() == ref.team
+                and str(meta.get("root_mid", "")) == ref.root_mid
+            ):
+                return entry
+        return None
+
+    def ensure_thread_dir(self, ref: ThreadRef) -> Path:
+        """Find the thread's folder, creating it on first sync."""
+        existing = self.find_thread_dir(ref)
+        if existing is not None:
+            return existing
+        base = teams_sync.thread_dirname(ref.title, ref.root_mid)
+        candidate = self.root / base
+        # The name embeds the root mid, so a clash means an unrelated leftover
+        # directory. Take the next free suffix rather than writing into it.
+        for n in range(2, 100):
+            if self._contained(self.root, candidate) is None:
+                raise ValueError("thread directory escapes the vault root")
+            if not candidate.exists():
+                break
+            candidate = self.root / f"{base}_{n}"
+        candidate.mkdir(parents=True, exist_ok=True)
+        (candidate / "messages").mkdir(exist_ok=True)
+        return candidate
+
+    # -- reading --------------------------------------------------------
+
+    def load_stored(self, thread_dir: Path) -> dict[str, StoredMessage]:
+        """What this folder currently holds, keyed by mid.
+
+        Built from ``chain.jsonl`` (last revision per mid) but confirmed against
+        the actual files: a chain entry whose message file is gone is not
+        reported as stored, so the message comes back on the next sync.
+        """
+        stored: dict[str, StoredMessage] = {}
+        for entry in self.read_chain(thread_dir):
+            mid = str(entry.get("mid") or "")
+            if not mid:
+                continue
+            stored[mid] = StoredMessage(mid=mid, hash=str(entry.get("hash") or ""))
+        confirmed: dict[str, StoredMessage] = {}
+        for mid, rec in stored.items():
+            note = self._message_path(thread_dir, mid)
+            if note is None or not note.exists():
+                continue
+            confirmed[mid] = StoredMessage(
+                mid=mid,
+                hash=rec.hash,
+                attachments_present=self._attachments_present(thread_dir, mid),
+            )
+        return confirmed
+
+    def read_chain(self, thread_dir: Path) -> list[dict]:
+        """Every chain line, oldest first. Malformed lines are skipped, not fatal."""
+        path = thread_dir / "chain.jsonl"
+        if not path.exists():
+            return []
+        out: list[dict] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                logger.warning("Skipping malformed chain line in %s", path.name)
+                continue
+            if isinstance(item, dict):
+                out.append(item)
+        return out
+
+    def latest_chain(self, thread_dir: Path) -> dict[str, dict]:
+        """Last revision per mid (a later line for the same mid supersedes)."""
+        latest: dict[str, dict] = {}
+        for entry in self.read_chain(thread_dir):
+            mid = str(entry.get("mid") or "")
+            if mid:
+                latest[mid] = entry
+        return latest
+
+    def read_meta(self, thread_dir: Path) -> dict:
+        return self._read_json(thread_dir / "thread.json") or {}
+
+    def _read_json(self, path: Path) -> dict | None:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _message_path(self, thread_dir: Path, mid: str) -> Path | None:
+        return self._contained(thread_dir, thread_dir / "messages" / f"{mid}.md")
+
+    def _attachment_dir(self, thread_dir: Path, mid: str) -> Path | None:
+        return self._contained(thread_dir, thread_dir / "messages" / mid)
+
+    def _attachments_present(self, thread_dir: Path, mid: str) -> frozenset[str]:
+        folder = self._attachment_dir(thread_dir, mid)
+        if folder is None or not folder.is_dir():
+            return frozenset()
+        return frozenset(p.name for p in folder.iterdir() if p.is_file())
+
+    # -- writing --------------------------------------------------------
+
+    def save_message(
+        self,
+        thread_dir: Path,
+        msg: IncomingMessage,
+        ref: ThreadRef,
+        *,
+        prev_mid: str | None,
+        now: str | None = None,
+    ) -> dict:
+        """Write one message, rotating any previous version into ``_history``.
+
+        Returns a report ``{mid, action, pending, attachments_saved}``. Nothing
+        is ever deleted: an edit moves the old body aside, a Teams-side deletion
+        only flips a flag.
+        """
+        now = now or datetime.now().astimezone().isoformat(timespec="seconds")
+        note = self._message_path(thread_dir, msg.mid)
+        if note is None:
+            raise ValueError(f"message path escapes the thread directory: {msg.mid}")
+        note.parent.mkdir(parents=True, exist_ok=True)
+
+        previous = self.latest_chain(thread_dir).get(msg.mid)
+        edited = previous is not None and previous.get("hash") != msg.hash
+        rev = int(previous.get("rev", 1)) + 1 if previous else 1
+        first_synced = now
+        if note.exists():
+            if edited and previous is not None:
+                self._archive_version(thread_dir, msg.mid, str(previous.get("hash") or ""), note)
+            first_synced = self._existing_first_synced(note) or now
+
+        saved, pending = self._save_attachments(thread_dir, msg)
+        note.write_text(
+            teams_sync.render_message(
+                msg,
+                ref,
+                prev_mid=prev_mid,
+                edited=edited or bool(previous and previous.get("edited")),
+                first_synced_at=first_synced,
+                last_synced_at=now,
+                pending=pending,
+            ),
+            encoding="utf-8",
+        )
+        self._append_chain(
+            thread_dir,
+            teams_sync.chain_entry(msg, prev_mid=prev_mid, rev=rev, synced_at=now),
+        )
+        return {
+            "mid": msg.mid,
+            "action": "updated" if previous else "created",
+            "edited": edited,
+            "attachments_saved": saved,
+            "pending": pending,
+        }
+
+    def _existing_first_synced(self, note: Path) -> str | None:
+        """Preserve the original sync time across a rewrite."""
+        try:
+            for line in note.read_text(encoding="utf-8").splitlines()[:30]:
+                if line.startswith("first_synced_at:"):
+                    return line.split(":", 1)[1].strip().strip('"')
+        except OSError:
+            return None
+        return None
+
+    def _archive_version(self, thread_dir: Path, mid: str, old_hash: str, note: Path) -> None:
+        history = self._contained(thread_dir, thread_dir / "_history")
+        if history is None:
+            return
+        history.mkdir(exist_ok=True)
+        stamp = (old_hash.split(":")[-1] or "prev")[:8]
+        target = self._contained(thread_dir, history / f"{mid}.{stamp}.md")
+        if target is None:
+            return
+        for n in range(2, 100):
+            if not target.exists():
+                break
+            target = history / f"{mid}.{stamp}_{n}.md"
+        try:
+            target.write_text(note.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not archive previous version of %s: %s", mid, exc)
+
+    def _save_attachments(self, thread_dir: Path, msg: IncomingMessage) -> tuple[int, list[dict]]:
+        """Write embedded attachment bytes; record everything else as pending.
+
+        An attachment that cannot be stored is never dropped silently — it is
+        returned as pending so it surfaces in thread.json, in the README and in
+        the next plan's want list.
+        """
+        import base64
+        import binascii
+
+        saved = 0
+        pending: list[dict] = []
+        for i, att in enumerate(msg.attachments):
+            name = teams_sync.safe_attachment_name(att.name, i)
+            if att.status != "embedded" or not att.data_b64:
+                pending.append(
+                    {
+                        "mid": msg.mid,
+                        "name": name,
+                        "reason": att.reason or f"status={att.status}",
+                        "url": att.url,
+                    }
+                )
+                continue
+            try:
+                blob = base64.b64decode(att.data_b64, validate=True)
+            except (binascii.Error, ValueError):
+                pending.append({"mid": msg.mid, "name": name, "reason": "base64が不正"})
+                continue
+            if len(blob) > _MAX_ATTACHMENT_BYTES:
+                pending.append(
+                    {
+                        "mid": msg.mid,
+                        "name": name,
+                        "reason": f"サイズ上限超過 ({len(blob)} bytes)",
+                        "url": att.url,
+                    }
+                )
+                continue
+            folder = self._attachment_dir(thread_dir, msg.mid)
+            if folder is None:
+                pending.append({"mid": msg.mid, "name": name, "reason": "保存先が不正"})
+                continue
+            folder.mkdir(parents=True, exist_ok=True)
+            target = self._contained(thread_dir, folder / name)
+            if target is None:
+                pending.append({"mid": msg.mid, "name": name, "reason": "保存先が不正"})
+                continue
+            try:
+                target.write_bytes(blob)
+            except OSError as exc:
+                pending.append({"mid": msg.mid, "name": name, "reason": f"書き込み失敗: {exc}"})
+                continue
+            saved += 1
+        return saved, pending
+
+    def _append_chain(self, thread_dir: Path, entry: dict) -> None:
+        path = thread_dir / "chain.jsonl"
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def write_meta(
+        self,
+        thread_dir: Path,
+        ref: ThreadRef,
+        *,
+        pending: list[dict],
+        coverage: dict,
+        now: str | None = None,
+    ) -> dict:
+        """Refresh thread.json and README.md from what is actually on disk."""
+        now = now or datetime.now().astimezone().isoformat(timespec="seconds")
+        chain = self.read_chain(thread_dir)
+        latest = self.latest_chain(thread_dir)
+        previous = self.read_meta(thread_dir)
+        authors = [str(e.get("author") or "") for e in latest.values()]
+        meta = {
+            "team": ref.team,
+            "root_mid": ref.root_mid,
+            "title": ref.title,
+            "url": ref.url or previous.get("url", ""),
+            "participants": sorted({a for a in authors if a}),
+            "message_count": len(latest),
+            "coverage": {**(previous.get("coverage") or {}), **coverage},
+            "pending_attachments": pending,
+            "first_synced_at": previous.get("first_synced_at") or now,
+            "last_synced_at": now,
+        }
+        (thread_dir / "thread.json").write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        (thread_dir / "README.md").write_text(
+            teams_sync.render_readme(meta, chain), encoding="utf-8"
+        )
+        return meta
+
+    def merge_pending(self, thread_dir: Path, fresh: list[dict]) -> list[dict]:
+        """Carry forward unresolved gaps, drop the ones now on disk.
+
+        A file that failed to arrive stays listed until its bytes actually
+        appear. Recomputing the list from scratch each sync would clear entries
+        for messages that were not part of this run.
+        """
+        merged: dict[tuple[str, str], dict] = {}
+        for item in (self.read_meta(thread_dir).get("pending_attachments") or []) + fresh:
+            mid = str(item.get("mid") or "")
+            name = str(item.get("name") or "")
+            if not mid or not name:
+                continue
+            if name in self._attachments_present(thread_dir, mid):
+                continue
+            merged[(mid, name)] = {**item, "mid": mid, "name": name}
+        return sorted(merged.values(), key=lambda i: (i["mid"], i["name"]))

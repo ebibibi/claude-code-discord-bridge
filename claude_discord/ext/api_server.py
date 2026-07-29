@@ -38,7 +38,9 @@ from claude_code_core.transcript_search import default_transcripts_root
 from ..discord_ui.file_sender import send_file_blobs
 from ..relay import MODE_INTERRUPT, MODE_QUEUE, VALID_MODES, RelayGuard, build_relay_prompt
 from ..session_view import STATE_IDLE, STATE_RUNNING, build_session_views
-from . import ingest_manifest
+from . import ingest_manifest, teams_sync
+from .teams_store import TeamsVaultStore
+from .teams_sync import ThreadRef
 
 if TYPE_CHECKING:
     import discord
@@ -232,6 +234,7 @@ class ApiServer:
         claims_repo: ClaimRepository | None = None,
         transcripts_path: str | None = None,
         ingest_require_complete: bool | None = None,
+        teams_vault_root: str | None = None,
     ) -> None:
         self.repo = repo
         self.bot = bot
@@ -268,6 +271,10 @@ class ApiServer:
                 "yes",
             )
         self.ingest_require_complete = ingest_require_complete
+        # Where /api/teams/sync mirrors upstream threads. Defaults to the
+        # Obsidian vault's raw-source tree; overridable for tests and for
+        # deployments that keep the vault elsewhere.
+        self.teams_vault_root = teams_vault_root
         # Loop/rate brake for thread-to-thread relays. Process-local by design:
         # after a restart there are no in-flight relay chains to protect.
         self.relay_guard = RelayGuard()
@@ -333,6 +340,10 @@ class ApiServer:
         self.app.router.add_delete("/api/ingest/summary", self.delete_thread_summary)
         # Poll an ingest session's final result (requires ingest_repo)
         self.app.router.add_get("/api/ingest/{result_id}", self.get_ingest_result)
+        # Teams thread sync (have/want). Mirrors an upstream thread into the
+        # vault as one file per message; the client keeps no state of its own.
+        self.app.router.add_post("/api/teams/sync/plan", self.teams_sync_plan)
+        self.app.router.add_post("/api/teams/sync/push", self.teams_sync_push)
         # Startup resume routes
         self.app.router.add_post("/api/mark-resume", self.mark_resume)
 
@@ -354,6 +365,12 @@ class ApiServer:
         # untrusted external client.
         app.router.add_get("/api/ingest/summary", self.get_thread_summary)
         app.router.add_get("/api/ingest/{result_id}", self.get_ingest_result)
+        # The Teams sync pair is the browser extension's main surface, so it has
+        # to be reachable on the same listener as /api/ingest. Both handlers
+        # enforce the ingest token themselves and write only under the vault
+        # root, never spawning anything.
+        app.router.add_post("/api/teams/sync/plan", self.teams_sync_plan)
+        app.router.add_post("/api/teams/sync/push", self.teams_sync_push)
         return app
 
     @web.middleware
@@ -2130,6 +2147,147 @@ class ApiServer:
         if not hmac.compare_digest(auth_header[7:], self.ingest_token):
             return web.json_response({"error": "Invalid token"}, status=401)
         return None
+
+    # ------------------------------------------------------------------
+    # Teams thread sync (/api/teams/sync) — raw messages, one file each
+    # ------------------------------------------------------------------
+
+    def _teams_store(self) -> TeamsVaultStore:
+        return TeamsVaultStore(self.teams_vault_root)
+
+    async def _read_teams_request(
+        self, request: web.Request, *, require_body: bool
+    ) -> tuple[tuple[ThreadRef, list, dict], None] | tuple[None, web.Response]:
+        """Auth + parse the shared body shape of both sync endpoints."""
+        if err := self._check_ingest_token(request):
+            return None, err
+        try:
+            data = await request.json()
+        except json.JSONDecodeError:
+            return None, web.json_response({"error": "Invalid JSON"}, status=400)
+        try:
+            ref = teams_sync.parse_thread_ref(data.get("thread"))
+            messages = teams_sync.parse_messages(data.get("messages"), require_body=require_body)
+        except teams_sync.ValidationError as exc:
+            return None, web.json_response({"error": str(exc)}, status=400)
+        raw_coverage = data.get("coverage")
+        coverage: dict = {}
+        if isinstance(raw_coverage, dict):
+            oldest = str(raw_coverage.get("oldest_seen_mid") or "").strip()
+            if oldest.isdigit():
+                coverage["oldest_seen_mid"] = oldest
+            if raw_coverage.get("full_scan"):
+                # A full scan means nothing above is unexamined any more.
+                coverage["oldest_seen_mid"] = None
+                coverage["full_scan"] = True
+        return (ref, messages, coverage), None
+
+    async def teams_sync_plan(self, request: web.Request) -> web.Response:
+        """POST /api/teams/sync/plan — "what don't you have?".
+
+        The client sends the mid + content hash of every message it can see (no
+        bodies, so the request stays small) and gets back the subset the vault is
+        missing or holds at a different hash. Nothing is written here.
+
+        Answering from the files rather than from a stored marker is the point of
+        the whole design: the client keeps no sync state, so there is no state to
+        drift, and pressing the button twice is harmless.
+        """
+        parsed, err = await self._read_teams_request(request, require_body=False)
+        if err is not None:
+            return err
+        ref, messages, _coverage = parsed  # type: ignore[misc]
+
+        store = self._teams_store()
+        thread_dir = store.find_thread_dir(ref)
+        stored = store.load_stored(thread_dir) if thread_dir else {}
+        plan = teams_sync.build_plan(messages, stored)
+        meta = store.read_meta(thread_dir) if thread_dir else {}
+        return web.json_response(
+            {
+                "folder": str(thread_dir) if thread_dir else None,
+                "exists": thread_dir is not None,
+                "have": plan.have,
+                "want_messages": plan.want_messages,
+                "want_attachments": plan.want_attachments,
+                # The client uses this exactly like the old summary marker, to
+                # stop scrolling early. Its meaning is weaker on purpose: "this
+                # is stored raw", not "this was folded into a summary". Getting
+                # it wrong costs one extra sync, not a hole in the history.
+                "newest_have_mid": plan.newest_have_mid,
+                "pending": meta.get("pending_attachments") or [],
+            }
+        )
+
+    async def teams_sync_push(self, request: web.Request) -> web.Response:
+        """POST /api/teams/sync/push — store the messages the plan asked for.
+
+        Writes one Markdown file per message, the attachment bytes beside it, and
+        one append-only line per message to ``chain.jsonl``. Re-sending a message
+        that has not changed is a no-op beyond a refreshed timestamp, so a client
+        that skips the plan step still converges — it just sends more.
+        """
+        parsed, err = await self._read_teams_request(request, require_body=True)
+        if err is not None:
+            return err
+        ref, messages, coverage = parsed  # type: ignore[misc]
+        if not messages:
+            return web.json_response({"error": "messages is empty"}, status=400)
+
+        store = self._teams_store()
+        try:
+            thread_dir = store.ensure_thread_dir(ref)
+        except (OSError, ValueError) as exc:
+            logger.error("Teams sync could not open a thread folder: %s", exc)
+            return web.json_response({"error": "Could not open the thread folder"}, status=500)
+
+        # `prev` links each message to the one before it in time. Known mids come
+        # from the chain; the batch's own mids join them so a first sync links up
+        # correctly too. mid is Unix-ms, so numeric order is chronological order.
+        known = sorted(
+            {int(m) for m in store.latest_chain(thread_dir)} | {int(m.mid) for m in messages}
+        )
+        ordered = sorted(messages, key=lambda m: int(m.mid))
+
+        created = updated = attachments_saved = 0
+        fresh_pending: list[dict] = []
+        for msg in ordered:
+            position = known.index(int(msg.mid))
+            prev_mid = str(known[position - 1]) if position > 0 else None
+            try:
+                report = store.save_message(thread_dir, msg, ref, prev_mid=prev_mid)
+            except (OSError, ValueError) as exc:
+                logger.error("Teams sync failed to store a message: %s", exc)
+                return web.json_response({"error": "Could not store a message"}, status=500)
+            if report["action"] == "created":
+                created += 1
+            else:
+                updated += 1
+            attachments_saved += report["attachments_saved"]
+            fresh_pending.extend(report["pending"])
+
+        pending = store.merge_pending(thread_dir, fresh_pending)
+        meta = store.write_meta(thread_dir, ref, pending=pending, coverage=coverage)
+        logger.info(
+            "Teams sync: %s (+%d new, %d updated, %d attachments, %d pending)",
+            _sanitize_log(thread_dir.name),
+            created,
+            updated,
+            attachments_saved,
+            len(pending),
+        )
+        return web.json_response(
+            {
+                "folder": str(thread_dir),
+                "created": created,
+                "updated": updated,
+                "attachments_saved": attachments_saved,
+                # Never reported as an empty success: whatever did not arrive is
+                # listed here, in thread.json and in the folder's README.
+                "pending": pending,
+                "message_count": meta["message_count"],
+            }
+        )
 
     @staticmethod
     def _valid_summary_key(value: object) -> str | None:
