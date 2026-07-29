@@ -288,6 +288,31 @@ ccdb は各 `embedded` エントリを、届いたファイルに対して **sha
 
 `DELETE /api/ingest/summary?key=…` は完全な再サマリーを強制します。`marker` は ccdb にとって不透明で、セッションが触ることは決してないため、ずれることがありません。完全に後方互換かつ Zero-Config: `summary_key` を省略すればインジェストは従来どおり動作します。外部リスナーは `GET`（読み取り）ルートのみを公開します — サマリーの書き込みは localhost 限定の操作です。`ingest_results` に `summary_key`/`pending_marker` カラムが追加されます（既存 DB では自動マイグレーション）。
 
+#### 上流スレッドを生ファイルとしてミラーリング (`/api/teams/sync`)
+
+上記の継続サマリーが保持するのは、上流スレッドの*蒸留された要約*です。代わりに**生の会話そのもの**をディスク上に置きたいとき — セッションが実際に何と言われたかを読めるようにし、回答をその内容と突き合わせて検証できるようにしたいとき — この sync のペアを使います。メッセージ 1 件につき 1 ファイルを保存し、クライアント側には**同期状態を一切持たせません**:
+
+1. `POST /api/teams/sync/plan` — クライアントは見えているすべてのメッセージの ID + コンテンツハッシュを送ります（本文は送らないため、返信 1000 件のスレッドでも数十 KB で済みます）。ccdb は `want_messages` / `want_attachments` を返します: 未取得のもの、またはハッシュが異なるものだけの部分集合に加え、クライアントが早めにスクロールを打ち切れるよう `newest_have_mid` も返します。
+2. `POST /api/teams/sync/push` — クライアントはその部分集合だけをアップロードします。添付ファイルのバイト列は base64 で送ります。
+
+ハッシュが*変わった*ことと ID を*一度も見たことがない*ことは同じ問いなので、上流の**編集**への追従は別機能ではありません — 同じ比較から自然に導かれるものであり、置き換えられた旧版は上書きされずに `_history/` 配下に保存されます。
+
+```
+{title}--{root_mid}/
+  thread.json      識別情報、カバレッジ、未解決の添付ファイル欠落
+  chain.jsonl      追記専用の順序 + 改訂ジャーナル
+  README.md        セッションがこのフォルダをどう読むべきか
+  messages/{mid}.md          メッセージ 1 件。YAML frontmatter 付き（author, timestamp, prev, hash, edited, deleted）
+  messages/{mid}/…           そのメッセージの添付ファイル
+  _history/{mid}.{hash}.md   置き換えられた旧版
+```
+
+`next` は**意図的に**保存しません: 保存すると、新しい返信が来るたびに既存ファイルを書き換えることになるからです。順序は `chain.jsonl` が持ち、識別子が上流の Unix ミリ秒メッセージ ID であるため、ファイル名はそれ自体で時系列順にソートされます。
+
+このディレクトリが唯一の真実です — `plan` はディレクトリを読んで答えます。メッセージファイルを削除すれば次回の sync で再取得され、中断された push は次回の sync で完了し、ボタンを 2 回押しても何も起きません（冪等）。保存できなかった添付ファイルが成功として報告されることは**決してありません**: `thread.json`、フォルダの `README.md`、push のレスポンスに記載され、実際にバイト列が届くまで `want_attachments` に現れ続けます。
+
+スレッドはデフォルトで `~/obsidian/03_Resources/Teams` 配下に置かれます — 変更するには `CCDB_TEAMS_VAULT_ROOT`（または `teams_vault_root=`）を設定してください。両ルートとも `/api/ingest` と同じ ingest bearer トークンで保護され、外部リスナーからも利用でき、セッションのスポーンは一切行いません。
+
 ### スタートアップリジューム
 
 Bot の再起動中にセッションが中断された場合、Bot が再起動したときに自動的に再開されます。リジューム登録の方法は 3 つあります:
@@ -819,6 +844,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `API_PORT` | REST API ポート（設定すると REST API が有効になる） | （オプション） |
 | `CCDB_INGEST_TOKEN` | `POST /api/ingest` 用の Bearer トークン（`api_secret` とは独立）。未設定ならこのエンドポイントは `503` を返す | （オプション） |
 | `CCDB_INGEST_REQUIRE_COMPLETE` | `1` を設定すると、`attachments_manifest` によって添付ファイルの欠落が判明したインジェストを、部分的な証拠でセッションを開始せずに `409` で拒否する | `0` |
+| `CCDB_TEAMS_VAULT_ROOT` | `POST /api/teams/sync` が上流スレッドをミラーリングする先のディレクトリ（メッセージ 1 件につき 1 ファイル）。`CCDB_INGEST_TOKEN` で保護される | `~/obsidian/03_Resources/Teams` |
 
 ### パーミッションモード — `-p` モードで動作するもの
 
@@ -1051,6 +1077,8 @@ uv add "claude-code-discord-bridge[api]"
 | GET | `/api/ingest/summary` | 長時間続くインジェストスレッドの継続サマリー + `marker` を `key` で読み取り（ingest-token 認証）。クライアントは差分だけをエクスポートできる |
 | POST | `/api/ingest/summary` | セッションから更新版の継続サマリー（`result_id` + `summary`）を保存 — localhost コントロールプレーン。ccdb が `marker` をインジェスト行から前進させる |
 | DELETE | `/api/ingest/summary` | `key` の保存済みサマリーをクリアし、次回インジェストで完全な再サマリーを強制 |
+| POST | `/api/teams/sync/plan` | 上流スレッドのミラーに何が足りないかを問い合わせる — ID + ハッシュを送ると `want_messages`/`want_attachments`/`newest_have_mid` が返る（ingest-token 認証） |
+| POST | `/api/teams/sync/push` | plan が要求したメッセージを Vault 配下に 1 件 1 ファイルで保存。添付ファイルと追記専用の `chain.jsonl` を伴う |
 | POST | `/api/mark-resume` | 次回 Bot 起動時のスレッド自動リジュームを登録 |
 | GET | `/api/lounge` | AI Lounge の最近のメッセージを取得 |
 | POST | `/api/lounge` | AI Lounge にメッセージを投稿（`label` オプション） |
@@ -1176,6 +1204,8 @@ claude_discord/
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）
     ingest_manifest.py     # attachments_manifest と実際に届いたファイルの突合
+    teams_sync.py          # /api/teams/sync（plan + push）の have/want ネゴシエーション
+    teams_store.py         # TeamsVaultStore — 1 メッセージ 1 ファイル、chain.jsonl、_history/
   utils/
     logger.py              # ロギング設定
 examples/
