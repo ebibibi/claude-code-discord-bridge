@@ -842,6 +842,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `API_PORT` | REST API port (enables REST API when set) | (optional) |
 | `CCDB_INGEST_TOKEN` | Bearer token for `POST /api/ingest` (independent of `api_secret`); unset ⇒ the endpoint responds `503` | (optional) |
 | `CCDB_INGEST_REQUIRE_COMPLETE` | Set to `1` to reject an ingest with `409` when its `attachments_manifest` proves attachments went missing, instead of starting a session on partial evidence | `0` |
+| `CCDB_TEAMS_VAULT_ROOT` | Directory where `POST /api/teams/sync` mirrors upstream threads (one file per message). Gated by `CCDB_INGEST_TOKEN` | `~/obsidian/03_Resources/Teams` |
 
 ### Permission Modes — What Works in `-p` Mode
 
@@ -1201,6 +1202,8 @@ claude_discord/
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
     ingest_manifest.py     # Reconciles attachments_manifest against delivered files
+    teams_sync.py          # have/want negotiation behind /api/teams/sync (plan + push)
+    teams_store.py         # TeamsVaultStore — one file per message, chain.jsonl, _history/
   utils/
     logger.py              # Logging setup
 examples/
