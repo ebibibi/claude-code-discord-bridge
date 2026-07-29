@@ -378,18 +378,33 @@ class TeamsVaultStore:
         )
         return meta
 
-    def merge_pending(self, thread_dir: Path, fresh: list[dict]) -> list[dict]:
-        """Carry forward unresolved gaps, drop the ones now on disk.
+    def merge_pending(
+        self,
+        thread_dir: Path,
+        fresh: list[dict],
+        *,
+        pushed: list[IncomingMessage] | None = None,
+    ) -> list[dict]:
+        """Carry forward unresolved gaps, drop resolved or obsolete ones.
 
         A file that failed to arrive stays listed until its bytes actually
         appear. Recomputing the list from scratch each sync would clear entries
-        for messages that were not part of this run.
+        for messages that were not part of this run. For messages that *were*
+        pushed, however, the incoming attachment inventory is authoritative:
+        pending names it no longer declares came from an older client and must
+        not survive forever.
         """
+        declared_by_mid = {
+            msg.mid: {teams_sync.safe_attachment_name(att.name) for att in msg.attachments}
+            for msg in pushed or []
+        }
         merged: dict[tuple[str, str], dict] = {}
         for item in (self.read_meta(thread_dir).get("pending_attachments") or []) + fresh:
             mid = str(item.get("mid") or "")
             name = str(item.get("name") or "")
             if not mid or not name:
+                continue
+            if mid in declared_by_mid and name not in declared_by_mid[mid]:
                 continue
             if name in self._attachments_present(thread_dir, mid):
                 continue

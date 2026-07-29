@@ -269,21 +269,33 @@ def safe_attachment_name(raw: str, index: int = 0) -> str:
 def build_plan(
     incoming: list[IncomingMessage],
     stored: dict[str, StoredMessage],
+    pending: list[dict] | None = None,
 ) -> SyncPlan:
     """Decide what the client still needs to send.
 
     A message is wanted when it is unknown OR its hash differs from the stored
     one. That single comparison covers both "never sent" and "edited upstream" —
-    they are not two features, they are the same one. An attachment is wanted
-    when its message is wanted or its bytes are not on disk yet, which is what
-    makes a failed attachment reappear on the next sync instead of vanishing.
+    they are not two features, they are the same one. A message is also wanted
+    when old pending metadata names an attachment that its current authoritative
+    inventory no longer declares. Re-sending it lets the push endpoint remove
+    stale warnings created by an older client. An attachment is wanted when its
+    message is wanted or its bytes are not on disk yet, which is what makes a
+    failed attachment reappear on the next sync instead of vanishing.
     """
     plan = SyncPlan(have=len(stored))
+    pending_by_mid: dict[str, set[str]] = {}
+    for item in pending or []:
+        mid = str(item.get("mid") or "")
+        name = str(item.get("name") or "")
+        if mid and name:
+            pending_by_mid.setdefault(mid, set()).add(name)
     if stored:
         plan.newest_have_mid = max(stored, key=_mid_sort_key)
     for msg in incoming:
         current = stored.get(msg.mid)
-        wanted = current is None or current.hash != msg.hash
+        declared = {safe_attachment_name(att.name) for att in msg.attachments}
+        obsolete_pending = pending_by_mid.get(msg.mid, set()) - declared
+        wanted = current is None or current.hash != msg.hash or bool(obsolete_pending)
         if wanted:
             plan.want_messages.append(msg.mid)
         for att in msg.attachments:
