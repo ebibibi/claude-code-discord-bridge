@@ -36,6 +36,7 @@ def _make_thread(thread_id: int = 111) -> MagicMock:
     """Return a mocked discord.Thread."""
     thread = MagicMock(spec=discord.Thread)
     thread.id = thread_id
+    thread.guild.id = 1
     thread.send = AsyncMock()
     return thread
 
@@ -142,6 +143,8 @@ class TestOwnerMention:
         thread.send.assert_called_once()
         sent_text = thread.send.call_args.args[0]
         assert "<@42>" in sent_text
+        assert "https://discord.com/channels/1/10" in sent_text
+        assert "reply there" in sent_text
 
     @pytest.mark.asyncio
     async def test_mention_not_sent_if_already_waiting(self) -> None:
