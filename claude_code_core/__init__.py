@@ -38,6 +38,19 @@ from .models import init_db
 # Parser
 from .parser import parse_line
 
+# Frontend-neutral presentation
+from .presentation import (
+    ErrorProjection,
+    FinalResult,
+    InteractiveProjection,
+    PresentationMode,
+    PresentationPolicy,
+    Projection,
+    StreamProjector,
+    TextUpdate,
+    project_stream,
+)
+
 # Rewind
 from .rewind import TurnEntry, find_session_jsonl, parse_user_turns, truncate_jsonl_at_line
 
@@ -79,6 +92,16 @@ __all__ = [
     "ToolUseEvent",
     # Parser
     "parse_line",
+    # Presentation
+    "ErrorProjection",
+    "FinalResult",
+    "InteractiveProjection",
+    "PresentationMode",
+    "PresentationPolicy",
+    "Projection",
+    "StreamProjector",
+    "TextUpdate",
+    "project_stream",
     # API provider
     "detect_api_provider",
     # Backend
