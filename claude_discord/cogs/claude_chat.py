@@ -789,6 +789,7 @@ class ClaudeChatCog(commands.Cog):
         auto_start: bool = True,
         result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None,
         attachments: list[tuple[str, bytes]] | None = None,
+        working_dir: str | None = None,
     ) -> discord.Thread:
         """Create a new thread and optionally start a Claude Code session.
 
@@ -822,6 +823,9 @@ class ClaudeChatCog(commands.Cog):
                         seed prompt. Lets a programmatic caller (e.g. a Forgejo
                         Issue watcher via ``/api/spawn``) surface the original
                         attachments so they're viewable in the thread.
+            working_dir: Optional working directory for this session. This
+                        overrides the backend's default without changing other
+                        sessions.
 
         Returns:
             The newly created :class:`discord.Thread`.
@@ -856,6 +860,7 @@ class ClaudeChatCog(commands.Cog):
                     prompt,
                     session_id=session_id,
                     fork=fork,
+                    working_dir_override=working_dir,
                     result_sink=result_sink,
                 )
             )

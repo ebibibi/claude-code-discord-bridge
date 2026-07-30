@@ -1383,6 +1383,7 @@ class ApiServer:
                 (optional; defaults to ``true``).  When ``false``, only the
                 thread and seed message are created — a Claude session will
                 start when a user replies in the thread.
+            working_dir: Optional working directory for the spawned session.
 
         Returns (201):
             ``{"status": "spawned", "thread_id": "...", "thread_name": "..."}``
@@ -1447,6 +1448,7 @@ class ApiServer:
                 thread_name=thread_name,
                 auto_start=auto_start,
                 attachments=decoded_attachments or None,
+                working_dir=data.get("working_dir") or None,
             )
         except Exception as exc:
             logger.error("spawn_session failed: %s", exc, exc_info=True)

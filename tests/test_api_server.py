@@ -610,6 +610,17 @@ class TestSpawn:
         assert kwargs.get("thread_name") == "Custom title"
 
     @pytest.mark.asyncio
+    async def test_spawn_passes_working_dir_when_given(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post(
+            "/api/spawn",
+            json={"prompt": "Run tests", "working_dir": "/work/project"},
+        )
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("working_dir") == "/work/project"
+
+    @pytest.mark.asyncio
     async def test_spawn_thread_name_defaults_to_none(
         self, spawn_client: TestClient, mock_cog: MagicMock
     ) -> None:

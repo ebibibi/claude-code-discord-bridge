@@ -670,6 +670,25 @@ class TestFetchSeedContext:
 
         mock_run.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_spawn_passes_working_dir_to_run(self) -> None:
+        """A programmatic spawn can override the backend working directory."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock(return_value=MagicMock())
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+        cog = ClaudeChatCog(bot=MagicMock(), repo=MagicMock(), runner=MagicMock())
+
+        mock_run = AsyncMock()
+        with patch.object(cog, "_run_claude", new=mock_run):
+            await cog.spawn_session(channel, "Start session", working_dir="/work/project")
+
+        assert mock_run.call_args.kwargs["working_dir_override"] == "/work/project"
+
 
 class TestOnReady:
     """Tests for ClaudeChatCog.on_ready — startup session resume logic."""
