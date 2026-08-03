@@ -56,12 +56,18 @@ MAX_TEXT_CHARS = 200_000
 
 @dataclass(frozen=True)
 class ThreadRef:
-    """The identity of one Teams thread, plus its human-facing labels."""
+    """The identity of one Teams thread, plus its human-facing labels.
+
+    ``org`` is the company the conversation belongs to. It is a *label*, not part
+    of the identity: two threads of the same team are the same team whatever the
+    folder says, so relabelling never re-uploads anything.
+    """
 
     team: str
     root_mid: str
     title: str
     url: str = ""
+    org: str = ""
 
     @property
     def key(self) -> str:
@@ -143,7 +149,8 @@ def parse_thread_ref(raw: object) -> ThreadRef:
         raise ValidationError("thread.root_mid must be a numeric message id")
     title = _clean_line(raw.get("title"), limit=300) or f"thread-{root_mid}"
     url = _clean_line(raw.get("url"), limit=2000)
-    return ThreadRef(team=team, root_mid=root_mid, title=title, url=url)
+    org = _clean_line(raw.get("org"), limit=200)
+    return ThreadRef(team=team, root_mid=root_mid, title=title, url=url, org=org)
 
 
 def parse_messages(raw: object, *, require_body: bool) -> list[IncomingMessage]:
@@ -252,6 +259,21 @@ def thread_dirname(title: str, root_mid: str) -> str:
     slug = re.sub(r"\s+", "_", slug).strip("._ ")
     slug = slug[:MAX_TITLE_SLUG_CHARS].strip("._ ")
     return f"{slug or 'thread'}--{root_mid}"
+
+
+def org_dirname(org: str) -> str:
+    """Folder name for one company, or ``""`` when there is nothing to file under.
+
+    The label is free text a human typed, so it gets the same treatment as a
+    thread title — minus the mid, because the company folder is meant to be
+    recognised at a glance. Anything that survives sanitising to nothing (``..``,
+    a run of slashes, whitespace) yields an empty string, which the caller reads
+    as "leave it at the root" rather than as a directory called ``.``.
+    """
+    slug = unicodedata.normalize("NFC", str(org or ""))
+    slug = _UNSAFE_DIR_RE.sub(" ", slug)
+    slug = re.sub(r"\s+", "_", slug).strip("._ ")
+    return slug[:MAX_TITLE_SLUG_CHARS].strip("._ ")
 
 
 def safe_attachment_name(raw: str, index: int = 0) -> str:
@@ -427,6 +449,8 @@ def render_readme(meta: dict, chain: list[dict]) -> str:
         f"- 最終同期: {meta.get('last_synced_at', '')}",
         f"- スレッドID: `{meta.get('team', '')}/{meta.get('root_mid', '')}`",
     ]
+    if meta.get("org"):
+        lines.insert(3, f"- 会社: {meta['org']}")
     if meta.get("url"):
         lines.append(f"- Teams: {meta['url']}")
     lines += [

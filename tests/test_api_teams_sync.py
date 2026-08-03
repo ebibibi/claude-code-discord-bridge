@@ -636,3 +636,174 @@ async def test_sync_writes_under_the_working_dir_by_default(
         )
         folder = Path((await resp.json())["folder"])
     assert folder.parent == vault / "teams"
+
+
+# ---------------------------------------------------------------------------
+# Company (org) folders — one level of grouping above the thread folder
+# ---------------------------------------------------------------------------
+
+
+async def test_thread_lands_in_its_company_folder(client: TestClient, vault: Path) -> None:
+    """A labelled thread is filed under the company, not at the vault root."""
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            thread={"team": TEAM, "root_mid": ROOT, "title": "件名", "org": "日本工営"},
+            messages=[msg(ROOT, "本文", "h1")],
+        ),
+    )
+    folder = Path((await resp.json())["folder"])
+    assert folder.parent == vault / "日本工営"
+    assert json.loads((folder / "thread.json").read_text())["org"] == "日本工営"
+
+
+async def test_unlabelled_thread_stays_at_the_root(client: TestClient, vault: Path) -> None:
+    """No company means no guess: the thread stays where it always was.
+
+    Inventing a bucket for every deployment that never labels anything would
+    nest the whole vault one level deeper for no gain. A thread sitting at the
+    root is exactly what "not filed yet" should look like.
+    """
+    resp = await client.post(
+        "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "本文", "h1")])
+    )
+    assert Path((await resp.json())["folder"]).parent == vault
+
+
+async def test_a_thread_already_filed_flat_is_reused_not_duplicated(
+    client: TestClient, vault: Path
+) -> None:
+    """The migration case: sync a thread flat, then label it.
+
+    Identity lives in thread.json, so the existing folder must be found wherever
+    it sits. Missing it would create a second folder and re-upload the whole
+    history — silently, because every message would simply look new.
+    """
+    first = await client.post(
+        "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "本文", "h1")])
+    )
+    flat = Path((await first.json())["folder"])
+
+    second = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            thread={"team": TEAM, "root_mid": ROOT, "title": "件名", "org": "日本工営"},
+            messages=[msg(ROOT, "本文", "h1")],
+        ),
+    )
+    assert Path((await second.json())["folder"]) == flat
+    assert sorted(p.name for p in vault.iterdir() if p.is_dir()) == [flat.name]
+
+
+async def test_a_thread_moved_into_a_company_folder_by_hand_keeps_syncing(
+    client: TestClient, vault: Path
+) -> None:
+    """Hand-filing the vault is the supported migration path, so find it there."""
+    first = await client.post(
+        "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "本文", "h1")])
+    )
+    flat = Path((await first.json())["folder"])
+    moved = vault / "日本工営" / flat.name
+    moved.parent.mkdir()
+    flat.rename(moved)
+
+    plan = await client.post(
+        "/api/teams/sync/plan",
+        headers=AUTH,
+        json=thread_body(messages=[{"mid": ROOT, "hash": "h1"}]),
+    )
+    body = await plan.json()
+    assert body["folder"] == str(moved)
+    assert body["want_messages"] == []
+
+
+async def test_the_orgs_file_is_authoritative_over_the_client(
+    client: TestClient, vault: Path
+) -> None:
+    """A hand-edited orgs.json wins.
+
+    The client label is a convenience typed in a popup; the file is the operator's
+    filing decision. If the client could override it, correcting a company name
+    would last exactly until the next sync.
+    """
+    (vault / "orgs.json").write_text(
+        json.dumps({"teams": {TEAM: "日本工営"}}, ensure_ascii=False), encoding="utf-8"
+    )
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            thread={"team": TEAM, "root_mid": ROOT, "title": "件名", "org": "打ち間違えた会社"},
+            messages=[msg(ROOT, "本文", "h1")],
+        ),
+    )
+    assert Path((await resp.json())["folder"]).parent == vault / "日本工営"
+
+
+async def test_a_new_company_label_is_remembered_for_the_team(
+    client: TestClient, vault: Path
+) -> None:
+    """Learn once: a team the file does not know is recorded on first use.
+
+    Chats and channels both key off the (derived) team GUID, so labelling one
+    conversation files every later one from the same company automatically.
+    """
+    await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            thread={"team": TEAM, "root_mid": ROOT, "title": "件名", "org": "日本工営"},
+            messages=[msg(ROOT, "本文", "h1")],
+        ),
+    )
+    assert json.loads((vault / "orgs.json").read_text())["teams"][TEAM] == "日本工営"
+
+    other = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            thread={"team": TEAM, "root_mid": "1784110000999", "title": "別件"},
+            messages=[msg("1784110000999", "本文", "h9")],
+        ),
+    )
+    assert Path((await other.json())["folder"]).parent == vault / "日本工営"
+
+
+async def test_a_hostile_company_name_cannot_escape_the_vault(
+    client: TestClient, vault: Path
+) -> None:
+    """The label is free text from the network and becomes a path segment."""
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            thread={"team": TEAM, "root_mid": ROOT, "title": "件名", "org": "../../etc"},
+            messages=[msg(ROOT, "本文", "h1")],
+        ),
+    )
+    folder = Path((await resp.json())["folder"])
+    assert str(folder).startswith(str(vault) + os.sep)
+    assert folder.parent.parent == vault
+
+
+def test_org_dirname_keeps_a_readable_japanese_name() -> None:
+    assert teams_sync.org_dirname("日本工営") == "日本工営"
+    assert teams_sync.org_dirname("  ") == ""
+    assert "/" not in teams_sync.org_dirname("a/b:c")
+    assert teams_sync.org_dirname("..") == ""
+
+
+async def test_readme_names_the_company(client: TestClient) -> None:
+    """The folder alone stops being visible once an agent is handed a path."""
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            thread={"team": TEAM, "root_mid": ROOT, "title": "件名", "org": "日本工営"},
+            messages=[msg(ROOT, "本文", "h1")],
+        ),
+    )
+    readme = (Path((await resp.json())["folder"]) / "README.md").read_text()
+    assert "- 会社: 日本工営" in readme

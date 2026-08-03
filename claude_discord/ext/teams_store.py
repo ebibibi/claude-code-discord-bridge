@@ -9,7 +9,9 @@ next one completes it.
 
 Layout under the sync root (default ``{working_dir}/teams``, beside ``ingest``)::
 
-    {title-slug}--{root_mid}/
+    orgs.json            team GUID → company name (hand-editable, authoritative)
+    {company}/           present once a thread's company is known
+    {company}/{title-slug}--{root_mid}/
         thread.json          identity, coverage, pending attachments
         chain.jsonl          append-only order + revision journal
         README.md            how an agent should read this folder
@@ -32,6 +34,7 @@ from .teams_sync import IncomingMessage, StoredMessage, ThreadRef
 logger = logging.getLogger(__name__)
 
 DEFAULT_SYNC_SUBDIR = "teams"
+ORGS_FILE = "orgs.json"
 _MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 
@@ -78,19 +81,91 @@ class TeamsVaultStore:
             return None
         return Path(resolved)
 
-    def find_thread_dir(self, ref: ThreadRef) -> Path | None:
-        """Locate an existing folder for this thread by reading thread.json.
+    # -- company (org) folders -------------------------------------------
 
-        Identity lives in the file, not in the folder name, so a folder the user
-        renamed in Obsidian is still found. There is deliberately no index file:
-        an index would be a second ledger that can drift from the directory it
-        describes.
+    def read_orgs(self) -> dict[str, str]:
+        """The team GUID → company map, lowercased keys. Missing file = empty."""
+        data = self._read_json(self.root / ORGS_FILE) or {}
+        raw = data.get("teams")
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(k).strip().lower(): str(v).strip()
+            for k, v in raw.items()
+            if str(k).strip() and str(v).strip()
+        }
+
+    def org_for(self, ref: ThreadRef) -> str:
+        """The company this thread files under, learning the label once.
+
+        ``orgs.json`` wins over the label the client sent: the file is the
+        operator's filing decision, edited by hand, and a client that could
+        override it would undo every correction on the next sync. A team the file
+        does not know yet is recorded from the client's label, so labelling one
+        conversation files every later thread of that company by itself.
+        """
+        mapped = self.read_orgs().get(ref.team, "")
+        if mapped:
+            return mapped
+        if ref.org:
+            self._remember_org(ref.team, ref.org)
+        return ref.org
+
+    def _remember_org(self, team: str, org: str) -> None:
+        path = self.root / ORGS_FILE
+        data = self._read_json(path) or {}
+        teams = data.get("teams")
+        if not isinstance(teams, dict):
+            teams = {}
+        teams[team] = org
+        data["teams"] = teams
+        data.setdefault(
+            "_comment",
+            "team GUID → 会社名。同期フォルダの第1階層になる。手で直した内容が優先される。",
+        )
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError as exc:
+            # Filing is a convenience; failing to record it must not lose the sync.
+            logger.warning("Could not record the company for team %s: %s", team, exc)
+
+    # -- paths -----------------------------------------------------------
+
+    def _thread_dir_candidates(self) -> list[Path]:
+        """Every directory that could be a thread folder: root, then one level in.
+
+        Two levels is the whole tree — companies do not nest. Descending further
+        would walk ``messages/`` and ``_history/`` of every thread on every sync.
         """
         if not self.root.is_dir():
-            return None
+            return []
+        out: list[Path] = []
         for entry in sorted(self.root.iterdir()):
             if not entry.is_dir() or entry.name.startswith("."):
                 continue
+            out.append(entry)
+            if (entry / "thread.json").exists():
+                continue  # a thread folder, not a company folder
+            out.extend(
+                child
+                for child in sorted(entry.iterdir())
+                if child.is_dir() and not child.name.startswith(".")
+            )
+        return out
+
+    def find_thread_dir(self, ref: ThreadRef) -> Path | None:
+        """Locate an existing folder for this thread by reading thread.json.
+
+        Identity lives in the file, not in the folder name or its place in the
+        tree, so a folder the user renamed in Obsidian — or dragged into a
+        company folder — is still found. That is what makes filing the vault by
+        hand a safe migration: a thread that is not found is not "missing", it is
+        re-created empty and the entire history uploads again, silently, because
+        every message looks new. There is deliberately no index file: an index
+        would be a second ledger that can drift from the directory it describes.
+        """
+        for entry in self._thread_dir_candidates():
             meta = self._read_json(entry / "thread.json")
             if not meta:
                 continue
@@ -102,12 +177,24 @@ class TeamsVaultStore:
         return None
 
     def ensure_thread_dir(self, ref: ThreadRef) -> Path:
-        """Find the thread's folder, creating it on first sync."""
+        """Find the thread's folder, creating it under its company on first sync.
+
+        An existing folder is never moved. Re-filing is the user's call — Teams
+        renames a group chat the moment someone joins it, and a folder that walks
+        around the vault on its own would break every wikilink pointing into it.
+        """
         existing = self.find_thread_dir(ref)
         if existing is not None:
             return existing
+        parent = self.root
+        org_dir = teams_sync.org_dirname(self.org_for(ref))
+        if org_dir:
+            contained = self._contained(self.root, self.root / org_dir)
+            if contained is None:
+                raise ValueError("company directory escapes the vault root")
+            parent = contained
         base = teams_sync.thread_dirname(ref.title, ref.root_mid)
-        candidate = self.root / base
+        candidate = parent / base
         # The name embeds the root mid, so a clash means an unrelated leftover
         # directory. Take the next free suffix rather than writing into it.
         for n in range(2, 100):
@@ -115,7 +202,7 @@ class TeamsVaultStore:
                 raise ValueError("thread directory escapes the vault root")
             if not candidate.exists():
                 break
-            candidate = self.root / f"{base}_{n}"
+            candidate = parent / f"{base}_{n}"
         candidate.mkdir(parents=True, exist_ok=True)
         (candidate / "messages").mkdir(exist_ok=True)
         return candidate
@@ -360,6 +447,7 @@ class TeamsVaultStore:
         authors = [str(e.get("author") or "") for e in latest.values()]
         meta = {
             "team": ref.team,
+            "org": self.org_for(ref) or previous.get("org", ""),
             "root_mid": ref.root_mid,
             "title": ref.title,
             "url": ref.url or previous.get("url", ""),
