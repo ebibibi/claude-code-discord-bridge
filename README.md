@@ -308,6 +308,8 @@ A *changed* hash and a *never-seen* id are the same question, so following an up
 
 The directory is the single source of truth — `plan` is answered by reading it. Delete a message file and the next sync fetches it again; an interrupted push completes on the next one; pressing the button twice is a no-op. An attachment that could not be stored is **never** reported as success: it is listed in `thread.json`, in the folder's `README.md`, in the push response, and it keeps appearing in `want_attachments` until its bytes actually arrive.
 
+Threads are filed one folder per company: `{root}/{company}/{title}--{root_mid}/`. A client may send `thread.org`, but the authority is `orgs.json` at the sync root — a hand-editable `team GUID → company` map that wins over the client, so a correction made there sticks. A team it does not know yet is learned from the first label a client sends; a thread with no company stays at the root. The company is a label, never part of the identity (`{team}/{root_mid}`), so re-filing never re-uploads anything — and a thread you move into a company folder by hand keeps syncing, which is how an existing flat vault is migrated.
+
 Threads live under `{working_dir}/teams` by default, beside the `ingest/` tree — set `CCDB_TEAMS_VAULT_ROOT` (or `teams_vault_root=`) to keep them somewhere else, such as a notes vault you already read in an editor. Both routes use the same ingest bearer token as `/api/ingest`, are available on the external listener, and spawn nothing.
 
 ### Startup Resume
