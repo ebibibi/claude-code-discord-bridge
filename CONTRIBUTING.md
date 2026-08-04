@@ -22,7 +22,7 @@ main (always releasable)
    ```
 3. **Make your changes** — write code, add tests
 4. **Push** your branch and **open a PR** against `main`
-5. **CI runs automatically** — tests + lint on Python 3.10/3.11/3.12, plus CodeQL security scanning
+5. **CI runs automatically** — tests + lint on Python 3.12/3.13, plus CodeQL security scanning
 6. Once CI passes and the PR is reviewed, it gets **merged to main**
 
 ### Branch Naming
@@ -61,7 +61,7 @@ All tests must pass before submitting a PR.
 - **Formatter**: `ruff format`
 - **Linter**: `ruff check`
 - **Type hints**: Required on all function signatures
-- **Python**: 3.10+ (use `from __future__ import annotations` for modern syntax)
+- **Python**: 3.12+ (use `from __future__ import annotations` for modern syntax)
 
 ```bash
 uv run ruff check claude_discord/

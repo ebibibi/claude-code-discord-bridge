@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Utilisez Claude Code _ou_ OpenAI Codex depuis votre téléphone. Plusieurs fils. Tout en même temps. Développement réel inclus.**
@@ -422,7 +422,7 @@ En coulisses :
 
 **Prérequis :**
 
-- Python 3.10+
+- Python 3.12+
 - Au moins l'un des deux :
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — installé et authentifié (`claude login`). Recommandé pour les abonnés Anthropic Pro/Max.
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` puis `codex login`. Utilise votre abonnement ChatGPT Plus/Pro/Business existant.

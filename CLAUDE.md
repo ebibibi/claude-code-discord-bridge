@@ -21,7 +21,7 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 
 ## Architecture
 
-- **Python 3.10+** with discord.py v2
+- **Python 3.12+** with discord.py v2
 - **Cog pattern** for modular features
 - **Repository pattern** for data access (SQLite via aiosqlite)
 - **asyncio.subprocess** for Claude Code CLI invocation (never shell=True)
@@ -64,7 +64,7 @@ uv sync --dev
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-All tests must pass before submitting a PR. CI runs on Python 3.10, 3.11, and 3.12.
+All tests must pass before submitting a PR. CI runs on Python 3.12 and 3.13.
 
 ### Linting & Formatting
 
@@ -143,7 +143,7 @@ mainブランチで変更なしの場合、`pre-start.sh` が `git pull` して�
 
 - **Formatter/Linter**: ruff (config in `pyproject.toml`)
 - **Type hints**: Required on all function signatures
-- **Python**: 3.10+ — use `from __future__ import annotations` in every file
+- **Python**: 3.12+ — use `from __future__ import annotations` in every file
 - **Line length**: 100 characters max
 - **Imports**: Sorted by ruff (`I` rule). Use `TYPE_CHECKING` for type-only imports
 
@@ -304,7 +304,7 @@ Rules:
 ## Git & PR Workflow
 
 - **Branch from `main`**: `feature/description`, `fix/description`, `docs/description`
-- **CI must pass**: All 3 Python versions x (ruff check + ruff format + pytest)
+- **CI must pass**: Both Python versions x (ruff check + ruff format + pytest)
 - **No direct push to main**: Always create a PR
 - **Squash merge preferred**: Keeps main history clean
 - **Commit style**: `<type>: <description>` — types: feat, fix, refactor, docs, test, chore, security

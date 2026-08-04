@@ -82,7 +82,7 @@ async def collect_ask_answers(
 
         try:
             selected = await asyncio.wait_for(answer_queue.get(), timeout=ASK_ANSWER_TIMEOUT)
-        except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
+        except TimeoutError:
             _ask_bus.unregister(thread.id)
             if ask_repo is not None:
                 await ask_repo.delete(thread.id)
