@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **스마트폰에서 Claude Code _또는_ OpenAI Codex를 사용하세요. 멀티 스레드, 동시 진행, 실전 개발까지 모두 가능합니다.**
@@ -422,7 +422,7 @@ ccdb가 백엔드 소유권을 추적하기 전에 작성된 레코드에는 저
 
 **전제 조건:**
 
-- Python 3.10+
+- Python 3.12+
 - 다음 중 최소 하나:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — 설치 및 인증됨(`claude login`). Anthropic Pro/Max 구독자에게 권장.
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` 후 `codex login`. 기존 ChatGPT Plus/Pro/Business 구독을 사용.
