@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **在手机上使用 Claude Code _或_ OpenAI Codex。多线程并行。全速真实开发。**
@@ -422,7 +422,7 @@ ccdb 3.0 引入了三个斜杠命令，用来改变下一个会话由哪个 AI �
 
 **前提条件：**
 
-- Python 3.10+
+- Python 3.12+
 - 以下至少一项：
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — 已安装并认证（`claude login`）。推荐 Anthropic Pro/Max 订阅用户使用。
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` 然后 `codex login`。使用你现有的 ChatGPT Plus/Pro/Business 订阅。
