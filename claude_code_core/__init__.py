@@ -11,6 +11,8 @@ that needs to invoke the Claude Code CLI and process its stream-json output:
   implements so the session machinery never names a platform
 - **rendering**: capability-driven table rendering and message chunking, shared
   by every frontend
+- **conformance**: the contract a frontend must satisfy, importable so anyone
+  building one can check their own implementation
 
 Usage::
 
@@ -37,6 +39,7 @@ from .codex_runner import CodexRunner, parse_codex_line
 
 # Database
 # Frontend protocol
+from .conformance import ConformanceReport, check_surface
 from .frontend import (
     ActivityHandle,
     ActivitySpec,
@@ -60,6 +63,7 @@ from .frontend import (
     derive_thread_key,
 )
 from .lounge_repo import LoungeMessage, LoungeRepository
+from .memory_surface import MemorySurface
 from .models import init_db
 
 # Parser
@@ -132,6 +136,9 @@ __all__ = [
     "init_db",
     # Frontend protocol
     "ActivityHandle",
+    "ConformanceReport",
+    "MemorySurface",
+    "check_surface",
     "ActivitySpec",
     "Choice",
     "ChoicePrompt",
