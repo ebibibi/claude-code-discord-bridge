@@ -190,40 +190,9 @@ class BackendCommandCog(commands.Cog):
             )
             return
 
-        # Persist the new backend. Capture the previous one first so we can
-        # detect a real change (and decide whether to wipe the thread's
-        # stored session ID, which is not interoperable across backends).
-        prev_backend = await self._settings.current_backend(target_thread_id)
+        # Persist the new backend. Keep the old session record: its ID points to
+        # the JSONL transcript used for the first cross-backend handoff turn.
         await self._settings.set_backend(name, thread_id=target_thread_id)
-
-        # When the EFFECTIVE backend actually changed, drop the stored session
-        # ID unless the NEW backend can still resume it. Codex and Claude
-        # session stores are not interoperable (passing a Claude session UUID
-        # to `codex exec resume` -- or vice versa -- fails at the CLI level),
-        # but switching *back* to the backend that minted the ID is a valid
-        # way to recover a thread, so that case must keep the record.
-        if prev_backend != name and target_thread_id is not None:
-            try:
-                # Keep the record only when it is KNOWN to belong to the new
-                # backend. Unknown (pre-backend-column) records are wiped, as
-                # they always were — an unknown owner is not worth the risk of
-                # a broken resume.
-                record = await self._chat_cog.repo.get(target_thread_id)
-                deleted = False
-                if record is None or record.backend != name:
-                    deleted = await self._chat_cog.repo.delete(target_thread_id)
-                if deleted:
-                    logger.info(
-                        "Cleared stored session for thread %d on backend switch %s -> %s",
-                        target_thread_id,
-                        prev_backend,
-                        name,
-                    )
-            except Exception:
-                logger.exception(
-                    "Failed to clear thread %d session on backend change",
-                    target_thread_id,
-                )
 
         # If global change, also swap the shared default runner so the next
         # ClaudeChatCog session inherits it (thread overrides will be honoured

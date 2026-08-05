@@ -1,4 +1,4 @@
-"""Tests for BackendCommandCog clear-thread-session-on-backend-change."""
+"""Tests for preserving the source session across backend changes."""
 
 from __future__ import annotations
 
@@ -77,12 +77,10 @@ def _make_thread_interaction(thread_id: int) -> MagicMock:
     return interaction
 
 
-class TestBackendCommandClearsSession:
-    """When /backend changes a thread's effective backend, the stored session
-    must be cleared so Codex doesn't try to resume a Claude session id (or
-    vice versa)."""
+class TestBackendCommandPreservesSourceSession:
+    """A backend switch retains the old session until its JSONL is handed off."""
 
-    async def test_clears_session_on_thread_backend_change(self) -> None:
+    async def test_preserves_session_on_thread_backend_change(self) -> None:
         repo = await _new_settings_repo()
         settings = BackendSettings(
             repo,
@@ -96,8 +94,8 @@ class TestBackendCommandClearsSession:
         # Run /backend codex scope:thread on a thread defaulting to claude.
         await cog.backend_command.callback(cog, interaction, name="codex", scope="thread")
 
-        # The session for thread 42 should have been wiped.
-        cog._chat_cog.repo.delete.assert_awaited_once_with(42)
+        # The old session ID is the pointer to the file-backed handoff history.
+        cog._chat_cog.repo.delete.assert_not_awaited()
 
     async def test_no_clear_when_backend_is_same(self) -> None:
         repo = await _new_settings_repo()
@@ -117,7 +115,7 @@ class TestBackendCommandClearsSession:
 
         cog._chat_cog.repo.delete.assert_not_awaited()
 
-    async def test_clears_session_when_switching_back(self) -> None:
+    async def test_preserves_session_when_switching_back(self) -> None:
         repo = await _new_settings_repo()
         settings = BackendSettings(
             repo,
@@ -129,10 +127,10 @@ class TestBackendCommandClearsSession:
         cog = _make_cog(settings)
         interaction = _make_thread_interaction(thread_id=42)
 
-        # Now switching back to claude should also wipe.
+        # Switching back also keeps the source pointer until the next turn.
         await cog.backend_command.callback(cog, interaction, name="claude", scope="thread")
 
-        cog._chat_cog.repo.delete.assert_awaited_once_with(42)
+        cog._chat_cog.repo.delete.assert_not_awaited()
 
     async def test_keeps_session_owned_by_the_target_backend(self) -> None:
         """Switching *to* the backend that minted the stored session keeps it.

@@ -331,12 +331,13 @@ ccdb 3.0 introduces three slash commands that change which AI handles the next s
 
 All three commands persist to SQLite via `SettingsRepository`, so the choice survives bot restarts. Calling them with no arguments prints the current global default plus any thread override.
 
-**What happens to a thread that already has a session?** Session IDs are not interoperable between the two CLIs — handing a Codex rollout ID to `claude --resume` (or a Claude UUID to `codex exec resume`) fails at the CLI level. ccdb records which backend minted each session ID, so a switch never leaves a thread stranded:
+**What happens to a thread that already has a session?** Session IDs are not interoperable between the two CLIs — handing a Codex rollout ID to `claude --resume` (or a Claude UUID to `codex exec resume`) fails at the CLI level. ccdb therefore performs a **file-backed conversation handoff** for both thread-scoped and global switches:
 
-- **Thread-scoped switch** — the stored session ID is dropped so the next message starts fresh in the new backend, *unless* the record is known to belong to the backend you switched **to**. Switching back is therefore a valid way to pick a thread's earlier conversation back up.
-- **Global switch** — per-thread records are deliberately left untouched. If a thread is still holding the other backend's session ID, the next message starts a fresh session and posts a one-line notice explaining why, instead of resuming.
+1. It keeps the old session ID long enough to locate that backend's local JSONL (`~/.claude/projects` or `~/.codex/sessions`).
+2. It extracts a bounded transcript of user and assistant text. System/developer instructions, hidden reasoning, tool calls/results, and image payloads are excluded.
+3. It starts a native session in the new backend and prepends that transcript to the first new user message. The new session ID then replaces the old mapping normally.
 
-Records written before ccdb tracked backend ownership have no stored backend. A global switch resumes them exactly as it always did; a thread-scoped switch clears them rather than risk a broken resume.
+If the local JSONL is missing or unreadable, ccdb safely degrades to a fresh session and logs the missing handoff. Records written before ccdb tracked backend ownership keep the legacy resume behaviour because their source backend cannot be identified reliably.
 
 Visual cues so you never forget which one you're talking to:
 
@@ -376,6 +377,7 @@ Behind the scenes:
 - **Thread = Session** — 1:1 mapping between Discord thread and Claude Code session
 - **Goal tracking** — `/goal <condition>` sets a completion condition; Claude keeps working until the condition is met. Omit the condition to check status; pass `clear` to cancel
 - **Session persistence** — Resume conversations across messages via `--resume`
+- **Cross-backend conversation handoff** — Switching a live thread between Claude and Codex seeds the new native session from a bounded, text-only reading of the previous backend's local JSONL; no manual summary or copy/paste required
 - **Automatic Codex resume recovery** — If a resumed Codex session repeatedly loses its WebSocket before producing output, ccdb starts a replacement session with a bounded, text-only transcript of the prior conversation; image and tool payloads are excluded
 - **Concurrent sessions** — Multiple parallel sessions with configurable limit
 - **Stop without clearing** — `/stop` halts a session while preserving it for resume
