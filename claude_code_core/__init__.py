@@ -7,6 +7,8 @@ that needs to invoke the Claude Code CLI and process its stream-json output:
 - **StreamEvent / parse_line**: Stream-json parser and typed event model
 - **SessionRepository**: SQLite-backed session persistence
 - **rewind utilities**: JSONL session history manipulation
+- **frontend protocol**: the vocabulary a chat frontend (Discord, Teams, ...)
+  implements so the session machinery never names a platform
 
 Usage::
 
@@ -32,6 +34,29 @@ from .backend import SessionBackend, create_backend
 from .codex_runner import CodexRunner, parse_codex_line
 
 # Database
+# Frontend protocol
+from .frontend import (
+    ActivityHandle,
+    ActivitySpec,
+    Choice,
+    ChoicePrompt,
+    ConversationSurface,
+    FormField,
+    FormPrompt,
+    InboundAttachment,
+    InboundMessage,
+    InterruptHandle,
+    Mention,
+    Notice,
+    NoticeLevel,
+    OutboundFile,
+    SessionFrontend,
+    StatusKind,
+    SurfaceCapabilities,
+    TextStream,
+    ThreadKey,
+    derive_thread_key,
+)
 from .lounge_repo import LoungeMessage, LoungeRepository
 from .models import init_db
 
@@ -95,6 +120,27 @@ __all__ = [
     "SessionRepository",
     "UsageStatsRepository",
     "init_db",
+    # Frontend protocol
+    "ActivityHandle",
+    "ActivitySpec",
+    "Choice",
+    "ChoicePrompt",
+    "ConversationSurface",
+    "FormField",
+    "FormPrompt",
+    "InboundAttachment",
+    "InboundMessage",
+    "InterruptHandle",
+    "Mention",
+    "Notice",
+    "NoticeLevel",
+    "OutboundFile",
+    "SessionFrontend",
+    "StatusKind",
+    "SurfaceCapabilities",
+    "TextStream",
+    "ThreadKey",
+    "derive_thread_key",
     # Rewind
     "TurnEntry",
     "find_session_jsonl",
