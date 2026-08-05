@@ -273,7 +273,7 @@ class TestEventProcessorHookEvents:
             hook_event=HookEvent(hook_event_name="Stop", lifecycle="started"),
         )
         await proc.process(event)
-        status.set_hook.assert_awaited_once_with("Stop")
+        status.set_hook.assert_awaited_once_with()
 
     @pytest.mark.asyncio
     async def test_hook_response_stderr_shown_in_discord(
@@ -296,7 +296,7 @@ class TestEventProcessorHookEvents:
         )
         await proc.process(event)
         thread.send.assert_awaited_once()
-        sent = thread.send.call_args[0][0]
+        sent = thread.send.call_args.kwargs["embed"].description
         assert "未コミット検知" in sent
 
     @pytest.mark.asyncio
@@ -361,7 +361,7 @@ class TestEventProcessorHookEvents:
             ),
         )
         await proc.process(event)
-        sent = thread.send.call_args[0][0]
+        sent = thread.send.call_args.kwargs["embed"].description
         assert "+14 lines" in sent
 
     @pytest.mark.asyncio
@@ -382,4 +382,4 @@ class TestEventProcessorHookEvents:
             ),
         )
         await proc.process(event)
-        status.set_hook.assert_awaited_once_with("Stop")
+        status.set_hook.assert_awaited_once_with()

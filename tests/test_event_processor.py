@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
+from claude_code_core.frontend import ActivitySpec
 from claude_discord.claude.types import (
     AskOption,
     AskQuestion,
@@ -27,6 +28,7 @@ from claude_discord.claude.types import (
 )
 from claude_discord.cogs.event_processor import EventProcessor
 from claude_discord.cogs.run_config import RunConfig
+from claude_discord.surface import DiscordActivity
 
 
 def _make_config(thread: MagicMock, runner: MagicMock, **kwargs) -> RunConfig:
@@ -290,32 +292,29 @@ class TestOnToolUse:
 
         await p.process(_make_tool_event("t-timer"))
 
-        assert "t-timer" in p._state.active_timers
-        # Clean up the timer task
-        task = p._state.active_timers["t-timer"]
-        task.cancel()
-        with pytest.raises((asyncio.CancelledError, Exception)):
-            await task
+        activity = p._state.active_tools["t-timer"]
+        assert isinstance(activity, DiscordActivity)
+        assert activity._timer is not None
+        await p.finalize()
 
 
 class TestOnToolResult:
     """USER (tool result) event handling."""
 
     @pytest.mark.asyncio
-    async def test_timer_cancelled_on_result(self, thread: MagicMock, runner: MagicMock) -> None:
+    async def test_activity_completed_on_result(self, thread: MagicMock, runner: MagicMock) -> None:
         config = _make_config(thread, runner)
         p = EventProcessor(config)
 
-        # Plant a fake timer task
-        fake_task = MagicMock(spec=asyncio.Task)
-        fake_task.done.return_value = False
-        p._state.active_timers["t1"] = fake_task
+        activity = MagicMock()
+        activity.complete = AsyncMock()
+        p._state.active_tools["t1"] = activity
 
         result_event = StreamEvent(message_type=MessageType.USER, tool_result_id="t1")
         await p.process(result_event)
 
-        fake_task.cancel.assert_called_once()
-        assert "t1" not in p._state.active_timers
+        activity.complete.assert_awaited_once_with("")
+        assert "t1" not in p._state.active_tools
 
     @pytest.mark.asyncio
     async def test_tool_embed_updated_with_result(
@@ -330,7 +329,9 @@ class TestOnToolResult:
         fake_msg = MagicMock(spec=discord.Message)
         fake_msg.embeds = [fake_embed]
         fake_msg.edit = AsyncMock()
-        p._state.active_tools["t1"] = fake_msg
+        p._state.active_tools["t1"] = DiscordActivity(
+            fake_msg, ActivitySpec(kind="tool", title="Running: echo hi")
+        )
 
         result_event = StreamEvent(
             message_type=MessageType.USER,
@@ -351,7 +352,9 @@ class TestToolResultCollapse:
         fake_msg = MagicMock(spec=discord.Message)
         fake_msg.embeds = [fake_embed]
         fake_msg.edit = AsyncMock()
-        p._state.active_tools[tool_id] = fake_msg
+        p._state.active_tools[tool_id] = DiscordActivity(
+            fake_msg, ActivitySpec(kind="tool", title="Running: cat file")
+        )
         return fake_msg
 
     def _make_result_event(self, tool_id: str, content: str | None) -> StreamEvent:
@@ -615,7 +618,9 @@ class TestConnectionErrorResilience:
         fake_msg = MagicMock(spec=discord.Message)
         fake_msg.embeds = [fake_embed]
         fake_msg.edit = AsyncMock(side_effect=Exception("Server disconnected"))
-        p._state.active_tools["t1"] = fake_msg
+        p._state.active_tools["t1"] = DiscordActivity(
+            fake_msg, ActivitySpec(kind="tool", title="Running: echo hi")
+        )
 
         result_event = StreamEvent(
             message_type=MessageType.USER,
@@ -685,8 +690,8 @@ class TestCompactHandling:
 
         status.set_compact.assert_awaited_once()
         # Check that a message was sent to the thread
-        calls = [str(c) for c in thread.send.call_args_list]
-        assert any("compact" in c.lower() or "\U0001f5dc" in c for c in calls)
+        embeds = [c.kwargs["embed"] for c in thread.send.call_args_list if "embed" in c.kwargs]
+        assert any("compact" in (embed.description or "").lower() for embed in embeds)
 
     def test_compact_occurred_false_initially(self, thread: MagicMock, runner: MagicMock) -> None:
         config = _make_config(thread, runner)
@@ -752,13 +757,14 @@ class TestCompactHandling:
         runner = MagicMock()
         status = MagicMock()
         status._reset_stall_timer = MagicMock()
+        status.set_thinking = AsyncMock()
         config = _make_config(thread, runner, status=status)
         processor = EventProcessor(config)
 
         event = StreamEvent(message_type=MessageType.PROGRESS)
         await processor.process(event)
 
-        status._reset_stall_timer.assert_called_once()
+        status.set_thinking.assert_awaited_once()
 
 
 class TestTodoWrite:
@@ -798,14 +804,14 @@ class TestTodoWrite:
         await p.process(self._make_todo_event())
 
         # Replace the stored reference with a spy so we can assert on delete().
-        old_msg = MagicMock(spec=discord.Message)
-        old_msg.delete = AsyncMock()
-        p._state.todo_message = old_msg
+        old_activity = MagicMock()
+        old_activity.cancel = AsyncMock()
+        p._state.todo_message = old_activity
 
         # Second update
         await p.process(self._make_todo_event())
 
-        old_msg.delete.assert_called_once()
+        old_activity.cancel.assert_awaited_once()
         embed_sends = [c for c in thread.send.call_args_list if "embed" in c.kwargs]
         assert len(embed_sends) == 2  # initial post + repost
 
@@ -828,7 +834,7 @@ class TestTodoWrite:
     async def test_todo_message_none_after_send_failure(
         self, thread: MagicMock, runner: MagicMock
     ) -> None:
-        """If the repost send() fails, todo_message must be None (no stale reference)."""
+        """A frontend send failure leaves no stale todo activity."""
         thread.send.side_effect = Exception("Server disconnected")
         config = _make_config(thread, runner)
         p = EventProcessor(config)
@@ -858,13 +864,11 @@ class TestCcdbAttachmentsDelivery:
         config = _make_config(thread, runner)
         p = EventProcessor(config)
 
-        with patch(
-            "claude_discord.cogs.event_processor.send_files",
-            new_callable=AsyncMock,
-        ) as mock_send:
+        with patch.object(config.surface, "deliver_files", new_callable=AsyncMock) as mock_send:
             await p.process(_make_result_event(session_id="s1"))
 
-        mock_send.assert_called_once_with(thread, [str(f)], str(tmp_path))
+        files = mock_send.await_args.args[0]
+        assert [item.path for item in files] == [str(f)]
 
     @pytest.mark.asyncio
     async def test_marker_file_deleted_after_send(
@@ -881,7 +885,7 @@ class TestCcdbAttachmentsDelivery:
         config = _make_config(thread, runner)
         p = EventProcessor(config)
 
-        with patch("claude_discord.cogs.event_processor.send_files", new_callable=AsyncMock):
+        with patch.object(config.surface, "deliver_files", new_callable=AsyncMock):
             await p.process(_make_result_event(session_id="s1"))
 
         assert not marker.exists()
@@ -895,10 +899,7 @@ class TestCcdbAttachmentsDelivery:
         config = _make_config(thread, runner)
         p = EventProcessor(config)
 
-        with patch(
-            "claude_discord.cogs.event_processor.send_files",
-            new_callable=AsyncMock,
-        ) as mock_send:
+        with patch.object(config.surface, "deliver_files", new_callable=AsyncMock) as mock_send:
             await p.process(_make_result_event(session_id="s1"))
 
         mock_send.assert_not_called()
@@ -916,10 +917,7 @@ class TestCcdbAttachmentsDelivery:
         config = _make_config(thread, runner)
         p = EventProcessor(config)
 
-        with patch(
-            "claude_discord.cogs.event_processor.send_files",
-            new_callable=AsyncMock,
-        ) as mock_send:
+        with patch.object(config.surface, "deliver_files", new_callable=AsyncMock) as mock_send:
             await p.process(_make_result_event(error="Claude crashed"))
 
         mock_send.assert_not_called()
@@ -941,7 +939,7 @@ class TestCcdbAttachmentsDelivery:
         p = EventProcessor(config)
 
         with (
-            patch("claude_discord.cogs.event_processor.send_files", new_callable=AsyncMock),
+            patch.object(config.surface, "deliver_files", new_callable=AsyncMock),
             caplog.at_level(logging.INFO, logger="claude_discord.cogs.event_processor"),
         ):
             await p.process(_make_result_event(session_id="s1"))
@@ -961,7 +959,7 @@ class TestCcdbAttachmentsDelivery:
         p = EventProcessor(config)
 
         with (
-            patch("claude_discord.cogs.event_processor.send_files", new_callable=AsyncMock),
+            patch.object(config.surface, "deliver_files", new_callable=AsyncMock),
             caplog.at_level(logging.DEBUG, logger="claude_discord.cogs.event_processor"),
         ):
             await p.process(_make_result_event(session_id="s1"))
@@ -988,13 +986,11 @@ class TestCcdbAttachmentsDelivery:
         config = _make_config(thread, runner)
         p = EventProcessor(config)
 
-        with patch(
-            "claude_discord.cogs.event_processor.send_files",
-            new_callable=AsyncMock,
-        ) as mock_send:
+        with patch.object(config.surface, "deliver_files", new_callable=AsyncMock) as mock_send:
             await p.process(_make_result_event(session_id="s1"))
 
-        mock_send.assert_called_once_with(thread, [str(f)], str(tmp_path))
+        files = mock_send.await_args.args[0]
+        assert [item.path for item in files] == [str(f)]
 
 
 class TestAttachmentThreadIsolation:
@@ -1016,13 +1012,11 @@ class TestAttachmentThreadIsolation:
         config = _make_config(thread, runner)
         p = EventProcessor(config)
 
-        with patch(
-            "claude_discord.cogs.event_processor.send_files",
-            new_callable=AsyncMock,
-        ) as mock_send:
+        with patch.object(config.surface, "deliver_files", new_callable=AsyncMock) as mock_send:
             await p.process(_make_result_event(session_id="s1"))
 
-        mock_send.assert_called_once_with(thread, [str(f)], str(tmp_path))
+        files = mock_send.await_args.args[0]
+        assert [item.path for item in files] == [str(f)]
 
     @pytest.mark.asyncio
     async def test_other_thread_marker_not_read(
@@ -1040,10 +1034,7 @@ class TestAttachmentThreadIsolation:
         config = _make_config(thread, runner)
         p = EventProcessor(config)
 
-        with patch(
-            "claude_discord.cogs.event_processor.send_files",
-            new_callable=AsyncMock,
-        ) as mock_send:
+        with patch.object(config.surface, "deliver_files", new_callable=AsyncMock) as mock_send:
             await p.process(_make_result_event(session_id="s1"))
 
         mock_send.assert_not_called()
