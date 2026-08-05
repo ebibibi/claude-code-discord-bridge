@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -69,7 +69,7 @@ def _fake_message(
     msg.content = content
     msg.author.display_name = author
     msg.author.bot = is_bot
-    msg.created_at = datetime(2026, 7, 22, 13, 0, 0, tzinfo=timezone.utc)
+    msg.created_at = datetime(2026, 7, 22, 13, 0, 0, tzinfo=UTC)
     msg.jump_url = f"https://discord.com/channels/1/2/{msg_id}"
     return msg
 

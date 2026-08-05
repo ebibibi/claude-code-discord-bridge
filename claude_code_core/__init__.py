@@ -9,6 +9,8 @@ that needs to invoke the Claude Code CLI and process its stream-json output:
 - **rewind utilities**: JSONL session history manipulation
 - **frontend protocol**: the vocabulary a chat frontend (Discord, Teams, ...)
   implements so the session machinery never names a platform
+- **rendering**: capability-driven table rendering and message chunking, shared
+  by every frontend
 
 Usage::
 
@@ -63,6 +65,9 @@ from .models import init_db
 # Parser
 from .parser import parse_line
 
+# Rendering
+from .rendering import chunk_message, render_for, render_table, wrap_tables_in_fences
+
 # Rewind
 from .rewind import TurnEntry, find_session_jsonl, parse_user_turns, truncate_jsonl_at_line
 
@@ -104,6 +109,11 @@ __all__ = [
     "ToolUseEvent",
     # Parser
     "parse_line",
+    # Rendering
+    "chunk_message",
+    "render_for",
+    "render_table",
+    "wrap_tables_in_fences",
     # API provider
     "detect_api_provider",
     # Backend

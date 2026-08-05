@@ -209,6 +209,15 @@ class SurfaceCapabilities:
     supports_tables: bool = False
     supports_headings: bool = False
     supports_inline_images: bool = False
+    #: Usable display width inside a preformatted block, in monospace columns.
+    #: Tables are rendered to fit it; too generous a value produces wrapped,
+    #: unreadable rows, so the default is the narrow one.
+    monospace_width: int = 55
+    #: Whether the surface's monospace font renders CJK at exactly twice the
+    #: width of ASCII. When False (the default), CJK tables fall back to a
+    #: vertical layout: plain, but never visibly misaligned. Discord's
+    #: code-block font is one that does not honour the 2x assumption.
+    monospace_cjk_is_double_width: bool = False
 
     # Message lifecycle
     supports_message_edit: bool = False
@@ -241,6 +250,8 @@ class SurfaceCapabilities:
             raise ValueError("stream_min_interval must not be negative")
         if self.max_files_per_message <= 0:
             raise ValueError("max_files_per_message must be positive")
+        if self.monospace_width <= 0:
+            raise ValueError("monospace_width must be positive")
 
     @property
     def min_update_interval(self) -> float:

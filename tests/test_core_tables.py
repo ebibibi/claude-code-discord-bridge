@@ -1,6 +1,9 @@
-"""Tests for box-drawing table renderer (Claude Code style)."""
+"""Tests for the box-drawing table renderer (Claude Code style).
 
-from claude_discord.discord_ui.table_renderer import (
+Imported from core, where the renderer now lives — every frontend needs it.
+"""
+
+from claude_code_core.rendering.tables import (
     display_width,
     parse_gfm_table,
     render_box_table,
