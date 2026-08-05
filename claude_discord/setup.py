@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from .database.task_repo import TaskRepository
     from .ext.api_server import ApiServer
 
+from .deployment import DEFAULT_DATA_ROOT, DataLayout
+
 logger = logging.getLogger(__name__)
 
 
@@ -84,7 +86,8 @@ async def setup_bridge(
     runner: SessionBackend,
     *,
     api_server: ApiServer | None = None,
-    session_db_path: str = "data/sessions.db",
+    data_root: str | None = None,
+    session_db_path: str | None = None,
     allowed_user_ids: set[int] | None = None,
     claude_channel_id: int | None = None,
     claude_channel_ids: set[int] | None = None,
@@ -93,7 +96,7 @@ async def setup_bridge(
     chat_only_channel_ids: set[int] | None = None,
     cli_sessions_path: str | None = None,
     enable_scheduler: bool = True,
-    task_db_path: str = "data/tasks.db",
+    task_db_path: str | None = None,
     lounge_channel_id: int | None = None,
     max_concurrent: int | None = None,
     worktree_base_dir: str | None = None,
@@ -121,7 +124,14 @@ async def setup_bridge(
         runner: SessionBackend (ClaudeRunner, CodexRunner, etc.).
         api_server: Optional ApiServer to auto-wire repos into.  Also sets
                     runner.api_port so CCDB_API_URL is available to Claude.
-        session_db_path: Path for session SQLite DB.
+        data_root: Directory this deployment owns. Every database, worktree
+            and log defaults to living under it, so isolating a second
+            deployment on the same host is one setting rather than several.
+            Defaults to ``CCDB_DATA_ROOT``, then to ``data`` — the historical
+            location, so an upgrade never moves a live database.
+        session_db_path: Path for session SQLite DB. Overrides *data_root* for
+            this one file; the override is logged at startup because it is the
+            only remaining way two deployments can end up sharing state.
         allowed_user_ids: Set of Discord user IDs allowed to use Claude.
         claude_channel_id: Primary channel ID for Claude chat.  Kept for
                            backward compatibility.  Also used as the fallback
@@ -155,7 +165,7 @@ async def setup_bridge(
                                env var (comma-separated).
         cli_sessions_path: Path to ~/.claude/projects for session sync.
         enable_scheduler: Whether to enable SchedulerCog.
-        task_db_path: Path for scheduled tasks SQLite DB.
+        task_db_path: Path for scheduled tasks SQLite DB. Overrides *data_root*.
         lounge_channel_id: Discord channel ID for AI Lounge messages.
                            Defaults to COORDINATION_CHANNEL_ID env var.
         worktree_base_dir: Base directory to scan for session worktrees
@@ -285,6 +295,27 @@ async def setup_bridge(
         if getattr(bot, "worktree_manager", None) is None:
             bot.worktree_manager = WorktreeManager(base_dir=worktree_base_dir)  # type: ignore[attr-defined]
         logger.info("WorktreeManager enabled (base_dir=%s)", worktree_base_dir)
+
+    # --- Deployment layout -------------------------------------------------
+    # One root per deployment. Ten repositories share session_db_path, so this
+    # single file is where cross-customer leakage would happen if two
+    # deployments ever pointed at the same place.
+    layout = DataLayout.for_root(
+        data_root if data_root is not None else os.getenv("CCDB_DATA_ROOT") or DEFAULT_DATA_ROOT,
+        sessions_db=session_db_path,
+        tasks_db=task_db_path,
+        worktrees_dir=worktree_base_dir,
+    )
+    session_db_path = layout.sessions_db
+    task_db_path = layout.tasks_db
+    escaped = layout.paths_outside_root()
+    if escaped:
+        logger.warning(
+            "Deployment root is %s but these paths live outside it: %s — "
+            "two deployments sharing any of them would share state",
+            layout.root,
+            ", ".join(f"{k}={v}" for k, v in sorted(escaped.items())),
+        )
 
     # --- Session DB (also hosts lounge_messages and pending_resumes tables) ---
     os.makedirs(os.path.dirname(session_db_path) or ".", exist_ok=True)
