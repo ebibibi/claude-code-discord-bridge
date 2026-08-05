@@ -31,7 +31,7 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 1. **CLI spawn, not API**: We invoke `claude -p --output-format stream-json` as a subprocess, not the Anthropic API directly. This gives us all Claude Code features (CLAUDE.md, skills, tools, memory) for free.
 2. **Thread = Session**: Each Discord thread maps 1:1 to a Claude Code session ID. Replies in a thread continue the same session via `--resume`.
 3. **Emoji reactions for status**: Non-intrusive progress indication on the user's message. Debounced to avoid Discord rate limits.
-4. **Fence-aware chunking**: Never split Discord messages inside a code block.
+4. **Fence-aware chunking**: Never split messages inside a code block. The logic lives in `claude_code_core/rendering/` and is driven by `SurfaceCapabilities`, not by Discord's numbers — a surface with a 100 KB limit sends the same answer as one message instead of inheriting Discord's 2,000-character fragmentation.
 5. **Installable package**: `claude_discord` is a proper Python package. Consumers install via `uv add git+...` or `pip install git+...`, not by copying files.
 6. **Shared run helper**: `cogs/_run_helper.py` centralizes Claude CLI execution logic used by both ClaudeChatCog and SkillCommandCog.
 7. **REST API as the control plane**: Claude Code subprocesses communicate back to ccdb via REST API (`CCDB_API_URL` env var), not via stdout markers or special output formats. This makes the interface explicit, testable, and usable by external systems (GitHub Actions, etc.). See `ext/api_server.py`.
@@ -237,7 +237,7 @@ claude_discord/          # Installable Python package
     settings_repo.py     # Per-guild settings
   discord_ui/
     status.py            # Emoji reaction status manager (debounced)
-    chunker.py           # Fence- and table-aware message splitting
+    chunker.py           # Discord's limits + shim over claude_code_core.rendering
     embeds.py            # Discord embed builders
     views.py             # Stop button, ToolSelectView, and shared UI components
     ask_bus.py           # Event bus for AskUserQuestion communication
