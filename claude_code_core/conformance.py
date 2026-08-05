@@ -31,6 +31,17 @@ These are *semantic* obligations that hold regardless of platform:
 Appearance is not checked. Discord posting an embed per tool call and Teams
 folding the same information into one updating card are both correct; that
 freedom is the entire point of naming intents rather than widgets.
+
+One obligation deliberately lives outside this contract
+-------------------------------------------------------
+``ChoicePrompt.default_on_timeout`` exists so an unattended tool-permission
+request denies rather than hangs, and getting that wrong is the most dangerous
+failure in the protocol. It is nevertheless *not* checked here, because it
+cannot be: from outside, "the user chose allow" and "the surface invented
+allow when nobody answered" are the same return value, and the contract has no
+way to force nobody to answer. Each frontend proves it in its own tests, where
+the interaction can actually be withheld — see
+``tests/test_discord_surface.py::TestChoicePrompt``.
 """
 
 from __future__ import annotations
@@ -203,9 +214,17 @@ async def _check_status_transitions(s: ConversationSurface) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Every prompt in these checks carries a timeout. Without one, a surface that
+# waits for a real human — which is correct behaviour — would hang the checker
+# forever, and the contract would be untestable rather than unsatisfied.
+_PROMPT_TIMEOUT = 0.05
+
+
 async def _check_choice_returns_an_offered_value(s: ConversationSurface) -> None:
     offered = (Choice(value="allow", label="Allow"), Choice(value="deny", label="Deny"))
-    answer = await s.prompt_choice(ChoicePrompt(question="Run it?", choices=offered))
+    answer = await s.prompt_choice(
+        ChoicePrompt(question="Run it?", choices=offered, timeout_seconds=_PROMPT_TIMEOUT)
+    )
     if answer is None:
         return  # "unanswered" is a legitimate outcome
     values = {c.value for c in offered}
@@ -220,6 +239,7 @@ async def _check_single_select_returns_at_most_one(s: ConversationSurface) -> No
             question="Pick one",
             choices=(Choice(value="a", label="A"), Choice(value="b", label="B")),
             multi_select=False,
+            timeout_seconds=_PROMPT_TIMEOUT,
         )
     )
     if answer is not None:
@@ -231,7 +251,9 @@ async def _check_form_answers_only_known_keys(s: ConversationSurface) -> None:
         FormField(key="name", label="Name", kind="text"),
         FormField(key="note", label="Note", kind="multiline"),
     )
-    answer = await s.prompt_form(FormPrompt(title="Details", fields=fields))
+    answer = await s.prompt_form(
+        FormPrompt(title="Details", fields=fields, timeout_seconds=_PROMPT_TIMEOUT)
+    )
     if answer is None:
         return
     known = {f.key for f in fields}
