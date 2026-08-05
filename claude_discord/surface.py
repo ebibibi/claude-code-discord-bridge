@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections.abc import Awaitable, Callable, Sequence
 
 import discord
@@ -54,23 +55,26 @@ from claude_code_core.frontend import (
     SurfaceCapabilities,
     ThreadKey,
 )
-from claude_code_core.rendering import render_for
+from claude_code_core.rendering import render_for, wrap_tables_in_fences
 from claude_code_core.types import ToolCategory
 
 from .discord_ui.chunker import DISCORD_CAPABILITIES
 from .discord_ui.embeds import (
+    CATEGORY_ICON,
     COLOR_ERROR,
     COLOR_INFO,
     COLOR_SUCCESS,
     COLOR_TODO,
     COLOR_TOOL,
     tool_result_embed,
+    tool_result_preview_embed,
 )
 from .discord_ui.file_sender import send_file_blobs, send_files
 from .discord_ui.prompt_views import ChoiceView, FormModal
 from .discord_ui.status import StatusManager
 from .discord_ui.streaming_manager import StreamingMessageManager
-from .discord_ui.views import StopView
+from .discord_ui.tool_timer import TOOL_TIMER_INTERVAL
+from .discord_ui.views import StopView, ToolResultView
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +97,32 @@ class DiscordActivity:
         self._message = message
         self._spec = spec
         self._finished = False
+        self._started_at = time.monotonic()
+        self._timer = (
+            asyncio.create_task(self._run_timer())
+            if message is not None and spec.kind == "tool"
+            else None
+        )
+
+    async def _run_timer(self) -> None:
+        """Keep the elapsed counter owned by the Discord adapter."""
+        try:
+            await self.update("⏳ 0s elapsed...")
+            while True:
+                await asyncio.sleep(TOOL_TIMER_INTERVAL)
+                elapsed = int(time.monotonic() - self._started_at)
+                await self.update(f"⏳ {elapsed}s elapsed...")
+        except asyncio.CancelledError:
+            pass
+
+    def _stop_timer(self) -> None:
+        if self._timer is not None and not self._timer.done():
+            self._timer.cancel()
 
     async def update(self, detail: str) -> None:
         if self._finished or self._message is None:
             return
-        with contextlib.suppress(discord.HTTPException):
+        with contextlib.suppress(Exception):
             await self._message.edit(embed=_activity_embed(self._spec, detail))
 
     async def complete(self, result: str | None, *, ok: bool = True) -> None:
@@ -106,19 +131,34 @@ class DiscordActivity:
         if self._finished:
             return
         self._finished = True
+        self._stop_timer()
         if self._message is None:
             return
-        title = f"{_ACTIVITY_ICON} {self._spec.title}"
-        with contextlib.suppress(discord.HTTPException):
-            await self._message.edit(embed=tool_result_embed(title, result or ""))
+        title = _activity_title(self._spec)
+        try:
+            content = result or ""
+            if len(content.splitlines()) > 1:
+                await self._message.edit(
+                    embed=tool_result_preview_embed(title, content),
+                    view=ToolResultView(title, content),
+                )
+            else:
+                await self._message.edit(embed=tool_result_embed(title, content))
+        except Exception:
+            logger.warning("Failed to complete Discord activity", exc_info=True)
 
     async def cancel(self) -> None:
         if self._finished:
             return
         self._finished = True
+        self._stop_timer()
         if self._message is None:
             return
-        with contextlib.suppress(discord.HTTPException):
+        if self._spec.kind == "todo":
+            with contextlib.suppress(Exception):
+                await self._message.delete()
+            return
+        with contextlib.suppress(Exception):
             await self._message.edit(embed=_activity_embed(self._spec, "cancelled"))
 
 
@@ -143,6 +183,8 @@ class DiscordStream:
         if self._finalized:
             return self._result
         self._finalized = True
+        if transform is None:
+            transform = _prepare_stream_text
         self._result = await self._manager.finalize(transform=transform)
         return self._result
 
@@ -188,16 +230,19 @@ class DiscordSurface:
         thread: discord.Thread | discord.TextChannel,
         *,
         status_message: discord.Message | None = None,
+        status_manager: StatusManager | None = None,
         model: str | None = None,
         working_dir: str | None = None,
         interrupt_runner: object | None = None,
+        interrupt_view: StopView | None = None,
     ) -> None:
         self._thread = thread
         self._status_message = status_message
         self._model = model
         self.working_dir = working_dir
         self._interrupt_runner = interrupt_runner
-        self._status: StatusManager | None = None
+        self._interrupt_view = interrupt_view
+        self._status: StatusManager | None = status_manager
 
     # -- identity ----------------------------------------------------------
     @property
@@ -339,7 +384,7 @@ class DiscordSurface:
         return True
 
     async def offer_interrupt(self, on_stop: Callable[[], Awaitable[None]]) -> DiscordInterrupt:
-        view = StopView(_StopAdapter(on_stop))  # type: ignore[arg-type]
+        view = self._interrupt_view or StopView(_StopAdapter(on_stop))  # type: ignore[arg-type]
         return DiscordInterrupt(view, self._thread)
 
     # -- management --------------------------------------------------------
@@ -413,10 +458,24 @@ _TOOL_STATUSES: dict[StatusKind, ToolCategory] = {
 
 
 def _activity_embed(spec: ActivitySpec, detail: str | None) -> discord.Embed:
-    embed = discord.Embed(title=f"{_ACTIVITY_ICON} {spec.title}..."[:256], color=COLOR_TOOL)
+    suffix = "..." if spec.kind == "tool" else ""
+    embed = discord.Embed(title=f"{_activity_title(spec)}{suffix}"[:256], color=COLOR_TOOL)
     if detail:
         embed.description = detail[:4096]
     return embed
+
+
+def _activity_title(spec: ActivitySpec) -> str:
+    icon = CATEGORY_ICON.get(spec.category, _ACTIVITY_ICON) if spec.category else _ACTIVITY_ICON
+    return f"{icon} {spec.title}"
+
+
+def _prepare_stream_text(text: str) -> str:
+    return wrap_tables_in_fences(
+        text,
+        max_width=DISCORD_CAPABILITIES.monospace_width,
+        cjk_is_double_width=DISCORD_CAPABILITIES.monospace_cjk_is_double_width,
+    )
 
 
 def _mention_text(mention: Mention | None) -> str | None:

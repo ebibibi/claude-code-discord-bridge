@@ -12,33 +12,30 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import time
 from pathlib import Path
 
-import discord
+from claude_code_core.frontend import (
+    ActivitySpec,
+    ConversationSurface,
+    Notice,
+    NoticeLevel,
+    OutboundFile,
+    StatusKind,
+)
 
 from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent, ToolUseEvent
 from ..collision import extract_written_path
-from ..discord_ui.chunker import _wrap_tables_in_fences, chunk_message
 from ..discord_ui.elicitation_view import ElicitationFormView, ElicitationUrlView
 from ..discord_ui.embeds import (
     elicitation_embed,
     permission_embed,
     plan_embed,
-    redacted_thinking_embed,
-    session_start_embed,
-    thinking_embed,
-    todo_embed,
-    tool_result_embed,
-    tool_result_preview_embed,
-    tool_use_embed,
 )
-from ..discord_ui.file_sender import send_files
 from ..discord_ui.mentions import user_mention_kwargs
 from ..discord_ui.permission_view import PermissionView
 from ..discord_ui.plan_view import PlanApprovalView
-from ..discord_ui.streaming_manager import StreamingMessageManager
-from ..discord_ui.tool_timer import LiveToolTimer
 from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
@@ -62,11 +59,11 @@ def _attachment_marker_name(thread_id: int) -> str:
 
 
 async def _send_attachment_requests(
-    thread: object,
+    surface: ConversationSurface,
     working_dir: str | None,
     thread_id: int,
 ) -> None:
-    """Read .ccdb-attachments-{thread_id} and send listed files to Discord.
+    """Read .ccdb-attachments-{thread_id} and deliver them through the surface.
 
     If the marker file does not exist or is empty, this is a no-op.
     The marker file is deleted after sending so it does not persist into
@@ -95,16 +92,15 @@ async def _send_attachment_requests(
                 len(abs_paths),
                 abs_paths,
             )
-            await send_files(thread, abs_paths, working_dir)  # type: ignore[arg-type]
+            await surface.deliver_files(
+                [OutboundFile(path=path, display_name=Path(path).name) for path in abs_paths]
+            )
 
 
 # Max characters for tool result display.
 # Sized to show ~30 lines of typical output (100 chars/line × 30 = 3000).
 # The embed description limit is 4096, so this leaves room for code block markers.
 _TOOL_RESULT_MAX_CHARS = 3000
-# Lines of output shown inline before the "Expand ▼" button appears.
-# 1 means single-line results are shown flat; 2+ lines get a collapse button.
-_COLLAPSED_LINES = 1
 
 
 def _truncate_result(content: str) -> str:
@@ -112,6 +108,40 @@ def _truncate_result(content: str) -> str:
     if len(content) <= _TOOL_RESULT_MAX_CHARS:
         return content
     return content[:_TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+
+
+def _completion_fields(event: StreamEvent, runner: object) -> tuple[tuple[str, str], ...]:
+    """Build frontend-neutral completion metadata from a terminal event."""
+    fields: list[tuple[str, str]] = []
+    backend = _backend_name_from_runner(runner)
+    model = getattr(runner, "model", None)
+    fields.append(("Backend", f"{backend}{f' · {model}' if model else ''}"))
+    if event.duration_ms is not None:
+        fields.append(("Duration", f"{event.duration_ms / 1000:.1f}s"))
+    if event.cost_usd is not None:
+        fields.append(("Cost", f"${event.cost_usd:.4f}"))
+    if event.input_tokens is not None and event.output_tokens is not None:
+        fields.append(("Tokens", f"{event.input_tokens} in · {event.output_tokens} out"))
+    return tuple(fields)
+
+
+_TIMEOUT_PATTERN = re.compile(r"Timed out after (\d+) seconds")
+
+
+def _error_notice(error: str) -> Notice:
+    """Keep timeout guidance semantic so every surface can render it natively."""
+    match = _TIMEOUT_PATTERN.search(error)
+    if match:
+        seconds = match.group(1)
+        return Notice(
+            level=NoticeLevel.ERROR,
+            title="Session timed out",
+            body=(
+                f"No response received for {seconds} seconds. "
+                "Send a message to resume the session or use /clear to start fresh."
+            ),
+        )
+    return Notice(level=NoticeLevel.ERROR, title="Error", body=error)
 
 
 class EventProcessor:
@@ -147,9 +177,10 @@ class EventProcessor:
         self._config = config
         self._state = SessionState(
             session_id=config.session_id,
-            thread_id=config.thread.id,
+            thread_id=config.surface.thread_key,
         )
-        self._streamer = StreamingMessageManager(config.thread)
+        self._streamer = config.surface.open_stream()
+        self._interrupt = None
 
         # Guards against duplicate embeds/messages in the same run.
         self._session_start_sent: bool = False
@@ -253,7 +284,11 @@ class EventProcessor:
             await self._on_complete(event)
 
     async def finalize(self) -> None:
-        """Cancel any running timers. Call in a finally block."""
+        """Cancel unfinished frontend activities and legacy timers."""
+        for activity in self._state.active_tools.values():
+            with contextlib.suppress(Exception):
+                await activity.cancel()
+        self._state.active_tools.clear()
         for task in self._state.active_timers.values():
             if not task.done():
                 task.cancel()
@@ -268,31 +303,18 @@ class EventProcessor:
         """Shorthand for the chat_only flag on the config."""
         return self._config.chat_only
 
-    async def _send_thread_message(self, *args: object, **kwargs: object) -> discord.Message | None:
-        """Send a Discord message, treating a deleted thread as non-fatal."""
-        try:
-            return await self._config.thread.send(*args, **kwargs)
-        except discord.NotFound:
-            logger.info(
-                "Discord thread %d disappeared before completion delivery",
-                self._config.thread.id,
-            )
-            return None
-
     async def _on_system(self, event: StreamEvent) -> None:
         """Handle SYSTEM events — capture session_id, post start embed, compact notification."""
         # Context compaction notification (skip display in chat_only mode)
         if event.is_compact:
-            if self._config.status:
-                await self._config.status.set_compact()
+            await self._config.surface.set_status(StatusKind.COMPACTING)
             if not self._chat_only:
                 pre = event.compact_pre_tokens
                 trigger = event.compact_trigger or "auto"
                 label = f"\U0001f5dc\ufe0f Context compacted ({trigger})"
                 if pre:
                     label += f" \u2014 was {pre:,} tokens"
-                with contextlib.suppress(discord.HTTPException):
-                    await self._config.thread.send(f"-# {label}")
+                await self._config.surface.send_notice(Notice(level=NoticeLevel.SUBTLE, body=label))
 
             # Interrupt the runner so _run_helper can rerun with a guardrail.
             # Skip when post_compact_rerun=True (guardrail already active; avoid loops).
@@ -327,7 +349,7 @@ class EventProcessor:
             backend = _backend_name_from_runner(self._config.runner)
             if self._config.session_id:
                 await self._config.repo.save(
-                    self._config.thread.id,
+                    self._config.surface.thread_key,
                     self._state.session_id,
                     working_dir=wd,
                     backend=backend,
@@ -335,7 +357,7 @@ class EventProcessor:
             else:
                 summary = self._config.prompt[:100] if self._config.prompt else None
                 await self._config.repo.save(
-                    self._config.thread.id,
+                    self._config.surface.thread_key,
                     self._state.session_id,
                     working_dir=wd,
                     summary=summary,
@@ -345,12 +367,18 @@ class EventProcessor:
         # Guard: post session_start_embed only once (Claude can emit multiple SYSTEM events).
         # Skip in chat_only mode — no session start embed.
         if not self._chat_only and not self._config.session_id and not self._session_start_sent:
-            await self._config.thread.send(
-                embed=session_start_embed(
-                    self._state.session_id,
-                    backend=_backend_name_from_runner(self._config.runner),
-                    model=self._config.runner.model,
+            backend = _backend_name_from_runner(self._config.runner)
+            fields = tuple(
+                (name, value)
+                for name, value in (
+                    ("Session", self._state.session_id),
+                    ("Backend", backend),
+                    ("Model", self._config.runner.model),
                 )
+                if value
+            )
+            await self._config.surface.send_notice(
+                Notice(level=NoticeLevel.INFO, title="Session started", fields=fields)
             )
             self._session_start_sent = True
 
@@ -359,11 +387,24 @@ class EventProcessor:
         # Extended thinking — only post on complete events (not partials).
         # Skip in chat_only mode.
         if event.thinking and not event.is_partial and not self._chat_only:
-            await self._config.thread.send(embed=thinking_embed(event.thinking))
+            await self._config.surface.send_notice(
+                Notice(
+                    level=NoticeLevel.SUBTLE,
+                    title="Thinking",
+                    body=event.thinking,
+                    monospace_body=True,
+                )
+            )
 
         # Redacted thinking — only post on complete events. Skip in chat_only mode.
         if event.has_redacted_thinking and not event.is_partial and not self._chat_only:
-            await self._config.thread.send(embed=redacted_thinking_embed())
+            await self._config.surface.send_notice(
+                Notice(
+                    level=NoticeLevel.SUBTLE,
+                    title="Thinking (redacted)",
+                    body="Some reasoning was performed but cannot be shown.",
+                )
+            )
 
         # Text streaming — compute delta from last partial, edit in place.
         # Always shown — this IS the chat content.
@@ -385,8 +426,7 @@ class EventProcessor:
             if self._chat_only:
                 # Still track tool use count and update status, but don't post embeds.
                 self._state.tool_use_count += 1
-                if self._config.status:
-                    await self._config.status.set_tool(event.tool_use.category)
+                await self._config.surface.set_status(StatusKind.for_tool(event.tool_use.category))
             else:
                 await self._handle_tool_use(event)
 
@@ -417,56 +457,24 @@ class EventProcessor:
         if not event.tool_result_id:
             return
 
-        # In chat_only mode, no tool embeds were posted — just reset status.
+        # In chat_only mode, no tool activities were opened — just reset status.
         if self._chat_only:
-            if self._config.status:
-                await self._config.status.set_thinking()
+            await self._config.surface.set_status(StatusKind.THINKING)
             return
 
-        if self._config.status:
-            await self._config.status.set_thinking()
+        await self._config.surface.set_status(StatusKind.THINKING)
 
-        # Cancel the elapsed-time timer for this tool.
-        timer_task = self._state.active_timers.pop(event.tool_result_id, None)
-        if timer_task and not timer_task.done():
-            timer_task.cancel()
-
-        # Update the tool embed with result content.
-        tool_msg = self._state.active_tools.get(event.tool_result_id)
-        if tool_msg is None:
+        activity = self._state.active_tools.pop(event.tool_result_id, None)
+        if activity is None:
             return
-
-        title = tool_msg.embeds[0].title or ""
-        if event.tool_result_content:
-            truncated = _truncate_result(event.tool_result_content)
-            if len(truncated.split("\n")) > _COLLAPSED_LINES:
-                from ..discord_ui.views import ToolResultView
-
-                embed = tool_result_preview_embed(title, truncated)
-                view = ToolResultView(title, truncated)
-                try:
-                    await tool_msg.edit(embed=embed, view=view)
-                except Exception:
-                    logger.warning("Failed to update tool result embed", exc_info=True)
-            else:
-                try:
-                    await tool_msg.edit(embed=tool_result_embed(title, truncated))
-                except Exception:
-                    logger.warning("Failed to update tool result embed", exc_info=True)
-        else:
-            # Tool completed with no output — remove the in-progress indicator.
-            try:
-                await tool_msg.edit(embed=tool_result_embed(title, ""))
-            except Exception:
-                logger.warning("Failed to clear tool in-progress indicator", exc_info=True)
+        await activity.complete(_truncate_result(event.tool_result_content or ""))
 
     async def _on_progress(self, event: StreamEvent) -> None:
         """Handle PROGRESS events — reset stall timer, show hook status."""
-        if event.hook_event is not None and self._config.status:
-            await self._config.status.set_hook(event.hook_event.hook_event_name)
+        if event.hook_event is not None:
+            await self._config.surface.set_status(StatusKind.HOOK)
             return
-        if self._config.status:
-            self._config.status._reset_stall_timer()
+        await self._config.surface.set_status(StatusKind.THINKING)
 
     async def _on_rate_limit_event(self, event: StreamEvent) -> None:
         """Handle RATE_LIMIT_EVENT — persist latest rate limit info to usage_stats."""
@@ -475,14 +483,8 @@ class EventProcessor:
         await self._config.usage_repo.upsert(event.rate_limit_info)
 
     async def _on_complete(self, event: StreamEvent) -> None:
-        """Handle RESULT events — finalize streaming, post summary embed."""
+        """Handle RESULT events — finalize streaming and post a summary notice."""
         import asyncio
-
-        from ..discord_ui.embeds import (
-            session_complete_embed,
-        )
-        from ..discord_ui.streaming_manager import StreamingMessageManager
-        from ._run_helper import _make_error_embed
 
         # Prefer per-turn usage (last assistant message) over cumulative RESULT usage.
         # The RESULT sums tokens across ALL API calls, inflating context utilization.
@@ -499,28 +501,21 @@ class EventProcessor:
         last_assistant_text: str = self._state.accumulated_text
 
         if self._streamer.has_content:
-            await self._streamer.finalize(transform=_wrap_tables_in_fences)
+            await self._streamer.finalize()
             self._assistant_text_sent = True
-            if self._streamer._current_message is not None:
-                last_assistant_url = self._streamer._current_message.jump_url
 
         if event.error:
             # In-stream failure (e.g. an API 400/429 surfaced via the RESULT
             # error field, not a raised exception). Capture it so result_sink
             # consumers report a real error instead of an empty "done".
             self._final_error = event.error
-            await self._send_thread_message(embed=_make_error_embed(event.error))
-            if self._config.status:
-                await self._config.status.set_error()
+            await self._config.surface.send_notice(_error_notice(event.error))
+            await self._config.surface.set_status(StatusKind.ERROR)
         else:
             # Post final result text only if no assistant text was already sent.
             response_text = event.text
             if response_text and not self._assistant_text_sent:
-                last_sent: discord.Message | None = None
-                for chunk in chunk_message(response_text):
-                    last_sent = await self._send_thread_message(chunk)
-                if last_sent is not None:
-                    last_assistant_url = last_sent.jump_url
+                await self._config.surface.send_text(response_text)
                 last_assistant_text = response_text
 
             # Capture the final reply so result_sink consumers (e.g. /api/ingest)
@@ -529,32 +524,21 @@ class EventProcessor:
 
             # Send files listed in the .ccdb-attachments-{thread_id} marker file.
             await _send_attachment_requests(
-                self._config.thread,
+                self._config.surface,
                 self._config.runner.working_dir,
-                self._config.thread.id,
+                self._config.surface.thread_key,
             )
 
             # In chat_only mode, skip session_complete embed, statusline, and inbox.
             # Just set the done status emoji.
             if self._chat_only:
-                if self._config.status:
-                    await self._config.status.set_done()
+                await self._config.surface.set_status(StatusKind.DONE)
             else:
-                await self._send_thread_message(
-                    embed=session_complete_embed(
-                        event.cost_usd,
-                        event.duration_ms,
-                        event.input_tokens,
-                        event.output_tokens,
-                        event.cache_read_tokens,
-                        event.context_window,
-                        event.cache_creation_tokens,
-                        backend=_backend_name_from_runner(self._config.runner),
-                        model=self._config.runner.model,
-                    )
+                fields = _completion_fields(event, self._config.runner)
+                await self._config.surface.send_notice(
+                    Notice(level=NoticeLevel.SUCCESS, title="Done", fields=fields)
                 )
-                if self._config.status:
-                    await self._config.status.set_done()
+                await self._config.surface.set_status(StatusKind.DONE)
 
                 # Post the per-turn engine status footer.
                 #
@@ -568,43 +552,48 @@ class EventProcessor:
                 # decide which engine to use. The Codex probe only runs for
                 # interactive chat (backend_settings is wired) — headless flows
                 # leave it None and incur no extra subprocess.
-                asyncio.create_task(
-                    _post_engine_status_footer(
-                        thread=self._config.thread,
-                        backend=_backend_name_from_runner(self._config.runner),
-                        working_dir=self._config.runner.working_dir,
-                        model=self._config.runner.model,
-                        context_window=event.context_window,
-                        input_tokens=event.input_tokens,
-                        cache_creation_tokens=event.cache_creation_tokens,
-                        cache_read_tokens=event.cache_read_tokens,
-                        api_label=self._config.runner.describe_api(),
-                        backend_settings=self._config.backend_settings,
-                        codex_command=self._config.codex_command,
-                        thread_id=self._config.thread.id,
-                    ),
-                    name=f"statusline-{self._config.thread.id}",
-                )
+                api_label_raw = self._config.runner.describe_api()
+                api_label = api_label_raw if isinstance(api_label_raw, str) else None
+                if self._config.thread is not None and (
+                    self._config.backend_settings is not None or api_label is not None
+                ):
+                    asyncio.create_task(
+                        _post_engine_status_footer(
+                            thread=self._config.thread,
+                            backend=_backend_name_from_runner(self._config.runner),
+                            working_dir=self._config.runner.working_dir,
+                            model=self._config.runner.model,
+                            context_window=event.context_window,
+                            input_tokens=event.input_tokens,
+                            cache_creation_tokens=event.cache_creation_tokens,
+                            cache_read_tokens=event.cache_read_tokens,
+                            api_label=api_label,
+                            backend_settings=self._config.backend_settings,
+                            codex_command=self._config.codex_command,
+                            thread_id=self._config.surface.thread_key,
+                        ),
+                        name=f"statusline-{self._config.surface.thread_key}",
+                    )
 
                 # Schedule inbox classification as a background task (non-blocking).
                 # Only runs when inbox_repo is wired in (THREAD_INBOX_ENABLED=true).
                 if self._config.inbox_repo is not None and last_assistant_text:
                     asyncio.create_task(
                         _classify_and_update_inbox(
-                            thread_id=self._config.thread.id,
+                            thread_id=self._config.surface.thread_key,
                             last_text=last_assistant_text,
                             last_message_url=last_assistant_url,
                             inbox_repo=self._config.inbox_repo,
                             dashboard=self._config.inbox_dashboard,
                             claude_command=self._config.claude_command,
                         ),
-                        name=f"inbox-classify-{self._config.thread.id}",
+                        name=f"inbox-classify-{self._config.surface.thread_key}",
                     )
 
         if event.session_id:
             if self._config.repo:
                 await self._config.repo.save(
-                    self._config.thread.id,
+                    self._config.surface.thread_key,
                     event.session_id,
                     backend=_backend_name_from_runner(self._config.runner),
                 )
@@ -618,20 +607,20 @@ class EventProcessor:
                 + (event.cache_creation_tokens or 0)
             )
             await self._config.repo.update_context_stats(
-                thread_id=self._config.thread.id,
+                thread_id=self._config.surface.thread_key,
                 context_window=event.context_window,
                 context_used=context_used,
             )
 
         # Reset for potential next streamer
-        self._streamer = StreamingMessageManager(self._config.thread)
+        self._streamer = self._config.surface.open_stream()
 
     # ------------------------------------------------------------------
     # Text streaming helpers
     # ------------------------------------------------------------------
 
     async def _handle_text(self, event: StreamEvent) -> None:
-        """Stream text to Discord, computing deltas for partial events."""
+        """Stream text through the selected surface, computing partial deltas."""
         assert event.text is not None
 
         if event.is_partial:
@@ -645,17 +634,16 @@ class EventProcessor:
             if self._streamer.has_content:
                 if delta:
                     await self._streamer.append(delta)
-                await self._streamer.finalize(transform=_wrap_tables_in_fences)
-                self._streamer = StreamingMessageManager(self._config.thread)
+                await self._streamer.finalize()
+                self._streamer = self._config.surface.open_stream()
             else:
                 # No streamer content — post the full text block directly.
                 # (Current CLI delivers each text block complete, so this is the
                 # normal path; capture the last message URL for inbox linking.)
                 try:
-                    for chunk in chunk_message(event.text):
-                        sent = await self._config.thread.send(chunk)
-                        if sent is not None:
-                            self._state.last_assistant_url = sent.jump_url
+                    message_id = await self._config.surface.send_text(event.text)
+                    if message_id is None:
+                        return
                 except Exception:
                     logger.warning("Failed to send assistant text", exc_info=True)
                     return
@@ -671,33 +659,34 @@ class EventProcessor:
             return
         path = extract_written_path(tool_use.tool_name, tool_use.tool_input)
         if path is not None:
-            tracker.record(self._config.thread.id, path, time.monotonic())
+            tracker.record(self._config.surface.thread_key, path, time.monotonic())
 
     async def _handle_tool_use(self, event: StreamEvent) -> None:
-        """Post tool use embed and start the live timer."""
+        """Open a frontend-native activity for a tool call."""
         assert event.tool_use is not None
 
         # Finalize any in-progress streaming text before the tool embed.
         if self._streamer.has_content:
-            await self._streamer.finalize(transform=_wrap_tables_in_fences)
-            self._streamer = StreamingMessageManager(self._config.thread)
+            await self._streamer.finalize()
+            self._streamer = self._config.surface.open_stream()
         self._state.partial_text = ""
 
         self._state.tool_use_count += 1
 
-        if self._config.status:
-            await self._config.status.set_tool(event.tool_use.category)
+        await self._config.surface.set_status(StatusKind.for_tool(event.tool_use.category))
 
-        embed = tool_use_embed(event.tool_use, in_progress=True)
         try:
-            msg = await self._config.thread.send(embed=embed)
+            activity = await self._config.surface.open_activity(
+                ActivitySpec(
+                    kind="tool",
+                    title=event.tool_use.display_name,
+                    category=event.tool_use.category,
+                )
+            )
         except Exception:
-            logger.debug("Failed to send tool embed", exc_info=True)
+            logger.debug("Failed to open tool activity", exc_info=True)
             return
-        self._state.active_tools[event.tool_use.tool_id] = msg
-
-        timer = LiveToolTimer(msg, event.tool_use)
-        self._state.active_timers[event.tool_use.tool_id] = timer.start()
+        self._state.active_tools[event.tool_use.tool_id] = activity
 
         await self._bump_stop()
 
@@ -776,30 +765,23 @@ class EventProcessor:
         )
 
     async def _handle_todo_write(self, event: StreamEvent) -> None:
-        """Always repost the todo embed at the bottom of the thread.
-
-        Each TodoWrite call deletes the previous embed (if any) and posts a
-        fresh message so the task list stays visible as the conversation grows.
-        """
+        """Replace the current frontend-native todo activity."""
         assert event.todo_list is not None
-
-        embed = todo_embed(event.todo_list)
-
-        # Delete the previous todo message so we can repost at the bottom.
         if self._state.todo_message is not None:
-            try:
-                await self._state.todo_message.delete()
-            except Exception:
-                logger.warning("Failed to delete previous todo embed", exc_info=True)
+            with contextlib.suppress(Exception):
+                await self._state.todo_message.cancel()
             self._state.todo_message = None
 
-        # Post a fresh message at the bottom of the thread.
+        markers = {"pending": "☐", "in_progress": "◉", "completed": "☑"}
+        detail = "\n".join(
+            f"{markers.get(item.status, '•')} {item.content}" for item in event.todo_list
+        )
         try:
-            self._state.todo_message = await self._config.thread.send(embed=embed)
-        except Exception:
-            logger.warning(
-                "Failed to post todo embed; will retry on next TodoWrite call", exc_info=True
+            self._state.todo_message = await self._config.surface.open_activity(
+                ActivitySpec(kind="todo", title="Tasks", detail=detail)
             )
+        except Exception:
+            logger.warning("Failed to post todo activity; will retry", exc_info=True)
 
     async def _handle_hook_lifecycle(self, event: StreamEvent) -> None:
         """Show hook events as Discord subtext or status updates.
@@ -814,8 +796,7 @@ class EventProcessor:
         he = event.hook_event
 
         if he.lifecycle in ("started", "progress"):
-            if self._config.status:
-                await self._config.status.set_hook(he.hook_event_name)
+            await self._config.surface.set_status(StatusKind.HOOK)
             return
 
         if he.lifecycle == "response":
@@ -826,37 +807,42 @@ class EventProcessor:
                 text = "\n".join(truncated)
                 if len(lines) > 6:
                     text += f"\n... (+{len(lines) - 6} lines)"
-                with contextlib.suppress(discord.HTTPException):
-                    await self._config.thread.send(f"```\n{text}\n```")
+                await self._config.surface.send_notice(
+                    Notice(
+                        level=NoticeLevel.SUBTLE,
+                        body=text,
+                        monospace_body=True,
+                    )
+                )
             return
 
         # Legacy batch events
         if self._chat_only:
-            if self._config.status and he.lifecycle == "start":
-                await self._config.status.set_hook(he.hook_event_name)
+            if he.lifecycle == "start":
+                await self._config.surface.set_status(StatusKind.HOOK)
             return
 
         if he.lifecycle == "start":
             label = f"\U0001fa9d {he.hook_event_name} hooks running ({he.num_hooks})"
-            if self._config.status:
-                await self._config.status.set_hook(he.hook_event_name)
+            await self._config.surface.set_status(StatusKind.HOOK)
         elif he.lifecycle == "complete":
             dur = he.duration_ms
             label = f"\U0001fa9d {he.hook_event_name} hooks completed"
             if dur:
                 label += f" ({dur}ms)"
-            if self._config.status:
-                await self._config.status.set_thinking()
+            await self._config.surface.set_status(StatusKind.THINKING)
         else:
             return
 
-        with contextlib.suppress(discord.HTTPException):
-            await self._config.thread.send(f"-# {label}")
+        await self._config.surface.send_notice(Notice(level=NoticeLevel.SUBTLE, body=label))
 
     async def _bump_stop(self) -> None:
-        """Move the Stop button to the bottom of the thread if configured."""
-        if self._config.stop_view:
-            await self._config.stop_view.bump(self._config.thread)
+        """Move the surface's interrupt affordance back into view."""
+        if self._interrupt is None:
+            self._interrupt = await self._config.surface.offer_interrupt(
+                self._config.runner.interrupt
+            )
+        await self._interrupt.bump()
 
 
 # ---------------------------------------------------------------------------
