@@ -191,6 +191,7 @@ async def setup_bridge(
     from .cogs.scheduler import SchedulerCog
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
+    from .cross_backend_handoff import ConversationHistoryReader
     from .database.ask_repo import PendingAskRepository
     from .database.claims_repo import ClaimRepository
     from .database.inbox_repo import ThreadInboxRepository
@@ -365,6 +366,9 @@ async def setup_bridge(
         runner=runner,
         factory=backend_factory,
         backend_settings=backend_settings,
+        conversation_history=ConversationHistoryReader(
+            claude_sessions_root=cli_sessions_path,
+        ),
         max_concurrent=max_concurrent,
         allowed_user_ids=allowed_user_ids,
         ask_repo=ask_repo,
