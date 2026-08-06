@@ -23,9 +23,12 @@ from dataclasses import replace
 
 import discord
 
+from claude_code_core.frontend import Notice, NoticeLevel
+
 from ..discord_ui.ask_handler import collect_ask_answers
 from ..discord_ui.embeds import error_embed, timeout_embed
 from ..lounge import build_lounge_prompt
+from ..pr_completion_gate import GitHubPrCompletionGate, build_completion_prompt
 from .event_processor import EventProcessor
 from .run_config import RunConfig
 
@@ -36,6 +39,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _global_semaphore: asyncio.Semaphore | None = None
 _max_concurrent: int = 3
+_pr_completion_gate: GitHubPrCompletionGate | None = None
 
 
 def configure_session_limit(max_concurrent: int) -> None:
@@ -48,6 +52,12 @@ def configure_session_limit(max_concurrent: int) -> None:
     global _global_semaphore, _max_concurrent  # noqa: PLW0603
     _max_concurrent = max_concurrent
     _global_semaphore = asyncio.Semaphore(max_concurrent)
+
+
+def configure_pr_completion_gate(owner: str | None) -> None:
+    """Enable the owner-PR completion gate, or disable it with an empty owner."""
+    global _pr_completion_gate  # noqa: PLW0603
+    _pr_completion_gate = GitHubPrCompletionGate(owner) if owner else None
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +290,65 @@ async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
         await config.thread.send(f"-# {label}")
 
 
+async def _get_pr_completion_prompt(
+    config: RunConfig,
+    *,
+    session_id: str | None,
+    final_error: str | None,
+) -> str | None:
+    """Return one automatic continuation prompt for owner PRs left open.
+
+    GitHub availability must not turn a successful model response into a failed
+    Discord turn, so lookup failures are visible but fail open. The rerun flag
+    provides a hard one-continuation limit when a PR is genuinely blocked.
+    """
+    gate = _pr_completion_gate
+    if (
+        gate is None
+        or config.pr_completion_gate_rerun
+        or session_id is None
+        or final_error is not None
+    ):
+        return None
+
+    try:
+        prs = await gate.find_for_thread(config.surface.thread_key)
+    except Exception:
+        logger.warning(
+            "PR completion gate unavailable for thread %d",
+            config.surface.thread_key,
+            exc_info=True,
+        )
+        with contextlib.suppress(Exception):
+            await config.surface.send_notice(
+                Notice(
+                    level=NoticeLevel.WARNING,
+                    title="PR completion gate unavailable",
+                    body=(
+                        "GitHub could not be checked; this turn is being returned "
+                        "without enforcement."
+                    ),
+                )
+            )
+        return None
+
+    if not prs:
+        return None
+
+    with contextlib.suppress(Exception):
+        await config.surface.send_notice(
+            Notice(
+                level=NoticeLevel.WARNING,
+                title="Open owner PR detected — continuing",
+                body=(
+                    f"{len(prs)} non-draft PR(s) from session/{config.surface.thread_key} "
+                    "are still open. The same agent will finish or report a concrete blocker."
+                ),
+            )
+        )
+    return build_completion_prompt(prs)
+
+
 async def run_claude_with_config(config: RunConfig) -> str | None:
     """Execute Claude Code CLI and stream results to a Discord thread.
 
@@ -387,6 +456,24 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
                 processor.session_id,
             )
             return await run_claude_with_config(config.with_prompt(answer_prompt))
+
+    # A PR created by this Discord thread is an intermediate artifact, not a
+    # terminal outcome. Resume the same agent once so green owner PRs are
+    # merged and verified instead of being delegated back to the user.
+    session_id = processor.session_id or config.session_id
+    completion_prompt = await _get_pr_completion_prompt(
+        config,
+        session_id=session_id,
+        final_error=processor.final_error,
+    )
+    if completion_prompt is not None:
+        completion_config = replace(
+            config,
+            prompt=completion_prompt,
+            session_id=session_id,
+            pr_completion_gate_rerun=True,
+        )
+        return await run_claude_with_config(completion_config)
 
     # Terminal path. The compact/ask reruns above delegate to a nested
     # run_claude_with_config call, which reaches its own terminal return — so the

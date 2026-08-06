@@ -826,6 +826,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CLAUDE_WORKING_DIR` | Working directory for Claude (legacy — prefer `CCDB_WORKING_DIR`) | current dir |
 | `MAX_CONCURRENT_SESSIONS` | Max parallel Claude CLI sessions across all code paths (chat, skills, scheduler, webhooks) | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Session inactivity timeout | `300` |
+| `CCDB_PR_COMPLETION_OWNER` | GitHub owner whose non-draft `session/<thread_id>` PRs trigger one automatic completion continuation. Requires authenticated `gh`; disabled when empty. | (optional) |
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
 | `COORDINATION_CHANNEL_ID` | Channel ID used as default fallback for AI Lounge channel | (optional) |
 | `CCDB_MENTION_ANYWHERE` | When true, an @mention summons Claude in any guild channel or thread; set `false` to listen only in the configured channels | `true` |
