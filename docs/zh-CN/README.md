@@ -121,7 +121,7 @@ curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
 curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
 ```
 
-`/api/sessions` 合并三个来源：`sessions` 表（created_at、工作目录、后端）、内存注册表（每个活跃会话*此刻*正在做什么），以及每个线程最新的休息室笔记。当某个会话有一个回合正在进行时，它会以 `"state": "running"` 出现——包括那些根本没有向休息室发过任何消息的会话，而这恰恰是最需要它的时刻。会话本身没有 Discord token，因此由 Bot 执行读取，端点则保持在 localhost 控制平面上。
+`/api/sessions` 合并三个来源：`sessions` 表（created_at、工作目录、后端）、内存注册表（每个活跃会话*此刻*正在做什么），以及每个线程最新的休息室笔记。当某个会话有一个回合正在进行时，它会以 `"state": "running"` 出现——包括那些根本没有向休息室发过任何消息的会话，而这恰恰是最需要它的时刻。没有正在执行回合的已保存对话会显示为 `"state": "history"`；这表示它是可恢复的历史记录，并不表示代理正在等待工作或用户输入。会话本身没有 Discord token，因此由 Bot 执行读取，端点则保持在 localhost 控制平面上。
 
 ### 资源占用（Resource Claims）
 

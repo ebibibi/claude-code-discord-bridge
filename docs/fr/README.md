@@ -121,7 +121,7 @@ curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
 curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
 ```
 
-`/api/sessions` fusionne trois sources : la table `sessions` (created_at, répertoire de travail, backend), le registre en mémoire (ce que chaque session active fait *en ce moment même*) et la dernière note de lounge de chaque fil. Une session apparaît avec `"state": "running"` pendant qu'un tour est en cours — y compris les sessions qui n'ont jamais rien publié dans le lounge, ce qui est précisément le moment où cela compte. Les sessions n'ont pas de token Discord propre, donc le bot effectue la lecture et les endpoints restent sur le plan de contrôle localhost.
+`/api/sessions` fusionne trois sources : la table `sessions` (created_at, répertoire de travail, backend), le registre en mémoire (ce que chaque session active fait *en ce moment même*) et la dernière note de lounge de chaque fil. Une session apparaît avec `"state": "running"` pendant qu'un tour est en cours — y compris les sessions qui n'ont jamais rien publié dans le lounge, ce qui est précisément le moment où cela compte. Une conversation enregistrée sans tour en cours apparaît avec `"state": "history"` : elle peut être reprise, mais aucun agent n'attend du travail ou une saisie utilisateur. Les sessions n'ont pas de token Discord propre, donc le bot effectue la lecture et les endpoints restent sur le plan de contrôle localhost.
 
 ### Réclamations de Ressources
 
