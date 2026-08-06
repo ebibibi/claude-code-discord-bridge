@@ -37,7 +37,7 @@ from claude_code_core.transcript_search import default_transcripts_root
 
 from ..discord_ui.file_sender import send_file_blobs
 from ..relay import MODE_INTERRUPT, MODE_QUEUE, VALID_MODES, RelayGuard, build_relay_prompt
-from ..session_view import STATE_IDLE, STATE_RUNNING, build_session_views
+from ..session_view import STATE_HISTORY, STATE_RUNNING, build_session_views
 from . import ingest_manifest, teams_sync
 from .teams_store import TeamsVaultStore
 from .teams_sync import ThreadRef
@@ -982,7 +982,7 @@ class ApiServer:
             "created_at": getattr(claim, "created_at", None),
             "expires_at": getattr(claim, "expires_at", None),
             "holder_state": (
-                STATE_RUNNING if thread_id in self._running_thread_ids() else STATE_IDLE
+                STATE_RUNNING if thread_id in self._running_thread_ids() else STATE_HISTORY
             ),
             "holder_thread_name": self._thread_names({thread_id}).get(thread_id)
             if isinstance(thread_id, int)

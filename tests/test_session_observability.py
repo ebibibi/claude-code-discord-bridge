@@ -126,7 +126,7 @@ async def api_client(db_path: str, bot: MagicMock) -> TestClient:
 # ---------------------------------------------------------------------------
 
 
-def test_running_sessions_sort_before_idle_ones() -> None:
+def test_running_sessions_sort_before_history_ones() -> None:
     views = build_session_views(
         records=[
             _record(1, last_used_at="2026-07-22 13:00:00"),
@@ -139,7 +139,7 @@ def test_running_sessions_sort_before_idle_ones() -> None:
 
     assert [v["thread_id"] for v in views] == [2, 1]
     assert views[0]["state"] == "running"
-    assert views[1]["state"] == "idle"
+    assert views[1]["state"] == "history"
 
 
 def test_registry_only_session_appears_without_db_record() -> None:
@@ -220,7 +220,7 @@ async def test_get_sessions_returns_live_and_stored_sessions(
     sessions = (await resp.json())["sessions"]
 
     by_id = {s["thread_id"]: s for s in sessions}
-    assert by_id[111]["state"] == "idle"
+    assert by_id[111]["state"] == "history"
     assert by_id[111]["latest_lounge"]["message"] == "doing a thing"
     assert by_id[222]["state"] == "running"
     assert by_id[222]["current_task"] == "reviewing a PR"

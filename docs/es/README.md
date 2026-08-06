@@ -121,7 +121,7 @@ curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
 curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
 ```
 
-`/api/sessions` combina tres fuentes: la tabla `sessions` (created_at, directorio de trabajo, backend), el registro en memoria (lo que cada sesión activa está haciendo *justo ahora*) y la última nota del lounge de cada hilo. Una sesión aparece con `"state": "running"` mientras un turno está en curso — incluidas las sesiones que nunca publicaron en el lounge, que es exactamente cuando esto importa. Las sesiones no tienen token propio de Discord, así que el bot realiza la lectura y los endpoints permanecen en el plano de control de localhost.
+`/api/sessions` combina tres fuentes: la tabla `sessions` (created_at, directorio de trabajo, backend), el registro en memoria (lo que cada sesión activa está haciendo *justo ahora*) y la última nota del lounge de cada hilo. Una sesión aparece con `"state": "running"` mientras un turno está en curso — incluidas las sesiones que nunca publicaron en el lounge, que es exactamente cuando esto importa. Una conversación guardada sin un turno en curso aparece con `"state": "history"`: está disponible para reanudarse, pero no significa que un agente esté esperando trabajo o la intervención del usuario. Las sesiones no tienen token propio de Discord, así que el bot realiza la lectura y los endpoints permanecen en el plano de control de localhost.
 
 ### Reclamaciones de Recursos
 

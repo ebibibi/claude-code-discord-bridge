@@ -125,7 +125,7 @@ curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
 curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
 ```
 
-`/api/sessions` merges three sources: the `sessions` table (created_at, working dir, backend), the in-memory registry (what each live session is doing *right now*), and each thread's latest lounge note. A session appears with `"state": "running"` while a turn is in flight — including sessions that never posted to the lounge at all, which is exactly when this matters. Sessions have no Discord token of their own, so the bot performs the read and the endpoints stay on the localhost control plane.
+`/api/sessions` merges three sources: the `sessions` table (created_at, working dir, backend), the in-memory registry (what each live session is doing *right now*), and each thread's latest lounge note. A session appears with `"state": "running"` while a turn is in flight — including sessions that never posted to the lounge at all, which is exactly when this matters. A saved conversation without an in-flight turn appears as `"state": "history"`; this means it is available to resume, not that an agent is waiting for work or user input. Sessions have no Discord token of their own, so the bot performs the read and the endpoints stay on the localhost control plane.
 
 ### Resource Claims
 

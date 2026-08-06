@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Report persisted sessions without an in-flight turn as `history` instead of `idle`,
+  avoiding the false impression that saved conversations are agents waiting for work
+  or user input. `running` remains reserved for turns currently in flight.
 - Make Teams sync retries remove obsolete pending-attachment warnings after a client corrects a message's attachment inventory.
 
 ### Added
