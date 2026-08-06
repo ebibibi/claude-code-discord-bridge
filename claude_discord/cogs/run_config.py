@@ -95,6 +95,9 @@ class RunConfig:
     # When True, a compact guardrail was already injected into --append-system-prompt
     # for this run. Prevents infinite interrupt→rerun loops if compact fires again.
     post_compact_rerun: bool = False
+    # True only for the single automatic rerun created by the owner-PR
+    # completion gate. Prevents a genuinely blocked PR from causing a loop.
+    pr_completion_gate_rerun: bool = False
     # When True, only text responses are shown to Discord. Tool embeds, thinking
     # blocks, session start/complete embeds, and other technical details are hidden.
     # Useful for public channels where non-technical users are watching.
