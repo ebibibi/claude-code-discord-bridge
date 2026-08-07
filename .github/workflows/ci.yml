@@ -57,6 +57,8 @@ jobs:
   # the self-hosted fleet is Linux-only; free for a public repository.
   cross-platform:
     runs-on: ${{ matrix.os }}
+    # A hung test must fail, not sit for six hours on a hosted runner.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -80,8 +82,10 @@ jobs:
 
       # No coverage gate here — the Linux job owns that. This job answers one
       # question only: does the suite still pass off Linux?
+      # Per-test timeout because the first Windows run hung: without it a
+      # blocked test looks like a slow runner and reports nothing at all.
       - name: Test
-        run: uv run pytest tests/ -q
+        run: uv run pytest tests/ -q --timeout=120 --timeout-method=thread
         env:
           HOME: ${{ runner.temp }}/fakehome
           USERPROFILE: ${{ runner.temp }}/fakehome
