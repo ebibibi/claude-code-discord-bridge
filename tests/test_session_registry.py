@@ -120,12 +120,74 @@ class TestConcurrencyNotice:
         assert "task B" in notice
         assert "task C" in notice
 
-    def test_notice_mentions_git_worktree(self) -> None:
-        """The notice should advise git worktree usage."""
+    def test_notice_mentions_git_worktree_when_others_active(self) -> None:
+        """The notice should advise git worktree usage — when it actually applies.
+
+        The mandate exists to stop concurrent sessions from clobbering each
+        other's working directory. With no other session running there is
+        nothing to isolate from, so demanding a worktree is pure overhead: it
+        leaves a wt-<thread_id> checkout in the repository's parent directory
+        that nothing cleans up unless WORKTREE_BASE_DIR is set.
+        """
+        registry = SessionRegistry()
+        registry.register(1001, "my task")
+        registry.register(1002, "another task")
+        notice = registry.build_concurrency_notice(1001)
+        assert "worktree" in notice.lower()
+
+    def test_solo_notice_has_no_worktree_mandate(self) -> None:
+        """Alone in the registry → no REQUIRED worktree instruction."""
         registry = SessionRegistry()
         registry.register(1001, "my task")
         notice = registry.build_concurrency_notice(1001)
+        assert "worktree" not in notice.lower()
+
+    def test_solo_notice_does_not_claim_others_are_active(self) -> None:
+        """Alone in the registry → the notice must not assert other sessions exist.
+
+        The unconditional wording ("Other sessions ARE active right now") is
+        simply false whenever a single session is running, which is the common
+        case for a personal deployment.
+        """
+        registry = SessionRegistry()
+        registry.register(1001, "my task")
+        notice = registry.build_concurrency_notice(1001)
+        assert "ARE active right now" not in notice
+        assert "No other Claude Code session is active" in notice
+
+    def test_solo_notice_is_shorter_than_multi_session_notice(self) -> None:
+        """The solo path should cost fewer prompt tokens than the full warning."""
+        registry = SessionRegistry()
+        registry.register(1001, "my task")
+        solo = registry.build_concurrency_notice(1001)
+        registry.register(1002, "another task")
+        multi = registry.build_concurrency_notice(1001)
+        assert len(solo) < len(multi)
+
+    def test_lounge_caveat_present_by_default(self) -> None:
+        """Callers that don't pass lounge_enabled keep the existing wording."""
+        registry = SessionRegistry()
+        registry.register(1001, "my task")
+        assert "AI Lounge" in registry.build_concurrency_notice(1001)
+
+    def test_solo_notice_drops_lounge_caveat_when_disabled(self) -> None:
+        """No lounge transcript injected → its disclaimer describes nothing."""
+        registry = SessionRegistry()
+        registry.register(1001, "my task")
+        notice = registry.build_concurrency_notice(1001, lounge_enabled=False)
+        assert "AI Lounge" not in notice
+        assert "1001" in notice
+
+    def test_multi_notice_drops_lounge_caveat_but_keeps_the_mandate(self) -> None:
+        """Dropping the lounge caveat must not weaken the real warning."""
+        registry = SessionRegistry()
+        registry.register(1001, "my task")
+        registry.register(1002, "another task")
+        notice = registry.build_concurrency_notice(1001, lounge_enabled=False)
+        assert "AI Lounge" not in notice
+        assert "Other sessions ARE active right now" in notice
         assert "worktree" in notice.lower()
+        assert "another task" in notice
 
     def test_notice_mentions_shared_resources(self) -> None:
         """The notice should warn about non-git conflicts too."""
