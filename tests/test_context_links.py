@@ -102,7 +102,7 @@ class TestLoadConfig:
 
     def test_invalid_json_returns_none(self, tmp_path: Path) -> None:
         config_file = tmp_path / "bad.json"
-        config_file.write_text("not valid json {{{")
+        config_file.write_text("not valid json {{{", encoding="utf-8")
         result = load_config(str(config_file))
         assert result is None
 

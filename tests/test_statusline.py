@@ -149,7 +149,7 @@ class TestReadStatuslineCommand:
 
     def test_returns_none_on_invalid_json(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
-        settings.write_text("{not valid json}")
+        settings.write_text("{not valid json}", encoding="utf-8")
         assert read_statusline_command(str(settings)) is None
 
     def test_accepts_lowercase_statusline_key(self, tmp_path: Path) -> None:

@@ -77,7 +77,7 @@ class TestFindMainRepo:
         main_git.mkdir(parents=True)
 
         git_file = worktree_dir / ".git"
-        git_file.write_text(f"gitdir: {main_git}\n")
+        git_file.write_text(f"gitdir: {main_git}\n", encoding="utf-8")
 
         result = _find_main_repo(str(worktree_dir))
         assert result == str(tmp_path / "main-repo")
@@ -90,7 +90,7 @@ class TestFindMainRepo:
     def test_non_gitdir_content_returns_none(self, tmp_path: Path) -> None:
         d = tmp_path / "weird"
         d.mkdir()
-        (d / ".git").write_text("not a gitdir line\n")
+        (d / ".git").write_text("not a gitdir line\n", encoding="utf-8")
         assert _find_main_repo(str(d)) is None
 
 
@@ -133,12 +133,16 @@ class TestFindSessionWorktrees:
         # Create a fake session worktree directory
         session_wt = tmp_path / "wt-12345"
         session_wt.mkdir()
-        (session_wt / ".git").write_text("gitdir: /fake/repo/.git/worktrees/wt-12345\n")
+        (session_wt / ".git").write_text(
+            "gitdir: /fake/repo/.git/worktrees/wt-12345\n", encoding="utf-8"
+        )
 
         # Non-session worktree (feature branch) — should be excluded
         feature_wt = tmp_path / "wt-feat"
         feature_wt.mkdir()
-        (feature_wt / ".git").write_text("gitdir: /fake/repo/.git/worktrees/wt-feat\n")
+        (feature_wt / ".git").write_text(
+            "gitdir: /fake/repo/.git/worktrees/wt-feat\n", encoding="utf-8"
+        )
 
         # Not a worktree (no .git file)
         plain_dir = tmp_path / "wt-notgit"
@@ -178,7 +182,7 @@ class TestCleanupForThread:
     def test_removes_clean_worktree(self, tmp_path: Path) -> None:
         wt_path = tmp_path / "wt-999"
         wt_path.mkdir()
-        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-999\n")
+        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-999\n", encoding="utf-8")
 
         with (
             patch("claude_discord.worktree._is_clean", return_value=True),
@@ -195,7 +199,7 @@ class TestCleanupForThread:
     def test_skips_dirty_worktree(self, tmp_path: Path) -> None:
         wt_path = tmp_path / "wt-999"
         wt_path.mkdir()
-        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-999\n")
+        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-999\n", encoding="utf-8")
 
         with patch("claude_discord.worktree._is_clean", return_value=False):
             wm = WorktreeManager(base_dir=str(tmp_path))
@@ -213,7 +217,7 @@ class TestCleanupForThread:
     def test_handles_git_remove_failure(self, tmp_path: Path) -> None:
         wt_path = tmp_path / "wt-123"
         wt_path.mkdir()
-        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-123\n")
+        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-123\n", encoding="utf-8")
 
         with (
             patch("claude_discord.worktree._is_clean", return_value=True),
@@ -237,7 +241,7 @@ class TestCleanupOrphaned:
     def test_skips_active_sessions(self, tmp_path: Path) -> None:
         wt_path = tmp_path / "wt-555"
         wt_path.mkdir()
-        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-555\n")
+        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-555\n", encoding="utf-8")
 
         with (
             patch("claude_discord.worktree._get_branch", return_value="session/555"),
@@ -254,7 +258,7 @@ class TestCleanupOrphaned:
     def test_removes_orphaned_clean_worktree(self, tmp_path: Path) -> None:
         wt_path = tmp_path / "wt-777"
         wt_path.mkdir()
-        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-777\n")
+        (wt_path / ".git").write_text("gitdir: /repo/.git/worktrees/wt-777\n", encoding="utf-8")
 
         with (
             patch("claude_discord.worktree._get_branch", return_value="session/777"),

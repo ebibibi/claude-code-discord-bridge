@@ -79,7 +79,7 @@ def parse_user_turns(jsonl_path: Path, *, max_turns: int = 25) -> list[TurnEntry
     chronological order so the select menu reads oldest-to-newest.
     """
     try:
-        with open(jsonl_path) as f:
+        with open(jsonl_path, encoding="utf-8") as f:
             lines = f.readlines()
     except OSError:
         logger.warning("Cannot read JSONL for rewind: %s", jsonl_path)
@@ -126,9 +126,9 @@ def truncate_jsonl_at_line(jsonl_path: Path, line_index: int) -> bool:
     Returns ``True`` on success, ``False`` on I/O error.
     """
     try:
-        with open(jsonl_path) as f:
+        with open(jsonl_path, encoding="utf-8") as f:
             lines = f.readlines()
-        with open(jsonl_path, "w") as f:
+        with open(jsonl_path, "w", encoding="utf-8") as f:
             f.writelines(lines[:line_index])
         logger.info(
             "Rewound JSONL %s: truncated %d -> %d lines",

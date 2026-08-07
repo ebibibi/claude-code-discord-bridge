@@ -345,7 +345,7 @@ class ClaudeRunner:
         overlay_path = os.environ.get("CCDB_CLI_ENV_FILE")
         if overlay_path:
             try:
-                for line in Path(overlay_path).read_text().splitlines():
+                for line in Path(overlay_path).read_text(encoding="utf-8").splitlines():
                     line = line.strip()
                     if line and not line.startswith("#") and "=" in line:
                         key, value = line.split("=", 1)
