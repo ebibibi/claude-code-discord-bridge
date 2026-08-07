@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from .database.claims_repo import ClaimRepository
     from .database.ingest_repo import IngestResultRepository
     from .database.lounge_repo import LoungeRepository
+    from .database.notification_repo import NotificationRepository
     from .database.repository import SessionRepository
     from .database.resume_repo import PendingResumeRepository
     from .database.summary_repo import ThreadSummaryRepository
@@ -54,6 +55,7 @@ class BridgeComponents:
     resume_repo: PendingResumeRepository | None = None
     ingest_repo: IngestResultRepository | None = None
     summary_repo: ThreadSummaryRepository | None = None
+    notification_repo: NotificationRepository | None = None
     backend_factory: BackendFactory | None = None
     backend_settings: BackendSettings | None = None
 
@@ -78,6 +80,10 @@ class BridgeComponents:
             api_server.ingest_repo = self.ingest_repo
         if self.summary_repo is not None:
             api_server.summary_repo = self.summary_repo
+        if self.notification_repo is not None:
+            # Point the API at the same store the send loop drains. Two repos on
+            # two paths is how POST /api/schedule became a black hole.
+            api_server.repo = self.notification_repo
         api_server.session_repo = self.session_repo
 
 
@@ -449,6 +455,19 @@ async def setup_bridge(
         await bot.add_cog(scheduler_cog)
         logger.info("Registered SchedulerCog")
 
+    # --- ReminderCog -------------------------------------------------------
+    # Always registered: it owns the send loop for scheduled notifications, so
+    # without it POST /api/schedule would accept reminders that nothing ever
+    # delivers. Conditional reminders additionally need the scheduler.
+    from .cogs.reminder import ReminderCog
+    from .database.notification_repo import NotificationRepository as _NotificationRepo
+
+    os.makedirs(os.path.dirname(layout.notifications_db) or ".", exist_ok=True)
+    notification_repo = _NotificationRepo(layout.notifications_db)
+    await notification_repo.init_db()
+    await bot.add_cog(ReminderCog(bot, notification_repo=notification_repo, task_repo=task_repo))
+    logger.info("Registered ReminderCog (notifications=%s)", layout.notifications_db)
+
     # --- ContextLinksCog (optional — CONTEXT_LINKS_CONFIG or context_links.json) ---
     if context_links_config is None:
         context_links_config = os.getenv("CONTEXT_LINKS_CONFIG", "context_links.json")
@@ -483,6 +502,7 @@ async def setup_bridge(
         resume_repo=resume_repo,
         ingest_repo=ingest_repo,
         summary_repo=summary_repo,
+        notification_repo=notification_repo,
         backend_factory=backend_factory,
         backend_settings=backend_settings,
     )

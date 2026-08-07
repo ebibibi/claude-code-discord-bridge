@@ -87,7 +87,7 @@ def _find_main_repo(worktree_path: str) -> str | None:
     if not git_file.is_file():
         return None
     try:
-        content = git_file.read_text().strip()
+        content = git_file.read_text(encoding="utf-8").strip()
     except OSError:
         return None
 

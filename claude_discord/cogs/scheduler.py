@@ -80,6 +80,11 @@ class SchedulerCog(commands.Cog):
     @tasks.loop(seconds=MASTER_LOOP_INTERVAL_SECONDS)
     async def _master_loop(self) -> None:
         """Wake up every 30 s, find due tasks, and spawn them concurrently."""
+        # Retire tasks that outlived their deadline before looking for work.
+        # get_due() already ignores them; this is what makes them *visibly*
+        # finished instead of silently skipped forever.
+        await self.repo.expire_overdue()
+
         due = await self.repo.get_due()
         if not due:
             return

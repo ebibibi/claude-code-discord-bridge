@@ -90,7 +90,7 @@ class TestLoadConfig:
                 }
             ],
         }
-        config_file.write_text(json.dumps(config_data))
+        config_file.write_text(json.dumps(config_data), encoding="utf-8")
         result = load_config(str(config_file))
         assert result is not None
         assert result["obsidian_vault"] == "obsidian"
@@ -102,19 +102,19 @@ class TestLoadConfig:
 
     def test_invalid_json_returns_none(self, tmp_path: Path) -> None:
         config_file = tmp_path / "bad.json"
-        config_file.write_text("not valid json {{{")
+        config_file.write_text("not valid json {{{", encoding="utf-8")
         result = load_config(str(config_file))
         assert result is None
 
     def test_missing_projects_key_returns_none(self, tmp_path: Path) -> None:
         config_file = tmp_path / "empty.json"
-        config_file.write_text(json.dumps({"obsidian_vault": "test"}))
+        config_file.write_text(json.dumps({"obsidian_vault": "test"}), encoding="utf-8")
         result = load_config(str(config_file))
         assert result is None
 
     def test_empty_projects_returns_none(self, tmp_path: Path) -> None:
         config_file = tmp_path / "empty_projects.json"
-        config_file.write_text(json.dumps({"projects": []}))
+        config_file.write_text(json.dumps({"projects": []}), encoding="utf-8")
         result = load_config(str(config_file))
         assert result is None
 
@@ -404,7 +404,7 @@ class TestContextLinksCog:
             ],
         }
         config_file = tmp_path / "context_links.json"
-        config_file.write_text(json.dumps(config_data))
+        config_file.write_text(json.dumps(config_data), encoding="utf-8")
         return str(config_file)
 
     @pytest.fixture()

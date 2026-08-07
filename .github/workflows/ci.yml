@@ -51,8 +51,49 @@ jobs:
         env:
           HOME: ${{ runner.temp }}/fakehome
 
+  # The README claims macOS and Windows support. This job is what makes that
+  # claim checkable: the package ships sys.platform branches (signal handling,
+  # .cmd/.bat resolution) that no Linux run can exercise. Hosted runners, since
+  # the self-hosted fleet is Linux-only; free for a public repository.
+  cross-platform:
+    runs-on: ${{ matrix.os }}
+    # A hung test must fail, not sit for six hours on a hosted runner.
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      # No coverage gate here — the Linux job owns that. This job answers one
+      # question only: does the suite still pass off Linux?
+      # Per-test timeout because the first Windows run hung: without it a
+      # blocked test looks like a slow runner and reports nothing at all.
+      # pytest-timeout kills the process on Windows, so a hang costs the rest of
+      # the run — that is the trade for ever learning the hanging test's name.
+      - name: Test
+        run: uv run pytest tests/ -q --timeout=120 --timeout-method=thread
+        env:
+          HOME: ${{ runner.temp }}/fakehome
+          USERPROFILE: ${{ runner.temp }}/fakehome
+
   notify-failure:
-    needs: [test]
+    needs: [test, cross-platform]
     if: failure()
     runs-on: [self-hosted, linux, x64]
     steps:

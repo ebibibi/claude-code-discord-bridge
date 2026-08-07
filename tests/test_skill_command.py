@@ -96,7 +96,7 @@ class TestParseSkillMeta:
         skill_dir = tmp_path / "my-skill"
         skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text(
-            "---\nname: my-skill\ndescription: A cool skill\n---\n\nBody here."
+            "---\nname: my-skill\ndescription: A cool skill\n---\n\nBody here.", encoding="utf-8"
         )
         result = _parse_skill_meta(skill_dir)
         assert result == {"name": "my-skill", "description": "A cool skill"}
@@ -104,7 +104,7 @@ class TestParseSkillMeta:
     def test_name_defaults_to_dir_name(self, tmp_path: Path) -> None:
         skill_dir = tmp_path / "fallback-name"
         skill_dir.mkdir()
-        (skill_dir / "SKILL.md").write_text("---\ndescription: Only desc\n---\n")
+        (skill_dir / "SKILL.md").write_text("---\ndescription: Only desc\n---\n", encoding="utf-8")
         result = _parse_skill_meta(skill_dir)
         assert result is not None
         assert result["name"] == "fallback-name"
@@ -118,13 +118,15 @@ class TestParseSkillMeta:
     def test_no_frontmatter(self, tmp_path: Path) -> None:
         skill_dir = tmp_path / "no-front"
         skill_dir.mkdir()
-        (skill_dir / "SKILL.md").write_text("# Just a heading\nNo frontmatter here.")
+        (skill_dir / "SKILL.md").write_text(
+            "# Just a heading\nNo frontmatter here.", encoding="utf-8"
+        )
         assert _parse_skill_meta(skill_dir) is None
 
     def test_empty_frontmatter(self, tmp_path: Path) -> None:
         skill_dir = tmp_path / "empty-front"
         skill_dir.mkdir()
-        (skill_dir / "SKILL.md").write_text("---\n---\nBody.")
+        (skill_dir / "SKILL.md").write_text("---\n---\nBody.", encoding="utf-8")
         # No name/desc fields → name defaults to dir name, desc is ""
         result = _parse_skill_meta(skill_dir)
         assert result is not None
@@ -135,7 +137,7 @@ class TestParseSkillMeta:
         skill_dir = tmp_path / "broken"
         skill_dir.mkdir()
         skill_md = skill_dir / "SKILL.md"
-        skill_md.write_text("---\nname: x\n---\n")
+        skill_md.write_text("---\nname: x\n---\n", encoding="utf-8")
         # Make unreadable
         skill_md.chmod(0o000)
         try:
@@ -156,9 +158,11 @@ class TestLoadSkills:
         for name in ["alpha", "beta", "gamma"]:
             d = tmp_path / name
             d.mkdir()
-            (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: Skill {name}\n---\n")
+            (d / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: Skill {name}\n---\n", encoding="utf-8"
+            )
         # Add a file (not dir) — should be skipped
-        (tmp_path / "not-a-dir.txt").write_text("skip me")
+        (tmp_path / "not-a-dir.txt").write_text("skip me", encoding="utf-8")
         skills = _load_skills(tmp_path)
         assert len(skills) == 3
         assert [s["name"] for s in skills] == ["alpha", "beta", "gamma"]
@@ -167,7 +171,7 @@ class TestLoadSkills:
         # Valid
         d1 = tmp_path / "valid"
         d1.mkdir()
-        (d1 / "SKILL.md").write_text("---\nname: valid\ndescription: OK\n---\n")
+        (d1 / "SKILL.md").write_text("---\nname: valid\ndescription: OK\n---\n", encoding="utf-8")
         # Invalid (no SKILL.md)
         (tmp_path / "invalid").mkdir()
         skills = _load_skills(tmp_path)
@@ -620,7 +624,7 @@ class TestGetPluginSkillDirs:
         """Returns empty list when plugins.json is malformed JSON."""
         plugins_json = tmp_path / "plugins" / "installed_plugins.json"
         plugins_json.parent.mkdir(parents=True, exist_ok=True)
-        plugins_json.write_text("{invalid json}")
+        plugins_json.write_text("{invalid json}", encoding="utf-8")
         result = _get_plugin_skill_dirs(claude_dir=tmp_path)
         assert result == []
 
@@ -637,7 +641,7 @@ class TestGetPluginSkillDirs:
 
         plugins_json = tmp_path / "plugins" / "installed_plugins.json"
         plugins_json.parent.mkdir(parents=True, exist_ok=True)
-        plugins_json.write_text(json.dumps({"version": 2, "plugins": entries}))
+        plugins_json.write_text(json.dumps({"version": 2, "plugins": entries}), encoding="utf-8")
 
         result = _get_plugin_skill_dirs(claude_dir=tmp_path)
         assert set(result) == set(dirs)
@@ -655,14 +659,14 @@ class TestCollectSkills:
         primary.mkdir()
         (primary / "local-skill").mkdir()
         (primary / "local-skill" / "SKILL.md").write_text(
-            "---\nname: local-skill\ndescription: Local\n---\n"
+            "---\nname: local-skill\ndescription: Local\n---\n", encoding="utf-8"
         )
 
         extra = tmp_path / "plugin-skills"
         extra.mkdir()
         (extra / "plugin-skill").mkdir()
         (extra / "plugin-skill" / "SKILL.md").write_text(
-            "---\nname: plugin-skill\ndescription: Plugin\n---\n"
+            "---\nname: plugin-skill\ndescription: Plugin\n---\n", encoding="utf-8"
         )
 
         result = _collect_skills(primary, [extra])
@@ -676,14 +680,14 @@ class TestCollectSkills:
         primary.mkdir()
         (primary / "shared").mkdir()
         (primary / "shared" / "SKILL.md").write_text(
-            "---\nname: shared\ndescription: My custom version\n---\n"
+            "---\nname: shared\ndescription: My custom version\n---\n", encoding="utf-8"
         )
 
         extra = tmp_path / "plugin"
         extra.mkdir()
         (extra / "shared").mkdir()
         (extra / "shared" / "SKILL.md").write_text(
-            "---\nname: shared\ndescription: Plugin version\n---\n"
+            "---\nname: shared\ndescription: Plugin version\n---\n", encoding="utf-8"
         )
 
         result = _collect_skills(primary, [extra])
@@ -695,7 +699,9 @@ class TestCollectSkills:
         primary = tmp_path / "primary"
         primary.mkdir()
         (primary / "skill-a").mkdir()
-        (primary / "skill-a" / "SKILL.md").write_text("---\nname: skill-a\ndescription: A\n---\n")
+        (primary / "skill-a" / "SKILL.md").write_text(
+            "---\nname: skill-a\ndescription: A\n---\n", encoding="utf-8"
+        )
         result = _collect_skills(primary, [])
         assert len(result) == 1
 
@@ -706,7 +712,7 @@ class TestCollectSkills:
         for name in ["zebra", "apple", "mango"]:
             (primary / name).mkdir()
             (primary / name / "SKILL.md").write_text(
-                f"---\nname: {name}\ndescription: {name}\n---\n"
+                f"---\nname: {name}\ndescription: {name}\n---\n", encoding="utf-8"
             )
         result = _collect_skills(primary, [])
         assert [s["name"] for s in result] == ["apple", "mango", "zebra"]
@@ -726,7 +732,7 @@ class TestCogPluginIntegration:
         plugin_skills.mkdir(parents=True)
         (plugin_skills / "plan").mkdir()
         (plugin_skills / "plan" / "SKILL.md").write_text(
-            "---\nname: plan\ndescription: Plan a feature\n---\n"
+            "---\nname: plan\ndescription: Plan a feature\n---\n", encoding="utf-8"
         )
 
         plugins_json = tmp_path / "plugins" / "installed_plugins.json"
@@ -762,7 +768,7 @@ class TestCogPluginIntegration:
         plugin_skills.mkdir(parents=True)
         (plugin_skills / "todoist").mkdir()
         (plugin_skills / "todoist" / "SKILL.md").write_text(
-            "---\nname: todoist\ndescription: Plugin version\n---\n"
+            "---\nname: todoist\ndescription: Plugin version\n---\n", encoding="utf-8"
         )
 
         plugins_json = tmp_path / "plugins" / "installed_plugins.json"
@@ -776,7 +782,7 @@ class TestCogPluginIntegration:
         primary_dir.mkdir()
         (primary_dir / "todoist").mkdir()
         (primary_dir / "todoist" / "SKILL.md").write_text(
-            "---\nname: todoist\ndescription: My custom version\n---\n"
+            "---\nname: todoist\ndescription: My custom version\n---\n", encoding="utf-8"
         )
 
         bot = MagicMock()

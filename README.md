@@ -430,6 +430,13 @@ Behind the scenes:
 - **Self-registration** — Claude registers tasks via `POST /api/tasks` during a chat session
 - **No code changes** — Add, remove, or modify tasks at runtime
 - **Enable/disable** — Pause tasks without deleting them (`PATCH /api/tasks/{id}`)
+- **Absolute and expiring schedules** — `run_at` fires once at a given instant (`"21:30"`, `"2h"`, ISO 8601); `until` retires a repeating task on its own instead of relying on someone to remember
+
+### Reminders
+- **`/remind`** — "remind me at 21:30", and optionally *only if it is still not done*
+- **Conditional reminders** — pass `check` and a real session verifies the condition first, then stays silent when the thing is already done. No new bot code per reminder: the condition is a sentence, not a plugin
+- **Cheapest mechanism that fits** — an unconditional reminder is delivered as a notification (one Discord message, no agent run); a conditional one spawns a session because it needs judgement
+- **`/reminders`** — list what is still pending, both kinds
 
 ### CI/CD Automation
 - **Webhook triggers** — Trigger Claude Code tasks from GitHub Actions or any CI/CD system
@@ -479,7 +486,7 @@ Behind the scenes:
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` then `codex login`. Uses your existing ChatGPT Plus/Pro/Business subscription.
 - You can install both. Switch between them at runtime with `/backend` (see [Backend Switching](#backend-switching--claude--codex-on-demand)).
 
-**Platform support:** Primarily developed and tested on **Linux**. macOS and Windows are supported and pass CI, but receive less real-world testing — bug reports welcome.
+**Platform support:** Primarily developed and tested on **Linux**. CI runs the full test suite on Linux (Python 3.12 and 3.13), macOS, and Windows, so the platform branches in the package stay honest — but macOS and Windows receive far less real-world testing, and bug reports are welcome.
 
 ### Step 1 — Create a Discord Bot (one-time, ~2 minutes)
 
@@ -1006,6 +1013,33 @@ curl -X POST http://localhost:8080/api/tasks \
 
 The 30-second master loop picks up due tasks and spawns Claude Code sessions automatically.
 
+### One-shot and self-retiring tasks
+
+`interval_seconds` alone can only say "every N seconds". Three fields cover the
+rest, and reminders are built entirely out of them:
+
+| Field | Meaning |
+|-------|---------|
+| `run_at` | First run at an absolute instant — `"21:30"` (next occurrence), `"2h"`, or ISO 8601 |
+| `until` | Stop after this — `"2026-08-08"` (covers that whole day) or `"2d"`. The task is disabled, not deleted, so it can still explain itself |
+| `one_shot` | Disable after a single run |
+
+```bash
+# Wake me up in this thread tonight, once, and never again:
+curl -X POST "$CCDB_API_URL/api/tasks" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "remind-1234-idr", "prompt": "Check whether the survey went out; if not, say so", \
+       "interval_seconds": 86400, "thread_id": 1234, "run_at": "21:30", "one_shot": true}'
+```
+
+`thread_id` posts into an existing thread instead of creating one, and makes
+`channel_id` optional. A session that satisfies its own reminder retires it with
+`DELETE /api/tasks/by-name/{name}` — it knows its name, never its row id.
+
+Every session is told this mechanism exists as part of its system context, so
+"I'll check back later" becomes a registered task rather than a promise nothing
+can keep.
+
 ---
 
 ## Auto-Upgrade
@@ -1073,6 +1107,7 @@ uv add "claude-code-discord-bridge[api]"
 | POST | `/api/tasks` | Register a scheduled Claude Code task |
 | GET | `/api/tasks` | List registered tasks |
 | DELETE | `/api/tasks/{id}` | Remove a task |
+| DELETE | `/api/tasks/by-name/{name}` | Remove a task by name (how a scheduled session retires itself) |
 | PATCH | `/api/tasks/{id}` | Update a task (enable/disable, change schedule) |
 | POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply |
 | POST | `/api/ingest` | Authenticated external spawn (browser extension / webhook) with base64 attachments; returns a `result_id` when result retrieval is configured |

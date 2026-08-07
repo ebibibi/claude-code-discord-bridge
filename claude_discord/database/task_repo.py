@@ -44,6 +44,12 @@ ALTER TABLE scheduled_tasks ADD COLUMN thread_id INTEGER;
 ALTER TABLE scheduled_tasks ADD COLUMN one_shot INTEGER DEFAULT 0;
 """
 
+# Migration: add expiry. NULL means "no expiry", which is what every task
+# created before this column existed meant implicitly.
+_MIGRATION_UNTIL = """
+ALTER TABLE scheduled_tasks ADD COLUMN until REAL;
+"""
+
 
 class TaskRepository:
     """Async CRUD for scheduled_tasks table."""
@@ -70,6 +76,12 @@ class TaskRepository:
                     if stmt:
                         await db.execute(stmt)
                 logger.info("Migrated scheduled_tasks: added thread_id, one_shot")
+            if "until" not in columns:
+                for stmt in _MIGRATION_UNTIL.strip().split(";"):
+                    stmt = stmt.strip()
+                    if stmt:
+                        await db.execute(stmt)
+                logger.info("Migrated scheduled_tasks: added until")
             await db.commit()
         logger.info("Task DB initialized at %s", self.db_path)
 
@@ -131,15 +143,21 @@ class TaskRepository:
         return result
 
     async def get_due(self, now: float | None = None) -> list[dict]:
-        """Return enabled tasks whose next_run_at is in the past."""
+        """Return enabled tasks whose next_run_at is in the past and not expired.
+
+        A task past its ``until`` is never returned, even when overdue: an
+        expired reminder firing late is exactly the nagging that ``until``
+        exists to prevent.  :meth:`expire_overdue` disables such rows.
+        """
         ts = now if now is not None else time.time()
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 """SELECT * FROM scheduled_tasks
                    WHERE enabled = 1 AND next_run_at <= ?
+                     AND (until IS NULL OR until > ?)
                    ORDER BY next_run_at""",
-                (ts,),
+                (ts, ts),
             )
             rows = await cursor.fetchall()
         result = []
@@ -167,6 +185,8 @@ class TaskRepository:
         anchor_minute: int | None = None,
         thread_id: int | None = None,
         one_shot: bool = False,
+        run_at: float | None = None,
+        until: float | None = None,
     ) -> int:
         """Create a new scheduled task. Returns the created ID.
 
@@ -183,9 +203,16 @@ class TaskRepository:
                 the scheduler posts to this existing thread instead of
                 creating a new one (follow-up mode).
             one_shot: If True, the task auto-disables after a single execution.
+            run_at: Optional absolute epoch seconds for the first run. Wins
+                over run_immediately and anchor_hour — an explicit instant is
+                a stronger statement than either default.
+            until: Optional expiry (epoch seconds). After this the task stops
+                firing and is disabled by expire_overdue(). None = no expiry.
         """
         now = time.time()
-        if anchor_hour is not None and not run_immediately:
+        if run_at is not None:
+            next_run = run_at
+        elif anchor_hour is not None and not run_immediately:
             next_run = self._next_anchor(anchor_hour, anchor_minute or 0, interval_seconds)
         elif run_immediately:
             next_run = now
@@ -196,8 +223,8 @@ class TaskRepository:
                 """INSERT INTO scheduled_tasks
                    (name, prompt, interval_seconds, channel_id, working_dir,
                     enabled, next_run_at, created_at, anchor_hour, anchor_minute,
-                    thread_id, one_shot)
-                   VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
+                    thread_id, one_shot, until)
+                   VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     name,
                     prompt,
@@ -210,6 +237,7 @@ class TaskRepository:
                     anchor_minute,
                     thread_id,
                     1 if one_shot else 0,
+                    until,
                 ),
             )
             await db.commit()
@@ -248,6 +276,33 @@ class TaskRepository:
                 (next_run, now, task_id),
             )
             await db.commit()
+
+    async def expire_overdue(self, now: float | None = None) -> list[str]:
+        """Disable tasks that are past their ``until``. Returns their names.
+
+        Disabled rather than deleted: a reminder that ran out of time is a
+        thing the user may want to see ("it never fired because the deadline
+        passed"), and a deleted row explains nothing.
+        """
+        ts = now if now is not None else time.time()
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """SELECT name FROM scheduled_tasks
+                   WHERE enabled = 1 AND until IS NOT NULL AND until <= ?""",
+                (ts,),
+            )
+            names = [row["name"] for row in await cursor.fetchall()]
+            if names:
+                await db.execute(
+                    """UPDATE scheduled_tasks SET enabled = 0
+                       WHERE enabled = 1 AND until IS NOT NULL AND until <= ?""",
+                    (ts,),
+                )
+                await db.commit()
+        if names:
+            logger.info("Expired scheduled tasks disabled: %s", ", ".join(names))
+        return names
 
     async def delete_by_name(self, name: str) -> bool:
         """Delete a task by its unique name. Returns True if a row was deleted."""

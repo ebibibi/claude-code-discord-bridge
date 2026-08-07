@@ -37,8 +37,12 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 @pytest.fixture
 def vault() -> Iterator[Path]:
+    # Resolved, because TeamsStore._contained returns realpaths and macOS hands
+    # out temp dirs under /var, a symlink to /private/var. Comparing a resolved
+    # result against an unresolved fixture fails there while the containment
+    # check itself is perfectly correct.
     with tempfile.TemporaryDirectory() as tmp:
-        yield Path(tmp)
+        yield Path(tmp).resolve()
 
 
 @pytest.fixture
@@ -162,7 +166,7 @@ async def test_push_writes_one_file_per_message(client: TestClient, vault: Path)
 
     folder = Path(body["folder"])
     assert (folder / "messages" / f"{ROOT}.md").exists()
-    assert "返信です" in (folder / "messages" / "1784885000000.md").read_text()
+    assert "返信です" in (folder / "messages" / "1784885000000.md").read_text(encoding="utf-8")
     # mid is fixed width, so the filenames sort into chronological order.
     names = sorted(p.stem for p in (folder / "messages").glob("*.md"))
     assert names == [ROOT, "1784885000000"]
@@ -177,14 +181,17 @@ async def test_chain_records_order_and_prev(client: TestClient) -> None:
         ),
     )
     folder = Path((await resp.json())["folder"])
-    chain = [json.loads(line) for line in (folder / "chain.jsonl").read_text().splitlines()]
+    chain = [
+        json.loads(line)
+        for line in (folder / "chain.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
     assert [c["mid"] for c in chain] == [ROOT, "1784885000000"]
     assert chain[0]["prev"] is None
     assert chain[1]["prev"] == ROOT
     # `next` is deliberately not stored anywhere: it would require rewriting an
     # existing file on every new reply.
     assert "next" not in chain[0]
-    front = (folder / "messages" / f"{ROOT}.md").read_text()
+    front = (folder / "messages" / f"{ROOT}.md").read_text(encoding="utf-8")
     assert "next:" not in front
 
 
@@ -197,7 +204,7 @@ async def test_pushing_twice_is_idempotent(client: TestClient) -> None:
     assert (await second.json())["folder"] == str(folder)
     assert len(list(Path(folder / "messages").glob("*.md"))) == 1
     assert sorted(p.name for p in folder.parent.iterdir()) == [folder.name]
-    meta = json.loads((folder / "thread.json").read_text())
+    meta = json.loads((folder / "thread.json").read_text(encoding="utf-8"))
     assert meta["message_count"] == 1
 
 
@@ -209,13 +216,16 @@ async def test_edit_archives_the_previous_version(client: TestClient) -> None:
         "/api/teams/sync/push", headers=AUTH, json=thread_body(messages=[msg(ROOT, "新本文", "h2")])
     )
     folder = Path((await resp.json())["folder"])
-    note = (folder / "messages" / f"{ROOT}.md").read_text()
+    note = (folder / "messages" / f"{ROOT}.md").read_text(encoding="utf-8")
     assert "新本文" in note
     assert "edited: true" in note
     archived = list((folder / "_history").glob(f"{ROOT}.*.md"))
     assert len(archived) == 1
-    assert "旧本文" in archived[0].read_text()
-    chain = [json.loads(line) for line in (folder / "chain.jsonl").read_text().splitlines()]
+    assert "旧本文" in archived[0].read_text(encoding="utf-8")
+    chain = [
+        json.loads(line)
+        for line in (folder / "chain.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
     assert [c["rev"] for c in chain] == [1, 2]
 
 
@@ -231,7 +241,7 @@ async def test_deleted_message_keeps_its_file(client: TestClient) -> None:
         ),
     )
     folder = Path((await resp.json())["folder"])
-    note = (folder / "messages" / f"{ROOT}.md").read_text()
+    note = (folder / "messages" / f"{ROOT}.md").read_text(encoding="utf-8")
     assert "deleted: true" in note
     assert list((folder / "_history").glob("*.md"))
 
@@ -293,8 +303,8 @@ async def test_unfetched_attachment_is_reported_and_asked_for_again(
     ]
 
     folder = Path(body["folder"])
-    assert "admin.evtx" in (folder / "README.md").read_text()
-    assert "⚠️ 添付未取得" in (folder / "messages" / f"{ROOT}.md").read_text()
+    assert "admin.evtx" in (folder / "README.md").read_text(encoding="utf-8")
+    assert "⚠️ 添付未取得" in (folder / "messages" / f"{ROOT}.md").read_text(encoding="utf-8")
 
     # And the next plan asks for it again — a gap that stays visible is a gap
     # that can be closed by pressing the button once more.
@@ -386,7 +396,7 @@ async def test_obsolete_pending_clears_when_the_message_inventory_changes(
     )
     body = await resp.json()
     assert body["pending"] == []
-    meta = json.loads((Path(body["folder"]) / "thread.json").read_text())
+    meta = json.loads((Path(body["folder"]) / "thread.json").read_text(encoding="utf-8"))
     assert meta["pending_attachments"] == []
 
 
@@ -480,11 +490,11 @@ async def test_plan_requests_a_message_with_obsolete_pending_metadata(
     )
     folder = Path((await push.json())["folder"])
     meta_path = folder / "thread.json"
-    meta = json.loads(meta_path.read_text())
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
     meta["pending_attachments"] = [
         {"mid": ROOT, "name": "1.txt", "reason": "old client false positive", "url": ""}
     ]
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     plan = await client.post(
         "/api/teams/sync/plan",
@@ -655,7 +665,7 @@ async def test_thread_lands_in_its_company_folder(client: TestClient, vault: Pat
     )
     folder = Path((await resp.json())["folder"])
     assert folder.parent == vault / "日本工営"
-    assert json.loads((folder / "thread.json").read_text())["org"] == "日本工営"
+    assert json.loads((folder / "thread.json").read_text(encoding="utf-8"))["org"] == "日本工営"
 
 
 async def test_unlabelled_thread_stays_at_the_root(client: TestClient, vault: Path) -> None:
@@ -758,7 +768,9 @@ async def test_a_new_company_label_is_remembered_for_the_team(
             messages=[msg(ROOT, "本文", "h1")],
         ),
     )
-    assert json.loads((vault / "orgs.json").read_text())["teams"][TEAM] == "日本工営"
+    assert (
+        json.loads((vault / "orgs.json").read_text(encoding="utf-8"))["teams"][TEAM] == "日本工営"
+    )
 
     other = await client.post(
         "/api/teams/sync/push",
@@ -805,5 +817,5 @@ async def test_readme_names_the_company(client: TestClient) -> None:
             messages=[msg(ROOT, "本文", "h1")],
         ),
     )
-    readme = (Path((await resp.json())["folder"]) / "README.md").read_text()
+    readme = (Path((await resp.json())["folder"]) / "README.md").read_text(encoding="utf-8")
     assert "- 会社: 日本工営" in readme

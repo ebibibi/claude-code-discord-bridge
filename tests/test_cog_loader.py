@@ -68,8 +68,12 @@ async def test_skip_underscore_prefix(
     cogs_dir: Path, mock_bot: MagicMock, mock_components: MagicMock
 ) -> None:
     """Files starting with _ should be skipped."""
-    (cogs_dir / "_helper.py").write_text("async def setup(bot, runner, components): pass")
-    (cogs_dir / "good.py").write_text("async def setup(bot, runner, components): pass")
+    (cogs_dir / "_helper.py").write_text(
+        "async def setup(bot, runner, components): pass", encoding="utf-8"
+    )
+    (cogs_dir / "good.py").write_text(
+        "async def setup(bot, runner, components): pass", encoding="utf-8"
+    )
 
     result = await load_custom_cogs(cogs_dir, mock_bot, None, mock_components)
     assert result == 1  # only good.py
@@ -79,8 +83,8 @@ async def test_skip_non_py_files(
     cogs_dir: Path, mock_bot: MagicMock, mock_components: MagicMock
 ) -> None:
     """Non-.py files should be ignored."""
-    (cogs_dir / "readme.txt").write_text("not a cog")
-    (cogs_dir / "config.json").write_text("{}")
+    (cogs_dir / "readme.txt").write_text("not a cog", encoding="utf-8")
+    (cogs_dir / "config.json").write_text("{}", encoding="utf-8")
 
     result = await load_custom_cogs(cogs_dir, mock_bot, None, mock_components)
     assert result == 0
@@ -90,7 +94,7 @@ async def test_skip_no_setup_function(
     cogs_dir: Path, mock_bot: MagicMock, mock_components: MagicMock
 ) -> None:
     """A .py file without setup() should be skipped with a warning."""
-    (cogs_dir / "no_setup.py").write_text("x = 42")
+    (cogs_dir / "no_setup.py").write_text("x = 42", encoding="utf-8")
 
     result = await load_custom_cogs(cogs_dir, mock_bot, None, mock_components)
     assert result == 0
@@ -163,7 +167,9 @@ async def test_syntax_error_in_cog(
     cogs_dir: Path, mock_bot: MagicMock, mock_components: MagicMock
 ) -> None:
     """A file with syntax errors should be skipped gracefully."""
-    (cogs_dir / "bad_syntax.py").write_text("def setup(bot, runner, components) oops")
+    (cogs_dir / "bad_syntax.py").write_text(
+        "def setup(bot, runner, components) oops", encoding="utf-8"
+    )
 
     result = await load_custom_cogs(cogs_dir, mock_bot, None, mock_components)
     assert result == 0

@@ -147,7 +147,7 @@ class TestWriteEnv:
             working_dir="/home/user/project",
             model="sonnet",
         )
-        content = env_file.read_text()
+        content = env_file.read_text(encoding="utf-8")
         assert "DISCORD_BOT_TOKEN=mytoken" in content
         assert "DISCORD_CHANNEL_ID=123" in content
         assert "DISCORD_OWNER_ID=456" in content
@@ -166,7 +166,7 @@ class TestWriteEnv:
             working_dir="",
             model="sonnet",
         )
-        content = env_file.read_text()
+        content = env_file.read_text(encoding="utf-8")
         # owner_id line should still exist but be empty
         assert "DISCORD_OWNER_ID=" in content
 
@@ -174,7 +174,7 @@ class TestWriteEnv:
         from claude_discord.cli import write_env
 
         env_file = tmp_path / ".env"
-        env_file.write_text("DISCORD_BOT_TOKEN=original\n")
+        env_file.write_text("DISCORD_BOT_TOKEN=original\n", encoding="utf-8")
         with pytest.raises(FileExistsError):
             write_env(
                 path=env_file,
@@ -184,13 +184,13 @@ class TestWriteEnv:
                 working_dir="",
                 model="sonnet",
             )
-        assert "original" in env_file.read_text()
+        assert "original" in env_file.read_text(encoding="utf-8")
 
     def test_overwrites_with_flag(self, tmp_path: Path) -> None:
         from claude_discord.cli import write_env
 
         env_file = tmp_path / ".env"
-        env_file.write_text("DISCORD_BOT_TOKEN=original\n")
+        env_file.write_text("DISCORD_BOT_TOKEN=original\n", encoding="utf-8")
         write_env(
             path=env_file,
             token="new",
@@ -200,8 +200,8 @@ class TestWriteEnv:
             model="sonnet",
             overwrite=True,
         )
-        assert "new" in env_file.read_text()
-        assert "original" not in env_file.read_text()
+        assert "new" in env_file.read_text(encoding="utf-8")
+        assert "original" not in env_file.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +306,9 @@ class TestRunStartEnvLoading:
     async def test_run_start_loads_dotenv_from_explicit_path(self, tmp_path: Path) -> None:
         """_run_start must call load_dotenv(env_path) so vars are available to main."""
         env_file = tmp_path / ".env"
-        env_file.write_text("DISCORD_BOT_TOKEN=test-token-123\nDISCORD_CHANNEL_ID=999\n")
+        env_file.write_text(
+            "DISCORD_BOT_TOKEN=test-token-123\nDISCORD_CHANNEL_ID=999\n", encoding="utf-8"
+        )
 
         with (
             patch("dotenv.load_dotenv") as mock_load_dotenv,

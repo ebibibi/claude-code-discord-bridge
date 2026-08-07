@@ -166,7 +166,7 @@ def test_parse_user_turns_respects_max_turns(tmp_path: Path) -> None:
 
 def test_parse_user_turns_empty_file(tmp_path: Path) -> None:
     jsonl = tmp_path / "empty.jsonl"
-    jsonl.write_text("")
+    jsonl.write_text("", encoding="utf-8")
     turns = parse_user_turns(jsonl)
     assert turns == []
 
@@ -223,12 +223,12 @@ def test_truncate_jsonl_removes_selected_and_after(tmp_path: Path) -> None:
         '{"type":"user","message":{"content":"turn 1"}}\n',
         '{"type":"assistant","message":{"content":"resp 1"}}\n',
     ]
-    jsonl.write_text("".join(lines))
+    jsonl.write_text("".join(lines), encoding="utf-8")
 
     result = truncate_jsonl_at_line(jsonl, line_index=2)
 
     assert result is True
-    remaining = jsonl.read_text().splitlines()
+    remaining = jsonl.read_text(encoding="utf-8").splitlines()
     assert len(remaining) == 2
     assert "turn 0" in remaining[0]
     assert "resp 0" in remaining[1]
@@ -236,12 +236,12 @@ def test_truncate_jsonl_removes_selected_and_after(tmp_path: Path) -> None:
 
 def test_truncate_jsonl_at_zero_empties_file(tmp_path: Path) -> None:
     jsonl = tmp_path / "sess.jsonl"
-    jsonl.write_text('{"type":"user","message":{"content":"only"}}\n')
+    jsonl.write_text('{"type":"user","message":{"content":"only"}}\n', encoding="utf-8")
 
     result = truncate_jsonl_at_line(jsonl, line_index=0)
 
     assert result is True
-    assert jsonl.read_text() == ""
+    assert jsonl.read_text(encoding="utf-8") == ""
 
 
 def test_truncate_jsonl_returns_false_on_missing_file(tmp_path: Path) -> None:
@@ -254,12 +254,12 @@ def test_truncate_jsonl_beyond_end_keeps_all(tmp_path: Path) -> None:
     """Truncating beyond the last line keeps the file intact."""
     jsonl = tmp_path / "sess.jsonl"
     content = '{"type":"user","message":{"content":"only"}}\n'
-    jsonl.write_text(content)
+    jsonl.write_text(content, encoding="utf-8")
 
     result = truncate_jsonl_at_line(jsonl, line_index=999)
 
     assert result is True
-    assert jsonl.read_text() == content
+    assert jsonl.read_text(encoding="utf-8") == content
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ def test_find_session_jsonl_via_working_dir(tmp_path: Path, monkeypatch) -> None
     project_dir.mkdir()
     session_id = "abc123"
     jsonl = project_dir / f"{session_id}.jsonl"
-    jsonl.write_text("")
+    jsonl.write_text("", encoding="utf-8")
 
     result = find_session_jsonl(session_id, "/home/ebi/myrepo")
     assert result == jsonl
@@ -297,7 +297,7 @@ def test_find_session_jsonl_fallback_search(tmp_path: Path, monkeypatch) -> None
     other_dir.mkdir()
     session_id = "xyz789"
     jsonl = other_dir / f"{session_id}.jsonl"
-    jsonl.write_text("")
+    jsonl.write_text("", encoding="utf-8")
 
     # Pass working_dir that doesn't match
     result = find_session_jsonl(session_id, "/does/not/exist")

@@ -313,6 +313,8 @@ class ApiServer:
         # Scheduled task routes (requires task_repo)
         self.app.router.add_post("/api/tasks", self.create_task)
         self.app.router.add_get("/api/tasks", self.list_tasks)
+        # by-name comes first: a scheduled session knows its name, not its id.
+        self.app.router.add_delete("/api/tasks/by-name/{name}", self.delete_task_by_name)
         self.app.router.add_delete("/api/tasks/{id}", self.delete_task)
         self.app.router.add_patch("/api/tasks/{id}", self.patch_task)
         # AI Lounge routes (requires lounge_repo)
@@ -611,6 +613,24 @@ class ApiServer:
             raise ValueError(f"anchor_time must be HH:MM, got {raw!r}")
         return int(parts[0]), int(parts[1])
 
+    @staticmethod
+    def _parse_instant(raw: object, *, field: str, is_expiry: bool) -> float | None:
+        """Parse a reminder instant into epoch seconds, or None when absent.
+
+        Delegates to :mod:`claude_discord.reminders` so the REST API and the
+        ``/remind`` command accept exactly the same spellings.
+        """
+        if raw is None:
+            return None
+        from ..reminders import parse_until, parse_when
+
+        text = str(raw)
+        try:
+            parsed = parse_until(text) if is_expiry else parse_when(text)
+        except ValueError as exc:
+            raise ValueError(f"{field}: {exc}") from exc
+        return parsed.timestamp() if parsed is not None else None
+
     async def create_task(self, request: web.Request) -> web.Response:
         """POST /api/tasks — register a scheduled Claude Code task.
 
@@ -629,6 +649,12 @@ class ApiServer:
                 instead of creating a new one.
             one_shot: (optional, default false) If true, auto-disable after
                 a single execution.
+            run_at: (optional) Absolute first run — ISO 8601, a wall-clock
+                ``"HH:MM"`` (next occurrence), or an offset like ``"2h"``.
+                Overrides run_immediately and anchor_time.
+            until: (optional) Expiry — ISO 8601, a bare ``YYYY-MM-DD`` (which
+                covers that whole day), or an offset. After it the task stops
+                firing and is disabled.
         """
         if err := self._require_task_repo():
             return err
@@ -637,12 +663,21 @@ class ApiServer:
         except json.JSONDecodeError:
             return web.json_response({"error": "Invalid JSON"}, status=400)
 
-        for field in ("name", "prompt", "interval_seconds", "channel_id"):
+        for field in ("name", "prompt", "interval_seconds"):
             if not data.get(field):
                 return web.json_response({"error": f"{field} is required"}, status=400)
 
+        # A follow-up into an existing thread only needs channel_id as a
+        # fallback target, and a session knows its thread but not its parent.
+        if not data.get("channel_id"):
+            if not data.get("thread_id") or not self.default_channel_id:
+                return web.json_response({"error": "channel_id is required"}, status=400)
+            data["channel_id"] = self.default_channel_id
+
         try:
             anchor_hour, anchor_minute = self._parse_anchor_time(data.get("anchor_time"))
+            run_at = self._parse_instant(data.get("run_at"), field="run_at", is_expiry=False)
+            until = self._parse_instant(data.get("until"), field="until", is_expiry=True)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
@@ -667,6 +702,8 @@ class ApiServer:
                 anchor_minute=anchor_minute,
                 thread_id=thread_id,
                 one_shot=one_shot,
+                run_at=run_at,
+                until=until,
             )
         except Exception as exc:
             # Most likely a UNIQUE constraint violation on name
@@ -694,6 +731,24 @@ class ApiServer:
 
         deleted = await self.task_repo.delete(task_id)  # type: ignore[union-attr]
         if deleted:
+            return web.json_response({"status": "deleted"})
+        return web.json_response({"error": "Task not found"}, status=404)
+
+    async def delete_task_by_name(self, request: web.Request) -> web.Response:
+        """DELETE /api/tasks/by-name/{name} — remove a scheduled task by name.
+
+        A scheduled session is told its own task name in its prompt but never
+        its row id, so this is how a satisfied reminder retires itself.
+        """
+        if err := self._require_task_repo():
+            return err
+        name = request.match_info.get("name", "")
+        if not name:
+            return web.json_response({"error": "name is required"}, status=400)
+
+        deleted = await self.task_repo.delete_by_name(name)  # type: ignore[union-attr]
+        if deleted:
+            logger.info("Task deleted by name via API: %s", _sanitize_log(name))
             return web.json_response({"status": "deleted"})
         return web.json_response({"error": "Task not found"}, status=404)
 

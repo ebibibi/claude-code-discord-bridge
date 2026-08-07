@@ -260,7 +260,7 @@ class TestBuildEnv:
 
     def test_reads_cli_env_overlay_file(self, tmp_path: Path) -> None:
         overlay = tmp_path / "overlay.env"
-        overlay.write_text("MY_CUSTOM_VAR=hello\nANOTHER_VAR=world\n")
+        overlay.write_text("MY_CUSTOM_VAR=hello\nANOTHER_VAR=world\n", encoding="utf-8")
         os.environ["CCDB_CLI_ENV_FILE"] = str(overlay)
         try:
             runner = ClaudeRunner()
@@ -272,7 +272,7 @@ class TestBuildEnv:
 
     def test_cli_env_overlay_skips_comments_and_blanks(self, tmp_path: Path) -> None:
         overlay = tmp_path / "overlay.env"
-        overlay.write_text("# comment\n\nVALID_KEY=value\n")
+        overlay.write_text("# comment\n\nVALID_KEY=value\n", encoding="utf-8")
         os.environ["CCDB_CLI_ENV_FILE"] = str(overlay)
         try:
             runner = ClaudeRunner()
@@ -308,7 +308,7 @@ class TestBuildEnv:
 
     def test_cli_env_overlay_overrides_process_env(self, tmp_path: Path) -> None:
         overlay = tmp_path / "overlay.env"
-        overlay.write_text("PATH=/custom/path\n")
+        overlay.write_text("PATH=/custom/path\n", encoding="utf-8")
         os.environ["CCDB_CLI_ENV_FILE"] = str(overlay)
         try:
             runner = ClaudeRunner()
@@ -952,10 +952,10 @@ class TestResolveWindowsCmd:
         """Write a minimal .cmd wrapper and the target .js file."""
         js_path = tmp_path / rel_js
         js_path.parent.mkdir(parents=True, exist_ok=True)
-        js_path.write_text("// cli entry\n")
+        js_path.write_text("// cli entry\n", encoding="utf-8")
 
         cmd_path = tmp_path / "claude.cmd"
-        cmd_path.write_text(self._NPM_CMD_TEMPLATE.format(rel_path=rel_js))
+        cmd_path.write_text(self._NPM_CMD_TEMPLATE.format(rel_path=rel_js), encoding="utf-8")
         return cmd_path
 
     def test_parses_npm_wrapper_and_returns_node_js(self, tmp_path: Path) -> None:
@@ -974,12 +974,12 @@ class TestResolveWindowsCmd:
         """Fallback path: .cmd has no parseable JS ref, but node_modules exists."""
         # Write a .cmd file without the "%~dp0\..." pattern
         cmd_path = tmp_path / "claude.cmd"
-        cmd_path.write_text("@ECHO off\r\nREM non-standard wrapper\r\n")
+        cmd_path.write_text("@ECHO off\r\nREM non-standard wrapper\r\n", encoding="utf-8")
 
         # Create the fallback cli.js location
         cli_js = tmp_path / "node_modules" / "@anthropic-ai" / "claude-code" / "cli.js"
         cli_js.parent.mkdir(parents=True, exist_ok=True)
-        cli_js.write_text("// cli entry\n")
+        cli_js.write_text("// cli entry\n", encoding="utf-8")
 
         with patch("claude_code_core.runner.shutil.which", return_value="node"):
             result = _resolve_windows_cmd(cmd_path)
@@ -991,7 +991,9 @@ class TestResolveWindowsCmd:
         """Both paths fail: .cmd wrapper points to a non-existent .js file."""
         cmd_path = tmp_path / "claude.cmd"
         # Regex will match but the resolved path won't exist
-        cmd_path.write_text(r'"%~dp0\node_modules\@anthropic-ai\claude-code\cli.js"' + "\r\n")
+        cmd_path.write_text(
+            r'"%~dp0\node_modules\@anthropic-ai\claude-code\cli.js"' + "\r\n", encoding="utf-8"
+        )
         # Do NOT create cli.js — both primary and fallback should fail
 
         result = _resolve_windows_cmd(cmd_path)
@@ -1035,7 +1037,7 @@ class TestResolveWindowsCmd:
     def test_build_args_unchanged_on_linux(self, tmp_path: Path) -> None:
         """_build_args does not touch the command on non-Windows platforms."""
         cmd_path = tmp_path / "claude.cmd"
-        cmd_path.write_text("#!/bin/sh\n")
+        cmd_path.write_text("#!/bin/sh\n", encoding="utf-8")
 
         runner = ClaudeRunner(command=str(cmd_path), model="sonnet")
 
