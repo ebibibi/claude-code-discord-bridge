@@ -87,10 +87,18 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "worktree-list": "🔧 Advanced",
     "worktree-cleanup": "🔧 Advanced",
     "upgrade": "🔧 Advanced",
+    "remind": "⏰ Reminders",
+    "reminders": "⏰ Reminders",
 }
 
 # Section display order in the embed.
-_HELP_SECTION_ORDER: list[str] = ["📌 Session", "🤖 Model", "⚡ Effort", "🔧 Advanced"]
+_HELP_SECTION_ORDER: list[str] = [
+    "📌 Session",
+    "🤖 Model",
+    "⚡ Effort",
+    "⏰ Reminders",
+    "🔧 Advanced",
+]
 
 
 class ClaudeChatCog(commands.Cog):

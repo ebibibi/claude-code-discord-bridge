@@ -183,6 +183,12 @@ async def _build_system_context(config: RunConfig) -> str | None:
         "asked to receive."
     )
 
+    # Scheduling: sessions kept rebuilding this with host cron because nothing
+    # told them ccdb can wake them up. It is four lines; the confusion was not.
+    from ..reminders import build_scheduling_notice
+
+    parts.append(build_scheduling_notice(config.thread.id))
+
     # Post-compact guardrail: prevent auto-execution of "pending tasks" from summary.
     if config.post_compact_rerun:
         parts.append(_POST_COMPACT_GUARDRAIL)
