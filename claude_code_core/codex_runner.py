@@ -38,6 +38,7 @@ _APPROVAL_MODE_MAP: dict[str, str] = {
 # validate the value before it is injected into a `-c model_reasoning_effort=`
 # config override (defence-in-depth against config injection).
 VALID_CODEX_EFFORTS: frozenset[str] = frozenset({"minimal", "low", "medium", "high", "xhigh"})
+_CODEX_PROFILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 def parse_codex_line(line: str) -> StreamEvent | None:
@@ -266,6 +267,7 @@ class CodexRunner:
         append_system_prompt: str | None = None,
         images: list[ImageData] | None = None,
         effort: str | None = None,
+        profile: str | None = None,
         **_kwargs: object,
     ) -> None:
         self.command = command
@@ -277,6 +279,7 @@ class CodexRunner:
         # ``effort`` maps to Codex's ``model_reasoning_effort`` config value.
         # None means "defer to the CLI default" (config.toml, currently high).
         self.effort = effort
+        self.profile = profile
         self.permission_mode = permission_mode
         self.working_dir = working_dir
         self.timeout_seconds = timeout_seconds
@@ -406,6 +409,7 @@ class CodexRunner:
             ),
             images=self.images,
             effort=self.effort if effort is _UNSET else effort,  # type: ignore[arg-type]
+            profile=self.profile,
         )
 
     async def interrupt(self) -> None:
@@ -468,7 +472,12 @@ class CodexRunner:
         the stdin marker.
         """
         # Always under the `exec` subcommand. `resume` is its sub-subcommand.
-        args = [self.command, "exec"]
+        args = [self.command]
+        if self.profile:
+            if not _CODEX_PROFILE_RE.fullmatch(self.profile):
+                raise ValueError(f"Invalid Codex profile: {self.profile!r}")
+            args.extend(["--profile", self.profile])
+        args.append("exec")
         if session_id:
             if not re.match(r"^[a-f0-9\-]+$", session_id):
                 raise ValueError(f"Invalid session_id format: {session_id!r}")

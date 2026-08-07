@@ -809,6 +809,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CCDB_COMMAND` | CLI バイナリのパスまたは名前（`CLAUDE_COMMAND` より優先）。`CCDB_BACKEND` で選択された初期ランナーに使用され、実行時に `/backend` で切り替えた際は以下の 2 つのバックエンド別変数が優先されます。 | _（自動: `claude` or `codex`）_ |
 | `CCDB_CLAUDE_COMMAND` | Claude CLI バイナリの明示的なパス。`/backend claude` がアクティブなとき `BackendFactory` が使用（`CCDB_BACKEND` の初期値に依存しない）。`CLAUDE_COMMAND`、次に `claude`（PATH）へのフォールバックあり。 | （オプション） |
 | `CCDB_CODEX_COMMAND` | OpenAI Codex CLI バイナリの明示的なパス。systemd 下で Bot を実行する場合に必須（デフォルトのサービス PATH に `~/.npm-global/bin` が含まれない）。`codex`（PATH）へのフォールバックあり。 | （オプション） |
+| `CCDB_CODEX_MODEL_PROFILES` | カンマ区切りの `model=profile` 対応表。該当する Codex セッションへ `--profile <profile>` を渡し、profile 側で provider・接続先・model catalog を選択できます。ローカルの profile、任意の catalog エントリー、provider が要求する認証情報が利用可能な間だけ、対応モデルを `/model` の候補に表示します。 | （オプション） |
 | `PATH` | Bot **と Bot が起動する全 CLI セッション**のバイナリ検索パス（セッションは Bot の環境を継承）。systemd はユニットを最小限の PATH で起動し `~/.bashrc` / `~/.profile` を読まないため、systemd 運用時は `.env` に設定する。[ツールチェーンの PATH](#ツールチェーンの-path--env-に設定する) 参照 | （親プロセスから継承） |
 | `CCDB_MODEL` | 使用するモデル（`CLAUDE_MODEL` より優先） | `sonnet` |
 | `CCDB_MODEL_DISCOVERY` | `0` にすると、`/model` のオートコンプリートが Anthropic のモデル一覧エンドポイントへ「この認証情報から見えるモデル」を問い合わせるのをやめ、常に静的な候補リストを使用する。この問い合わせは読み取り専用で、Claude Code CLI 自身の認証情報を再利用し、オフライン時・未認証時・Bedrock/Vertex/Foundry 利用時には自動的にフォールバックする | `1` |

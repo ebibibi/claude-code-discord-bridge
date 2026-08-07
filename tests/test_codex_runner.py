@@ -100,6 +100,19 @@ class TestCodexRunnerBuildArgs:
         assert "--model" in args or "-m" in args
         assert "o4-mini" in args
 
+    def test_profile_is_passed_before_exec(self) -> None:
+        runner = CodexRunner(command="codex", model="fugu-ultra", profile="fugu")
+
+        args = runner._build_args("hello", session_id=None)
+
+        assert args[:4] == ["codex", "--profile", "fugu", "exec"]
+
+    def test_invalid_profile_is_rejected(self) -> None:
+        runner = CodexRunner(command="codex", model="fugu-ultra", profile="fugu;bad")
+
+        with pytest.raises(ValueError, match="Invalid Codex profile"):
+            runner._build_args("hello", session_id=None)
+
     def test_resume_session(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini")
         args = runner._build_args("hello", session_id="0199a213-81c0-7800-8aa1-bbab2a035a53")
@@ -201,11 +214,17 @@ class TestCodexRunnerClone:
     """Tests for clone() — creating a new runner with overrides."""
 
     def test_clone_preserves_config(self) -> None:
-        runner = CodexRunner(command="codex", model="o4-mini", working_dir="/tmp")
+        runner = CodexRunner(
+            command="codex",
+            model="o4-mini",
+            working_dir="/tmp",
+            profile="proxy",
+        )
         cloned = runner.clone()
         assert isinstance(cloned, CodexRunner)
         assert cloned.model == "o4-mini"
         assert cloned.working_dir == "/tmp"
+        assert cloned.profile == "proxy"
 
     def test_clone_overrides_model(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini")
