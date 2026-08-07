@@ -85,7 +85,7 @@ jobs:
       # Per-test timeout because the first Windows run hung: without it a
       # blocked test looks like a slow runner and reports nothing at all.
       - name: Test
-        run: uv run pytest tests/ -q --timeout=120 --timeout-method=thread
+        run: uv run pytest tests/ -v --timeout=60 --timeout-method=thread
         env:
           HOME: ${{ runner.temp }}/fakehome
           USERPROFILE: ${{ runner.temp }}/fakehome
