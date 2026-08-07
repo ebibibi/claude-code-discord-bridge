@@ -223,7 +223,7 @@ def test_truncate_jsonl_removes_selected_and_after(tmp_path: Path) -> None:
         '{"type":"user","message":{"content":"turn 1"}}\n',
         '{"type":"assistant","message":{"content":"resp 1"}}\n',
     ]
-    jsonl.write_text("".join(lines))
+    jsonl.write_text("".join(lines), encoding="utf-8")
 
     result = truncate_jsonl_at_line(jsonl, line_index=2)
 
@@ -236,7 +236,7 @@ def test_truncate_jsonl_removes_selected_and_after(tmp_path: Path) -> None:
 
 def test_truncate_jsonl_at_zero_empties_file(tmp_path: Path) -> None:
     jsonl = tmp_path / "sess.jsonl"
-    jsonl.write_text('{"type":"user","message":{"content":"only"}}\n')
+    jsonl.write_text('{"type":"user","message":{"content":"only"}}\n', encoding="utf-8")
 
     result = truncate_jsonl_at_line(jsonl, line_index=0)
 
@@ -254,7 +254,7 @@ def test_truncate_jsonl_beyond_end_keeps_all(tmp_path: Path) -> None:
     """Truncating beyond the last line keeps the file intact."""
     jsonl = tmp_path / "sess.jsonl"
     content = '{"type":"user","message":{"content":"only"}}\n'
-    jsonl.write_text(content)
+    jsonl.write_text(content, encoding="utf-8")
 
     result = truncate_jsonl_at_line(jsonl, line_index=999)
 

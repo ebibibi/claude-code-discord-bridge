@@ -58,7 +58,8 @@ class TestClaudeDescribeApi:
         saved = _clear()
         overlay = tmp_path / "overlay.env"
         overlay.write_text(
-            "CLAUDE_CODE_USE_FOUNDRY=1\nANTHROPIC_FOUNDRY_RESOURCE=jbs-llm-platform\n"
+            "CLAUDE_CODE_USE_FOUNDRY=1\nANTHROPIC_FOUNDRY_RESOURCE=jbs-llm-platform\n",
+            encoding="utf-8",
         )
         os.environ["CCDB_CLI_ENV_FILE"] = str(overlay)
         try:

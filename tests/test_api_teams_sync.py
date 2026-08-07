@@ -494,7 +494,7 @@ async def test_plan_requests_a_message_with_obsolete_pending_metadata(
     meta["pending_attachments"] = [
         {"mid": ROOT, "name": "1.txt", "reason": "old client false positive", "url": ""}
     ]
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     plan = await client.post(
         "/api/teams/sync/plan",

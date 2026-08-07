@@ -130,7 +130,8 @@ class TestReadStatuslineCommand:
     def test_reads_command_type(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
         settings.write_text(
-            json.dumps({"statusLine": {"type": "command", "command": "bash ~/my-statusline.sh"}})
+            json.dumps({"statusLine": {"type": "command", "command": "bash ~/my-statusline.sh"}}),
+            encoding="utf-8",
         )
         assert read_statusline_command(str(settings)) == "bash ~/my-statusline.sh"
 
@@ -139,12 +140,14 @@ class TestReadStatuslineCommand:
 
     def test_returns_none_when_type_not_command(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
-        settings.write_text(json.dumps({"statusLine": {"type": "text", "value": "hi"}}))
+        settings.write_text(
+            json.dumps({"statusLine": {"type": "text", "value": "hi"}}), encoding="utf-8"
+        )
         assert read_statusline_command(str(settings)) is None
 
     def test_returns_none_when_no_statusline_key(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
-        settings.write_text(json.dumps({"model": "sonnet"}))
+        settings.write_text(json.dumps({"model": "sonnet"}), encoding="utf-8")
         assert read_statusline_command(str(settings)) is None
 
     def test_returns_none_on_invalid_json(self, tmp_path: Path) -> None:
@@ -154,7 +157,9 @@ class TestReadStatuslineCommand:
 
     def test_accepts_lowercase_statusline_key(self, tmp_path: Path) -> None:
         settings = tmp_path / "settings.json"
-        settings.write_text(json.dumps({"statusline": {"type": "command", "command": "echo hi"}}))
+        settings.write_text(
+            json.dumps({"statusline": {"type": "command", "command": "echo hi"}}), encoding="utf-8"
+        )
         assert read_statusline_command(str(settings)) == "echo hi"
 
 

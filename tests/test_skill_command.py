@@ -96,7 +96,7 @@ class TestParseSkillMeta:
         skill_dir = tmp_path / "my-skill"
         skill_dir.mkdir()
         (skill_dir / "SKILL.md").write_text(
-            "---\nname: my-skill\ndescription: A cool skill\n---\n\nBody here."
+            "---\nname: my-skill\ndescription: A cool skill\n---\n\nBody here.", encoding="utf-8"
         )
         result = _parse_skill_meta(skill_dir)
         assert result == {"name": "my-skill", "description": "A cool skill"}
@@ -641,7 +641,7 @@ class TestGetPluginSkillDirs:
 
         plugins_json = tmp_path / "plugins" / "installed_plugins.json"
         plugins_json.parent.mkdir(parents=True, exist_ok=True)
-        plugins_json.write_text(json.dumps({"version": 2, "plugins": entries}))
+        plugins_json.write_text(json.dumps({"version": 2, "plugins": entries}), encoding="utf-8")
 
         result = _get_plugin_skill_dirs(claude_dir=tmp_path)
         assert set(result) == set(dirs)
@@ -659,14 +659,14 @@ class TestCollectSkills:
         primary.mkdir()
         (primary / "local-skill").mkdir()
         (primary / "local-skill" / "SKILL.md").write_text(
-            "---\nname: local-skill\ndescription: Local\n---\n"
+            "---\nname: local-skill\ndescription: Local\n---\n", encoding="utf-8"
         )
 
         extra = tmp_path / "plugin-skills"
         extra.mkdir()
         (extra / "plugin-skill").mkdir()
         (extra / "plugin-skill" / "SKILL.md").write_text(
-            "---\nname: plugin-skill\ndescription: Plugin\n---\n"
+            "---\nname: plugin-skill\ndescription: Plugin\n---\n", encoding="utf-8"
         )
 
         result = _collect_skills(primary, [extra])
@@ -680,14 +680,14 @@ class TestCollectSkills:
         primary.mkdir()
         (primary / "shared").mkdir()
         (primary / "shared" / "SKILL.md").write_text(
-            "---\nname: shared\ndescription: My custom version\n---\n"
+            "---\nname: shared\ndescription: My custom version\n---\n", encoding="utf-8"
         )
 
         extra = tmp_path / "plugin"
         extra.mkdir()
         (extra / "shared").mkdir()
         (extra / "shared" / "SKILL.md").write_text(
-            "---\nname: shared\ndescription: Plugin version\n---\n"
+            "---\nname: shared\ndescription: Plugin version\n---\n", encoding="utf-8"
         )
 
         result = _collect_skills(primary, [extra])
@@ -712,7 +712,7 @@ class TestCollectSkills:
         for name in ["zebra", "apple", "mango"]:
             (primary / name).mkdir()
             (primary / name / "SKILL.md").write_text(
-                f"---\nname: {name}\ndescription: {name}\n---\n"
+                f"---\nname: {name}\ndescription: {name}\n---\n", encoding="utf-8"
             )
         result = _collect_skills(primary, [])
         assert [s["name"] for s in result] == ["apple", "mango", "zebra"]
@@ -732,7 +732,7 @@ class TestCogPluginIntegration:
         plugin_skills.mkdir(parents=True)
         (plugin_skills / "plan").mkdir()
         (plugin_skills / "plan" / "SKILL.md").write_text(
-            "---\nname: plan\ndescription: Plan a feature\n---\n"
+            "---\nname: plan\ndescription: Plan a feature\n---\n", encoding="utf-8"
         )
 
         plugins_json = tmp_path / "plugins" / "installed_plugins.json"
@@ -768,7 +768,7 @@ class TestCogPluginIntegration:
         plugin_skills.mkdir(parents=True)
         (plugin_skills / "todoist").mkdir()
         (plugin_skills / "todoist" / "SKILL.md").write_text(
-            "---\nname: todoist\ndescription: Plugin version\n---\n"
+            "---\nname: todoist\ndescription: Plugin version\n---\n", encoding="utf-8"
         )
 
         plugins_json = tmp_path / "plugins" / "installed_plugins.json"
@@ -782,7 +782,7 @@ class TestCogPluginIntegration:
         primary_dir.mkdir()
         (primary_dir / "todoist").mkdir()
         (primary_dir / "todoist" / "SKILL.md").write_text(
-            "---\nname: todoist\ndescription: My custom version\n---\n"
+            "---\nname: todoist\ndescription: My custom version\n---\n", encoding="utf-8"
         )
 
         bot = MagicMock()

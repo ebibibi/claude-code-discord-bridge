@@ -955,7 +955,7 @@ class TestResolveWindowsCmd:
         js_path.write_text("// cli entry\n", encoding="utf-8")
 
         cmd_path = tmp_path / "claude.cmd"
-        cmd_path.write_text(self._NPM_CMD_TEMPLATE.format(rel_path=rel_js))
+        cmd_path.write_text(self._NPM_CMD_TEMPLATE.format(rel_path=rel_js), encoding="utf-8")
         return cmd_path
 
     def test_parses_npm_wrapper_and_returns_node_js(self, tmp_path: Path) -> None:
@@ -991,7 +991,9 @@ class TestResolveWindowsCmd:
         """Both paths fail: .cmd wrapper points to a non-existent .js file."""
         cmd_path = tmp_path / "claude.cmd"
         # Regex will match but the resolved path won't exist
-        cmd_path.write_text(r'"%~dp0\node_modules\@anthropic-ai\claude-code\cli.js"' + "\r\n")
+        cmd_path.write_text(
+            r'"%~dp0\node_modules\@anthropic-ai\claude-code\cli.js"' + "\r\n", encoding="utf-8"
+        )
         # Do NOT create cli.js — both primary and fallback should fail
 
         result = _resolve_windows_cmd(cmd_path)
