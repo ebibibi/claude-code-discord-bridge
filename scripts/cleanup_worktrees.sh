@@ -6,11 +6,13 @@
 # Removes worktrees whose PRs are MERGED or CLOSED.
 # Keeps worktrees for OPEN PRs and the main worktree.
 #
-# Run from repo root: /home/ebi/claude-code-discord-bridge/
+# Run from repo root (auto-detected from script location)
 
 set -euo pipefail
 
-REPO_ROOT="/home/ebi/claude-code-discord-bridge"
+# Auto-detect repo root from script location
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 DRY_RUN=false
 
 if [[ "${1:-}" == "--dry-run" ]]; then

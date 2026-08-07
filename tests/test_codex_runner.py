@@ -106,21 +106,60 @@ class TestCodexRunnerBuildArgs:
         assert "resume" in args
         assert "0199a213-81c0-7800-8aa1-bbab2a035a53" in args
 
-    def test_approval_mode_mapping(self) -> None:
+    def test_default_permission_mode_uses_full_access_sandbox(self) -> None:
+        """``codex exec`` does not accept ``--ask-for-approval`` (global/interactive-only
+        flag, rejected by ``exec`` since codex-cli >= ~0.13x — see
+        TestCodexRunnerArgvStructure docstring). The only lever ``exec`` exposes is
+        ``--sandbox``, and ccdb defers entirely to its own outer isolation (matching
+        ClaudeRunner, which has no OS-level sandbox of its own)."""
         runner = CodexRunner(command="codex", model="o4-mini", permission_mode="acceptEdits")
         args = runner._build_args("hello", session_id=None)
-        assert any(a in args for a in ["--ask-for-approval", "-a"])
+        assert "--ask-for-approval" not in args
+        assert "-a" not in args
+        assert "--sandbox" in args
+        assert "danger-full-access" in args
 
     def test_dangerously_skip_permissions(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini", dangerously_skip_permissions=True)
         args = runner._build_args("hello", session_id=None)
         assert "--yolo" in args or "--dangerously-bypass-approvals-and-sandbox" in args
+        # The bypass flag already disables sandboxing; --sandbox must not also be added.
+        assert "--sandbox" not in args
+
+    @pytest.mark.parametrize(
+        "permission_mode", ["acceptEdits", "full", "none", "default", "auto", "plan", "bogus"]
+    )
+    def test_full_access_sandbox_regardless_of_permission_mode(self, permission_mode: str) -> None:
+        """Codex's inner sandbox is disabled unconditionally (unless the
+        ``--dangerously-bypass-approvals-and-sandbox`` path is active) — ``permission_mode``
+        has no OS-level meaning for Codex since ``codex exec`` has no interactive
+        approval loop (no stdin injection support; see ``inject_tool_result``)."""
+        runner = CodexRunner(command="codex", model="o4-mini", permission_mode=permission_mode)
+        args = runner._build_args("hello", session_id=None)
+        assert "--sandbox" in args
+        assert "danger-full-access" in args
 
     def test_working_dir_flag(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini", working_dir="/tmp/work")
         args = runner._build_args("hello", session_id=None)
         assert "--cd" in args or "-C" in args
         assert "/tmp/work" in args
+
+    def test_skip_git_repo_check_always_present(self) -> None:
+        """Working dirs are frequently plain folders, not git repos (e.g. the
+        default CLAUDE_WORKING_DIR). Codex CLI refuses to run outside a git
+        repo unless told otherwise, so ccdb must always pass this flag —
+        Claude Code has no such restriction, and ccdb aims to be backend-
+        agnostic from the user's point of view.
+        """
+        runner = CodexRunner(command="codex", model="o4-mini")
+        args = runner._build_args("hello", session_id=None)
+        assert "--skip-git-repo-check" in args
+
+    def test_skip_git_repo_check_present_on_resume(self) -> None:
+        runner = CodexRunner(command="codex", model="o4-mini")
+        args = runner._build_args("hello", session_id="0199a213-81c0-7800-8aa1-bbab2a035a53")
+        assert "--skip-git-repo-check" in args
 
     def test_prompt_is_not_in_args(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini")
@@ -313,7 +352,8 @@ class TestCodexRunnerRun:
         events = [event async for event in runner.run("hello", session_id=stale_session)]
 
         assert len(calls) == 2
-        assert calls[0][:3] == ("codex", "exec", "resume")
+        assert calls[0][:2] == ("codex", "exec")
+        assert calls[0].index("--sandbox") < calls[0].index("resume")
         assert stale_session in calls[0]
         assert "resume" not in calls[1]
         assert "--cd" in calls[1]
@@ -414,7 +454,8 @@ class TestCodexRunnerRun:
         events = [event async for event in runner.run("continue", session_id=stale_session)]
 
         assert len(calls) == 2
-        assert calls[0][:3] == ("codex", "exec", "resume")
+        assert calls[0][:2] == ("codex", "exec")
+        assert calls[0].index("--sandbox") < calls[0].index("resume")
         assert "resume" not in calls[1]
         assert [event.error for event in events if event.error] == []
         assert events[0].session_id == "019f-replacement-session"
@@ -679,12 +720,19 @@ class TestCodexRunnerArgvStructure:
     ``codex exec resume --help``):
 
         codex exec [OPTIONS] [PROMPT]
-        codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
+        codex exec [EXEC_OPTIONS] resume [OPTIONS] [SESSION_ID] [PROMPT]
 
-    ``exec`` accepts: ``--json``, ``--model``, ``--ask-for-approval``,
-    ``--dangerously-bypass-approvals-and-sandbox``, ``--cd``.
-    ``exec resume`` accepts the same flags EXCEPT ``--cd`` (causes exit code 2).
+    ``--sandbox`` and ``--cd`` are parent ``exec`` options. ``exec resume``
+    rejects both when they appear after ``resume`` (exit code 2), though the
+    parent sandbox setting is accepted and inherited when it precedes
+    ``resume``. ``--json``, ``--model``, and
+    ``--dangerously-bypass-approvals-and-sandbox`` are accepted by resume.
     The resume positional args come AFTER all flags, with SESSION_ID before PROMPT.
+
+    NOTE: ``--ask-for-approval``/``-a`` is a global/interactive-only flag — codex-cli
+    rejects it on ``exec`` with ``error: unexpected argument '--ask-for-approval' found``
+    (confirmed against codex-cli 0.145.0). ``exec`` has no approval loop at all (no
+    human present, no stdin injection support), so ``--sandbox`` is the only lever.
 
     These tests guard against regressions like the one that shipped briefly
     in 3.0.0 where resume was invoked as ``codex resume <id> --json …`` —
@@ -705,10 +753,9 @@ class TestCodexRunnerArgvStructure:
         sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
         runner = CodexRunner(command="codex", model="gpt-5.4")
         args = runner._build_args("prompt", session_id=sid)
-        # The first three tokens must be exactly: codex exec resume
-        assert args[:3] == ["codex", "exec", "resume"], (
-            f"Codex resume must be invoked as `codex exec resume`, got: {args[:3]!r}"
-        )
+        assert args[:2] == ["codex", "exec"]
+        assert "resume" in args
+        assert args.index("--sandbox") < args.index("resume")
 
     def test_resume_flags_precede_session_id(self) -> None:
         sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
@@ -720,13 +767,21 @@ class TestCodexRunnerArgvStructure:
         )
         args = runner._build_args("hello", session_id=sid)
         sid_idx = args.index(sid)
-        # --json, --model, --ask-for-approval must all come before SESSION_ID.
-        # NOTE: --cd is NOT supported by `codex exec resume` (only by `codex exec`).
-        for flag in ("--json", "--model", "--ask-for-approval"):
+        # --json, --model, --sandbox must all come before SESSION_ID.
+        for flag in ("--json", "--model", "--sandbox"):
             assert flag in args, f"{flag} missing from resume args"
             assert args.index(flag) < sid_idx, (
                 f"{flag} should appear before SESSION_ID in codex exec resume"
             )
+
+    def test_sandbox_flag_precedes_resume_subcommand(self) -> None:
+        """--sandbox is an exec-level option, not an exec-resume option."""
+        sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
+        runner = CodexRunner(command="codex", model="gpt-5.4")
+        args = runner._build_args("hello", session_id=sid)
+        assert args.index("--sandbox") < args.index("resume"), (
+            "`codex exec resume --sandbox ...` is rejected by codex-cli with exit code 2"
+        )
 
     def test_cd_flag_not_passed_on_resume(self) -> None:
         """codex exec resume does not accept --cd; must be omitted to avoid exit code 2."""
@@ -782,12 +837,11 @@ class TestCodexRunnerArgvStructure:
         sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
         runner = CodexRunner(command="codex", model="gpt-5.4")
         args = runner._build_args("hi", session_id=sid)
-        # If 'resume' appears at index 1, that means we built `codex resume <id>`
-        # which is rejected by codex. Must be at index 2 (after `exec`).
+        # If 'resume' appears at index 1, that means we built `codex resume <id>`,
+        # which is rejected by codex. Exec-level options may validly sit between
+        # `exec` and `resume`.
         if "resume" in args:
-            assert args.index("resume") == 2, (
-                f"resume must follow exec at index 2, got index {args.index('resume')}"
-            )
+            assert args.index("resume") > args.index("exec")
 
 
 class TestCodexRunnerStdin:

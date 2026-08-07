@@ -129,9 +129,10 @@ class ClaudeRunner:
         cwd = self.working_dir or os.getcwd()
 
         logger.info(
-            "Starting Claude CLI: %s (cwd=%s, pid will follow)",
-            " ".join(args[:6]) + " ...",
+            "Starting Claude CLI: %s ... (cwd=%s, effective_sandbox=%s)",
+            " ".join(args[:6]),
             cwd,
+            self.describe_sandbox(),
         )
 
         stdin_mode = asyncio.subprocess.PIPE
@@ -368,6 +369,17 @@ class ClaudeRunner:
         (e.g. an Azure Foundry switch) are reflected accurately.
         """
         return detect_api_provider(self._build_env())
+
+    def describe_sandbox(self) -> str:
+        """Return the OS-level sandbox boundary in effect for this runner.
+
+        Claude Code has no bwrap/namespace sandbox of its own — it relies
+        entirely on ccdb's shared outer boundary (systemd unit + per-session
+        worktree), the same boundary CodexRunner defers to via ``--sandbox
+        danger-full-access``. ``permission_mode``/``dangerously_skip_permissions``
+        only gate Claude's own in-process tool-use confirmations, not OS access.
+        """
+        return "none (defers to ccdb's outer boundary, same as Codex)"
 
     async def _read_stream(self) -> AsyncGenerator[StreamEvent, None]:
         """Read and parse stdout line by line."""

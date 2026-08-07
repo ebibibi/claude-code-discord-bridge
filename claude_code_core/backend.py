@@ -45,6 +45,8 @@ class SessionBackend(Protocol):
 
     def describe_api(self) -> str: ...
 
+    def describe_sandbox(self) -> str: ...
+
 
 def create_backend(
     *,
