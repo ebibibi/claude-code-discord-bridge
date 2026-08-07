@@ -76,6 +76,16 @@ class _InterruptibleProcess(_FakeProcess):
         return self.returncode
 
     def send_signal(self, _signum: int) -> None:
+        self._stop()
+
+    def terminate(self) -> None:
+        # CodexRunner.interrupt() sends SIGINT on POSIX and calls terminate()
+        # on Windows. A double that only models the POSIX half leaves wait()
+        # blocked forever there, which reads as a hung test suite rather than
+        # as "the double is incomplete".
+        self._stop()
+
+    def _stop(self) -> None:
         self.returncode = 1
         self.interrupted.set()
 
