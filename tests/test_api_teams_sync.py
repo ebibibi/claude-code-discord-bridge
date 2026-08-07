@@ -37,8 +37,12 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
 @pytest.fixture
 def vault() -> Iterator[Path]:
+    # Resolved, because TeamsStore._contained returns realpaths and macOS hands
+    # out temp dirs under /var, a symlink to /private/var. Comparing a resolved
+    # result against an unresolved fixture fails there while the containment
+    # check itself is perfectly correct.
     with tempfile.TemporaryDirectory() as tmp:
-        yield Path(tmp)
+        yield Path(tmp).resolve()
 
 
 @pytest.fixture
