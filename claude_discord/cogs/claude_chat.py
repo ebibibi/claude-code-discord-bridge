@@ -1432,4 +1432,5 @@ class ClaudeChatCog(commands.Cog):
                     ThreadState.WAITING_INPUT,
                     description,
                     thread=thread,
+                    backend=runner.backend,
                 )

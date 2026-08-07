@@ -251,6 +251,8 @@ def _build_resume_recovery_prompt(prompt: str, session_id: str, env: dict[str, s
 class CodexRunner:
     """Manages OpenAI Codex CLI subprocess."""
 
+    backend = "codex"
+
     def __init__(
         self,
         command: str = "codex",

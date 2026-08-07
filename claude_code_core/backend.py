@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 class SessionBackend(Protocol):
     """Protocol that all CLI backends must satisfy."""
 
+    backend: str
     command: str
     model: str
     working_dir: str | None

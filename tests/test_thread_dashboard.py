@@ -142,6 +142,32 @@ class TestOwnerMention:
         thread.send.assert_called_once()
         sent_text = thread.send.call_args.args[0]
         assert "<@42>" in sent_text
+        assert "Claude has finished" in sent_text
+
+    @pytest.mark.asyncio
+    async def test_codex_mention_names_codex(self) -> None:
+        dashboard, _ = _make_dashboard(owner_id=42)
+        await dashboard.initialize()
+        thread = _make_thread(10)
+
+        await dashboard.set_state(
+            10,
+            ThreadState.PROCESSING,
+            "working",
+            thread=thread,
+            backend="codex",
+        )
+        await dashboard.set_state(
+            10,
+            ThreadState.WAITING_INPUT,
+            "working",
+            thread=thread,
+            backend="codex",
+        )
+
+        sent_text = thread.send.call_args.args[0]
+        assert "Codex has finished" in sent_text
+        assert "Claude has finished" not in sent_text
 
     @pytest.mark.asyncio
     async def test_mention_not_sent_if_already_waiting(self) -> None:
