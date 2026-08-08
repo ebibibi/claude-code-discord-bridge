@@ -11,6 +11,7 @@ run_claude_with_config() pipeline.
 from __future__ import annotations
 
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -28,12 +29,46 @@ from claude_discord.claude.types import (
 )
 from claude_discord.cogs.event_processor import EventProcessor
 from claude_discord.cogs.run_config import RunConfig
-from claude_discord.surface import DiscordActivity
+from claude_discord.discord_ui.prompt_views import ChoiceView
+from claude_discord.surface import DiscordActivity, FormLauncher
 
 
 def _make_config(thread: MagicMock, runner: MagicMock, **kwargs) -> RunConfig:
     """Build a minimal RunConfig for tests."""
     return RunConfig(thread=thread, runner=runner, prompt="test prompt", **kwargs)
+
+
+async def _wait_for_prompt_message(thread: MagicMock, timeout: float = 2.0) -> None:
+    """Let a background prompt task get as far as posting its message.
+
+    Approval prompts are dispatched off the event loop so a two-minute wait for
+    a human cannot stall event processing. The posting itself still happens
+    promptly, so a bounded poll is enough — and fails loudly rather than
+    hanging if the task never runs at all.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        # Match the prompt's own view, not merely "a message with a view":
+        # a session posts assistant text and a stop button first, and either
+        # would otherwise satisfy the wait before the prompt has gone out.
+        if any(
+            isinstance(call.kwargs.get("view"), ChoiceView | FormLauncher)
+            for call in thread.send.call_args_list
+        ):
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("the prompt task never posted a message")
+
+
+def _posted_mentions(thread: MagicMock) -> list[str]:
+    """Every mention string the thread was asked to post.
+
+    Checked across all calls rather than the last one: a prompt is posted from
+    its own task, so it no longer has to be the most recent thing sent.
+    """
+    return [
+        call.kwargs["content"] for call in thread.send.call_args_list if call.kwargs.get("content")
+    ]
 
 
 def _make_tool_event(tool_id: str = "t1") -> StreamEvent:
@@ -1478,11 +1513,13 @@ class TestPermissionAutoApprove:
             ),
         )
         await p.process(event)
+        await _wait_for_prompt_message(thread)
 
         # inject_tool_result NOT called — user must click Allow/Deny
         runner.inject_tool_result.assert_not_called()
         # Discord embed + view posted
         thread.send.assert_called_once()
+        await p.cancel_prompts()
 
 
 class TestUserActionMentions:
@@ -1492,6 +1529,7 @@ class TestUserActionMentions:
     async def test_plan_approval_mentions_notify_user(
         self, thread: MagicMock, runner: MagicMock
     ) -> None:
+        runner.inject_tool_result = AsyncMock()
         config = _make_config(thread, runner, notify_user_id=42)
         p = EventProcessor(config)
 
@@ -1502,8 +1540,10 @@ class TestUserActionMentions:
                 is_plan_approval=True,
             )
         )
+        await _wait_for_prompt_message(thread)
 
-        assert thread.send.call_args.kwargs["content"] == "<@42>"
+        assert "<@42>" in _posted_mentions(thread)
+        await p.cancel_prompts()
 
     @pytest.mark.asyncio
     async def test_permission_request_mentions_notify_user(
@@ -1512,6 +1552,7 @@ class TestUserActionMentions:
         from claude_discord.claude.types import PermissionRequest
 
         runner.dangerously_skip_permissions = False
+        runner.inject_tool_result = AsyncMock()
         config = _make_config(thread, runner, notify_user_id=42)
         p = EventProcessor(config)
 
@@ -1525,9 +1566,11 @@ class TestUserActionMentions:
                 ),
             )
         )
+        await _wait_for_prompt_message(thread)
 
         thread.send.assert_called_once()
-        assert thread.send.call_args.kwargs["content"] == "<@42>"
+        assert "<@42>" in _posted_mentions(thread)
+        await p.cancel_prompts()
 
     @pytest.mark.asyncio
     async def test_elicitation_mentions_notify_user(
@@ -1535,6 +1578,7 @@ class TestUserActionMentions:
     ) -> None:
         from claude_discord.claude.types import ElicitationRequest
 
+        runner.inject_tool_result = AsyncMock()
         config = _make_config(thread, runner, notify_user_id=42)
         p = EventProcessor(config)
 
@@ -1549,6 +1593,8 @@ class TestUserActionMentions:
                 ),
             )
         )
+        await _wait_for_prompt_message(thread)
 
         thread.send.assert_called_once()
-        assert thread.send.call_args.kwargs["content"] == "<@42>"
+        assert "<@42>" in _posted_mentions(thread)
+        await p.cancel_prompts()

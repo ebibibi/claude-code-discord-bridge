@@ -360,7 +360,7 @@ class DiscordSurface:
     async def prompt_form(self, prompt: FormPrompt) -> dict[str, str] | None:
         """Discord modals can only open from an interaction, so the form is
         offered behind a button rather than appearing unprompted."""
-        view = _FormLauncher(prompt)
+        view = FormLauncher(prompt)
         embed = discord.Embed(
             title=prompt.title[:256],
             description=(prompt.description or "")[:4096] or None,
@@ -412,7 +412,7 @@ class _StopAdapter:
         await self._on_stop()
 
 
-class _FormLauncher(discord.ui.View):
+class FormLauncher(discord.ui.View):
     """A button that opens the modal — Discord requires an interaction.
 
     Like :class:`ChoiceView`, the clock is ours rather than discord.py's, so a

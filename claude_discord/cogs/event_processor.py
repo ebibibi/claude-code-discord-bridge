@@ -10,32 +10,38 @@ so that individual event handlers can be tested in isolation.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import re
 import time
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 
+from claude_code_core.approvals import (
+    elicitation_form_prompt,
+    elicitation_form_result,
+    elicitation_url_prompt,
+    elicitation_url_result,
+    permission_prompt,
+    permission_result,
+    plan_prompt,
+    plan_result,
+)
 from claude_code_core.frontend import (
     ActivitySpec,
+    ChoicePrompt,
     ConversationSurface,
+    Mention,
     Notice,
     NoticeLevel,
     OutboundFile,
     StatusKind,
 )
+from claude_code_core.types import ElicitationRequest
 
 from ..claude.types import AskQuestion, MessageType, SessionState, StreamEvent, ToolUseEvent
 from ..collision import extract_written_path
-from ..discord_ui.elicitation_view import ElicitationFormView, ElicitationUrlView
-from ..discord_ui.embeds import (
-    elicitation_embed,
-    permission_embed,
-    plan_embed,
-)
-from ..discord_ui.mentions import user_mention_kwargs
-from ..discord_ui.permission_view import PermissionView
-from ..discord_ui.plan_view import PlanApprovalView
 from .run_config import RunConfig
 
 logger = logging.getLogger(__name__)
@@ -186,6 +192,10 @@ class EventProcessor:
         self._session_start_sent: bool = False
         self._assistant_text_sent: bool = False
 
+        # Outstanding approval/input prompts. Held so the garbage collector
+        # cannot drop a task that the CLI is waiting on.
+        self._prompt_tasks: set[asyncio.Task[None]] = set()
+
         # Set when AskUserQuestion is detected. Caller should drain the runner
         # (skip events) then handle the ask after the stream ends.
         self._pending_ask: list[AskQuestion] | None = None
@@ -283,8 +293,40 @@ class EventProcessor:
         if event.is_complete:
             await self._on_complete(event)
 
+    async def wait_for_prompts(self) -> None:
+        """Await every outstanding approval or input prompt.
+
+        Deliberately *not* called from :meth:`finalize`. When the stream ends
+        with a prompt still open, the CLI has usually already given up on it,
+        and blocking teardown for the rest of a five-minute elicitation timeout
+        would keep the session's status pinned and the thread busy. A caller
+        that genuinely needs the answers — a test, or a shutdown path that must
+        not lose them — asks for them here.
+        """
+        while self._prompt_tasks:
+            await asyncio.gather(*tuple(self._prompt_tasks), return_exceptions=True)
+
+    async def cancel_prompts(self) -> None:
+        """Abandon every outstanding prompt without answering it.
+
+        The counterpart to :meth:`wait_for_prompts`, for a caller tearing the
+        session down for good — a bot shutting down, or a session being
+        replaced. Nothing is injected: the runner these answers were bound for
+        is going away too.
+        """
+        tasks = tuple(self._prompt_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
     async def finalize(self) -> None:
-        """Cancel unfinished frontend activities and legacy timers."""
+        """Cancel unfinished frontend activities and legacy timers.
+
+        Prompt tasks are left running on purpose: each owns a timeout that
+        fails closed, and an approval the user is mid-way through answering
+        should still reach the CLI.
+        """
         for activity in self._state.active_tools.values():
             with contextlib.suppress(Exception):
                 await activity.cancel()
@@ -691,78 +733,153 @@ class EventProcessor:
         await self._bump_stop()
 
     async def _handle_plan_approval(self, event: StreamEvent) -> None:
-        """Post the plan embed with Approve/Cancel buttons (ExitPlanMode)."""
-        plan_text = event.text or ""
-        embed = plan_embed(plan_text)
+        """Ask whether the finished plan may be executed (ExitPlanMode)."""
         # ExitPlanMode does not carry a request_id in the current CLI protocol;
         # we use the session_id as a stable identifier for the inject payload.
         request_id = self._state.session_id or "plan"
-        view = PlanApprovalView(self._config.runner, request_id)
-        await self._config.thread.send(
-            embed=embed,
-            view=view,
-            **user_mention_kwargs(self._config.notify_user_id),
+        prompt = plan_prompt(event.text or "", notify=self._notify_mention())
+        self._ask_in_background(
+            self._ask_choice(prompt, request_id, plan_result),
+            description=f"plan approval (session={request_id})",
+            request_id=request_id,
+            refusal=plan_result(None),
         )
-        logger.info("Plan approval prompt posted (session=%s)", request_id)
 
     async def _handle_permission_request(self, event: StreamEvent) -> None:
-        """Post permission embed with Allow/Deny buttons.
+        """Ask whether a tool may run.
 
         When dangerously_skip_permissions is enabled on the runner, auto-approve
-        the request immediately instead of showing the UI.  This works around a
-        CLI regression (v2.1.78+, upstream #35895) where --dangerously-skip-permissions
+        the request immediately instead of asking.  This works around a CLI
+        regression (v2.1.78+, upstream #35895) where --dangerously-skip-permissions
         fails to bypass the file-level sensitive-path check on Edit/Write tools,
         causing permission_request events to be emitted even in yolo mode.
         """
         assert event.permission_request is not None
+        request = event.permission_request
 
         # Workaround for CLI v2.1.78+ regression (#35895):
         # Auto-approve when yolo mode is active — the user already opted into
         # unrestricted execution by setting dangerously_skip_permissions=true.
         if self._config.runner.dangerously_skip_permissions:
-            await self._config.runner.inject_tool_result(
-                event.permission_request.request_id, {"approved": True}
-            )
+            await self._config.runner.inject_tool_result(request.request_id, {"approved": True})
             logger.info(
                 "Permission auto-approved (yolo mode): %s (request_id=%s)",
-                event.permission_request.tool_name,
-                event.permission_request.request_id,
+                request.tool_name,
+                request.request_id,
             )
             return
 
-        embed = permission_embed(event.permission_request)
-        view = PermissionView(self._config.runner, event.permission_request)
-        await self._config.thread.send(
-            embed=embed,
-            view=view,
-            **user_mention_kwargs(self._config.notify_user_id),
-        )
-        logger.info(
-            "Permission request posted: %s (request_id=%s)",
-            event.permission_request.tool_name,
-            event.permission_request.request_id,
+        prompt = permission_prompt(request, notify=self._notify_mention())
+        self._ask_in_background(
+            self._ask_choice(prompt, request.request_id, permission_result),
+            description=f"permission for {request.tool_name}",
+            request_id=request.request_id,
+            refusal=permission_result(None),
         )
 
     async def _handle_elicitation(self, event: StreamEvent) -> None:
-        """Post elicitation embed with appropriate UI (URL button or form Modal button)."""
+        """Collect input an MCP server asked for, by URL confirmation or form."""
         assert event.elicitation is not None
         req = event.elicitation
-        embed = elicitation_embed(req)
         if req.mode == "url-mode":
-            view = ElicitationUrlView(self._config.runner, req)
+            coro = self._ask_url_elicitation(req)
+            refusal = elicitation_url_result(None)
         else:
-            view = ElicitationFormView(self._config.runner, req)
-        await self._config.thread.send(
-            embed=embed,
-            view=view,
-            **user_mention_kwargs(self._config.notify_user_id),
+            coro = self._ask_form_elicitation(req)
+            refusal = elicitation_form_result(None)
+        self._ask_in_background(
+            coro,
+            description=f"elicitation from {req.server_name} ({req.mode})",
+            request_id=req.request_id,
+            refusal=refusal,
         )
-        logger.info(
-            "Elicitation posted: %s (%s, request_id=%s)",
-            req.server_name,
-            req.mode,
-            req.request_id,
+
+    # -- prompt plumbing ------------------------------------------------
+
+    def _notify_mention(self) -> Mention | None:
+        """Who to ping, in the protocol's terms rather than Discord's."""
+        user_id = self._config.notify_user_id
+        return Mention(external_user_id=str(user_id)) if user_id else None
+
+    async def _ask_choice(
+        self,
+        prompt: ChoicePrompt,
+        request_id: str,
+        to_payload: Callable[[tuple[str, ...] | None], dict],
+    ) -> None:
+        answer = await self._config.surface.prompt_choice(prompt)
+        await self._config.runner.inject_tool_result(request_id, to_payload(answer))
+
+    async def _ask_url_elicitation(self, request: ElicitationRequest) -> None:
+        """Deliver the link, then ask whether the flow finished.
+
+        Two messages where Discord used to post one: the link is a `prompt_url`
+        because a surface that can render a link button should, and the
+        confirmation is a separate question because that is what unblocks the
+        CLI. Splitting them is what lets a surface with no button support still
+        show a usable URL.
+        """
+        if request.url:
+            await self._config.surface.prompt_url(
+                "Open link", request.url, notify=self._notify_mention()
+            )
+        answer = await self._config.surface.prompt_choice(
+            elicitation_url_prompt(request, notify=self._notify_mention())
         )
+        await self._config.runner.inject_tool_result(
+            request.request_id, elicitation_url_result(answer)
+        )
+
+    async def _ask_form_elicitation(self, request: ElicitationRequest) -> None:
+        values = await self._config.surface.prompt_form(
+            elicitation_form_prompt(request, notify=self._notify_mention())
+        )
+        await self._config.runner.inject_tool_result(
+            request.request_id, elicitation_form_result(values)
+        )
+
+    def _ask_in_background(
+        self,
+        coro: Coroutine[object, object, None],
+        *,
+        description: str,
+        request_id: str,
+        refusal: dict,
+    ) -> None:
+        """Run a prompt without stalling the event reader.
+
+        The CLI is blocked until the answer is injected, but this loop is not:
+        an approval can legitimately take minutes, and awaiting it inline would
+        hold up every later event behind it. The prompt owns its own timeout, so
+        nothing here runs unbounded.
+
+        ``refusal`` is what gets injected if the prompt itself fails. A surface
+        that cannot ask must not leave the session waiting forever, and a
+        request nobody could answer is a refused one.
+        """
+        task = asyncio.create_task(
+            self._ask_guarded(coro, description=description, request_id=request_id, refusal=refusal)
+        )
+        self._prompt_tasks.add(task)
+        task.add_done_callback(self._prompt_tasks.discard)
+        logger.info("Prompt posted: %s (request_id=%s)", description, request_id)
+
+    async def _ask_guarded(
+        self,
+        coro: Coroutine[object, object, None],
+        *,
+        description: str,
+        request_id: str,
+        refusal: dict,
+    ) -> None:
+        try:
+            await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Prompt failed: %s — refusing", description, exc_info=True)
+            with contextlib.suppress(Exception):
+                await self._config.runner.inject_tool_result(request_id, refusal)
 
     async def _handle_todo_write(self, event: StreamEvent) -> None:
         """Replace the current frontend-native todo activity."""

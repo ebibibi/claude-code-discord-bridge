@@ -240,15 +240,13 @@ claude_discord/          # Installable Python package
     chunker.py           # Discord's limits + shim over claude_code_core.rendering
     embeds.py            # Discord embed builders
     views.py             # Stop button, ToolSelectView, and shared UI components
+    prompt_views.py      # ChoiceView / FormModal — renders the protocol's prompts
     ask_bus.py           # Event bus for AskUserQuestion communication
     ask_view.py          # Buttons/Select Menus for AskUserQuestion
     ask_handler.py       # collect_ask_answers() — AskUserQuestion UI + DB lifecycle
     streaming_manager.py # StreamingMessageManager — debounced message edits
     tool_timer.py        # LiveToolTimer — elapsed time counter
     thread_dashboard.py  # Live pinned embed showing session states
-    plan_view.py         # Approve/Cancel buttons for Plan Mode
-    permission_view.py   # Allow/Deny buttons for tool permission requests
-    elicitation_view.py  # Discord UI for MCP elicitation
     file_sender.py       # File delivery via .ccdb-attachments-{thread_id}
     thread_renamer.py    # suggest_title() — background claude -p call for auto thread renaming
   ext/
