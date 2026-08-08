@@ -204,6 +204,8 @@ claude_discord/          # Installable Python package
   cog_loader.py          # Dynamic custom Cog loader (CUSTOM_COGS_DIR / --cogs-dir)
   bot.py                 # Discord Bot class
   protocols.py           # Shared protocols (DrainAware)
+  frontend.py            # DiscordFrontend — resolve/create a conversation by key
+  stores.py              # build_session_stores() — every repo, no frontend
   concurrency.py         # Worktree instructions + active session registry
   lounge.py              # AI Lounge prompt builder
   session_sync.py        # CLI session discovery and import

@@ -39,7 +39,7 @@ from .frontend import (
 )
 from .rendering import render_for
 
-__all__ = ["MemoryActivity", "MemorySurface", "MemoryTextStream"]
+__all__ = ["MemoryActivity", "MemoryFrontend", "MemorySurface", "MemoryTextStream"]
 
 
 @dataclass
@@ -138,10 +138,14 @@ class MemorySurface:
         answers: Sequence[Sequence[str]] = (),
         form_answers: Sequence[dict[str, str]] = (),
         working_dir: str | None = None,
+        frontend: str = "memory",
     ) -> None:
         self._caps = capabilities or SurfaceCapabilities(max_message_chars=2000)
         self._external_id = external_id
-        self._thread_key = derive_thread_key("memory", external_id)
+        self._frontend = frontend
+        # Scoped by frontend name, so a MemoryFrontend standing in for Teams
+        # cannot mint the same key as one standing in for Discord.
+        self._thread_key = derive_thread_key(frontend, external_id)
         self.working_dir = working_dir
 
         self._answers = list(answers)
@@ -171,7 +175,7 @@ class MemorySurface:
 
     @property
     def frontend(self) -> str:
-        return "memory"
+        return self._frontend
 
     @property
     def capabilities(self) -> SurfaceCapabilities:
@@ -244,3 +248,63 @@ class MemorySurface:
 
     async def recent_transcript(self, days: int) -> str | None:
         return None
+
+
+class MemoryFrontend:
+    """An in-memory :class:`~claude_code_core.frontend.SessionFrontend`.
+
+    The companion to :class:`MemorySurface`: where that proves one conversation
+    is implementable, this proves the object that hands them out is. A
+    scheduled task or a REST call can therefore be tested end to end — from
+    "reach the conversation with this key" to what the model said — with no
+    network, no bot and no mocks.
+
+    Conversations are remembered by key, so a surface created here resolves
+    later exactly as a real thread would. Nothing is ever evicted; a frontend
+    that forgot a conversation would make a scheduler's follow-up silently open
+    a second thread, which is the failure this contract exists to catch.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str = "memory",
+        capabilities: SurfaceCapabilities | None = None,
+        working_dir: str | None = None,
+    ) -> None:
+        self._name = name
+        self._caps = capabilities
+        self._working_dir = working_dir
+        self._surfaces: dict[ThreadKey, MemorySurface] = {}
+        self.started = False
+        self.closed = False
+        #: Titles passed to :meth:`create_surface`, in order — the readable
+        #: assertion for "what did the scheduler call this run?"
+        self.created_titles: list[str] = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    async def start(self) -> None:
+        self.started = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def resolve_surface(self, thread_key: ThreadKey) -> MemorySurface | None:
+        return self._surfaces.get(thread_key)
+
+    async def create_surface(self, *, parent_id: str, title: str) -> MemorySurface:
+        # The external id has to be unique per conversation, and stable, or two
+        # runs under the same channel would collide on one ThreadKey.
+        external_id = f"{parent_id}:{len(self._surfaces) + 1}"
+        surface = MemorySurface(
+            self._caps,
+            external_id=external_id,
+            working_dir=self._working_dir,
+            frontend=self._name,
+        )
+        self._surfaces[surface.thread_key] = surface
+        self.created_titles.append(title)
+        return surface

@@ -1149,6 +1149,8 @@ claude_discord/
   cog_loader.py            # 動的カスタム Cog ローダー（CUSTOM_COGS_DIR）
   bot.py                   # Discord Bot クラス
   protocols.py             # 共有プロトコル（DrainAware）
+  frontend.py              # DiscordFrontend — resolve/create a conversation by key
+  stores.py                # build_session_stores() — every repo, no frontend
   concurrency.py           # Worktree 指示 + アクティブセッションレジストリ
   collision.py             # ファイル書き込み追跡 + 衝突判定ルール（純粋関数・時刻注入）
   lounge.py                # AI Lounge プロンプトビルダー
