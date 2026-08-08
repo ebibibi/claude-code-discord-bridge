@@ -46,6 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `elicitation_view.py` are removed; they had no callers left and no public exports.
   AskUserQuestion is untouched and still uses its own persisted view.
 
+- **The project is now called Ebi Agent Chat Relay** — phase 1 of the rename in
+  [ADR-0001](docs/adr/0001-adopt-ebi-agent-chat-relay.md), covering brand text only. The
+  README and the distribution description carry the new name with a "formerly" note; the
+  repository, the `claude-code-discord-bridge` distribution, the `ccdb` command, every
+  `CCDB_*` variable, all REST routes, persisted data paths and Python import names are
+  **unchanged**, and none of them may change without a separate accepted ADR and a major
+  release. Existing installations keep starting exactly as before, and `ccdb` stays the
+  short name used throughout the documentation. Translated READMEs are refreshed by the
+  existing translation workflow on the next release.
+
 ### Fixed
 
 - Report persisted sessions without an in-flight turn as `history` instead of `idle`,
