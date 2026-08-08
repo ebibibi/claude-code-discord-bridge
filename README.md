@@ -1,6 +1,8 @@
-# Claude & Codex Discord Bridge
+# Ebi Agent Chat Relay
 
-*Package name: `claude-code-discord-bridge` (kebab-case)*
+*Formerly Claude Code Discord Bridge, then Claude & Codex Discord Bridge. Every existing
+identifier still works: the package is `claude-code-discord-bridge` (kebab-case), the
+command is `ccdb`, and `ccdb` remains the short name used throughout this document.*
 
 [![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
@@ -9,7 +11,9 @@
 
 **Use Claude Code _or_ OpenAI Codex on your phone. Multiple threads. All at once. Real development included.**
 
-Open Claude Code or OpenAI Codex from your smartphone's Discord app, spin up multiple threads, and run parallel development sessions — all without touching a keyboard. Each Discord thread becomes a fully isolated AI session. Work on a feature in one thread, review a PR in another, and run a background task in a third — simultaneously, even mixing backends per thread. The bridge handles all the coordination so sessions never clobber each other.
+Open Claude Code or OpenAI Codex from your smartphone's Discord app, spin up multiple threads, and run parallel development sessions — all without touching a keyboard. Each Discord thread becomes a fully isolated AI session. Work on a feature in one thread, review a PR in another, and run a background task in a third — simultaneously, even mixing backends per thread. The relay handles all the coordination so sessions never clobber each other.
+
+**Why the name changed.** This started as a bridge between one AI and one chat app, and the old name said exactly that. It is now a relay: several agent backends (Claude Code, OpenAI Codex) reachable from a chat surface, with the surface itself becoming pluggable — Discord today, Microsoft Teams next. Three of the four words in the old name had stopped being true. See [ADR-0001](docs/adr/0001-adopt-ebi-agent-chat-relay.md) for the decision and [the rename plan](docs/RENAME_PLAN.md) for how the change is being made without breaking a single existing install.
 
 **Use your existing subscriptions. No API key wrangling.** ccdb runs on top of the official CLIs — Claude Code (included with your [Claude Pro/Max subscription](https://claude.ai/pricing)) and OpenAI Codex (included with [ChatGPT Plus/Pro/Business](https://chatgpt.com)). Switch backends with `/backend` or set a per-thread override — your team gets both AIs through Discord at predictable cost.
 
@@ -23,7 +27,7 @@ Open Claude Code or OpenAI Codex from your smartphone's Discord app, spin up mul
 
 ## The Big Idea: Parallel Sessions Without Fear
 
-When you send tasks to Claude Code or OpenAI Codex in separate Discord threads, the bridge does four things automatically — regardless of which backend you picked:
+When you send tasks to Claude Code or OpenAI Codex in separate Discord threads, the relay does four things automatically — regardless of which backend you picked:
 
 1. **Concurrency notice injection** — Every session's system prompt includes mandatory instructions: create a git worktree, work only inside it, never touch the main working directory directly.
 
