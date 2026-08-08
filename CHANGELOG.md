@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Approving a tool, a plan or an MCP elicitation now goes through the conversation
+  surface — `claude_code_core/approvals.py`** — streaming, tool activity and
+  attachments already reached the user through the frontend-neutral protocol, but the
+  three moments where a session *stops and waits for a person* still built Discord
+  views directly. A second frontend would therefore have produced a session that
+  streams text perfectly and then dies at the first permission request, which is the
+  first thing any real session hits. Permission, plan approval and elicitation are now
+  expressed as `ChoicePrompt` / `FormPrompt` / `prompt_url` — the vocabulary a surface
+  already has to implement — so a Teams or Slack surface inherits all three without
+  writing any approval logic. Each request's prompt builder and its answer reader live
+  side by side in one module, because the choice values a prompt offers are the same
+  strings the payload reader matches on; split apart, renaming one would silently turn
+  every approval into a denial. The readers treat anything they do not recognise as a
+  refusal, so that failure mode fails closed rather than open. **A prompt that cannot
+  be posted no longer hangs the session**: previously, if the message carrying the
+  buttons failed to send, discord.py's view timer never started, nothing ever timed
+  out, and the CLI waited forever on an approval nobody could see — now the surface's
+  own clock applies and an unpostable request is injected as denied. Prompts are also
+  dispatched off the event loop, so a two-minute approval no longer holds up every
+  event queued behind it. `EventProcessor` gains `wait_for_prompts()` and
+  `cancel_prompts()` for callers that need to settle or abandon outstanding questions;
+  `finalize()` deliberately does neither, leaving an approval the user is mid-way
+  through answering free to complete. Discord's rendering is unchanged apart from
+  URL-mode elicitation, where the link and the "did it work?" confirmation are now two
+  messages instead of one, so that a surface without link buttons can still show a
+  usable URL. The superseded `permission_view.py`, `plan_view.py` and
+  `elicitation_view.py` are removed; they had no callers left and no public exports.
+  AskUserQuestion is untouched and still uses its own persisted view.
+
 ### Fixed
 
 - Report persisted sessions without an in-flight turn as `history` instead of `idle`,

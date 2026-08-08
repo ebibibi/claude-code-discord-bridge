@@ -1,11 +1,12 @@
 """Generic Discord UI for the frontend protocol's prompts.
 
 ``ChoicePrompt`` and ``FormPrompt`` are the protocol's two ways of asking the
-user something. Discord already had a view per *caller* — AskView for
+user something. Discord used to have a view per *caller* — AskView for
 AskUserQuestion, PermissionView for tool approval, PlanApprovalView for plan
-mode — each with its own answer plumbing. Those stay; this is the rendering
-for a prompt that arrives through the protocol instead, so a new caller does
-not have to invent a fourth view.
+mode, two more for elicitation — each with its own answer plumbing and its own
+copy of "what happens when nobody replies". All but AskView now route through
+here, so a new caller does not have to invent a sixth view, and a non-Discord
+frontend inherits every one of those flows by implementing two methods.
 
 Why buttons up to four choices and a select menu beyond
 -------------------------------------------------------

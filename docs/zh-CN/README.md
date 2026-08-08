@@ -1105,6 +1105,7 @@ claude_discord/
     chunker.py             # fence 与表格感知的消息拆分
     embeds.py              # Discord embed 构建器
     views.py               # 停止按钮和共享 UI 组件
+    prompt_views.py        # ChoiceView / FormModal — renders the protocol's prompts
     mentions.py            # user_mention_kwargs() — Claude 因输入暂停时通知请求者
     ask_bus.py             # AskUserQuestion 通信的事件总线
     ask_view.py            # AskUserQuestion 的按钮/下拉菜单
@@ -1112,9 +1113,6 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — 防抖的原地消息编辑
     tool_timer.py          # LiveToolTimer — 长时间运行工具的已用时间计数器
     thread_dashboard.py    # 显示会话状态的实时固定 embed
-    plan_view.py           # 计划模式（ExitPlanMode）的批准/取消按钮
-    permission_view.py     # 工具权限请求的允许/拒绝按钮
-    elicitation_view.py    # MCP elicitation 的 Discord UI（Modal 表单或 URL 按钮）
     file_sender.py         # 通过 .ccdb-attachments 发送文件
     inbox_classifier.py    # classify() — 轻量的 claude -p 调用给会话打标签
     thread_renamer.py      # suggest_title() — 用于自动线程命名的后台 claude -p 调用

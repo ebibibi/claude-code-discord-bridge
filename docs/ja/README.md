@@ -1189,6 +1189,7 @@ claude_discord/
     chunker.py             # フェンス・テーブル対応メッセージ分割
     embeds.py              # Discord embed ビルダー
     views.py               # 停止ボタンと共有 UI コンポーネント
+    prompt_views.py        # ChoiceView / FormModal — renders the protocol's prompts
     mentions.py            # user_mention_kwargs() — Claude が入力待ちのときリクエスターに通知
     ask_bus.py             # AskUserQuestion 通信用イベントバス
     ask_view.py            # AskUserQuestion 用 Discord ボタン / Select Menu
@@ -1196,9 +1197,6 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — デバウンス付きインプレース編集
     tool_timer.py          # LiveToolTimer — 長時間ツール実行の経過時間カウンター
     thread_dashboard.py    # スレッドのセッション状態を表示する live ピン embed
-    plan_view.py           # Plan Mode 承認ボタン（Approve/Cancel）
-    permission_view.py     # ツール実行許可ボタン（Allow/Deny）
-    elicitation_view.py    # MCP Elicitation 用 Discord UI（Modal フォームまたは URL ボタン）
     file_sender.py         # .ccdb-attachments 経由のファイル配信
     inbox_classifier.py    # classify() — セッションにラベルを付ける軽量 claude -p 呼び出し
     thread_renamer.py      # suggest_title() — スレッド自動リネーム用バックグラウンド claude -p 呼び出し
