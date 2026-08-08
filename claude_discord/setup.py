@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from discord.ext.commands import Bot
 
     from claude_code_core.backend import SessionBackend
+    from claude_code_core.frontend import SessionFrontend
 
     from .backend_factory import BackendFactory
     from .backend_settings import BackendSettings
@@ -56,6 +57,10 @@ class BridgeComponents:
     summary_repo: ThreadSummaryRepository | None = None
     backend_factory: BackendFactory | None = None
     backend_settings: BackendSettings | None = None
+    #: How this deployment reaches a conversation without knowing the platform.
+    #: Discord's is built here; a custom Cog can read it instead of calling
+    #: ``bot.get_channel`` and hard-coding Discord into its own logic.
+    frontend: SessionFrontend | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -192,16 +197,7 @@ async def setup_bridge(
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
     from .cross_backend_handoff import ConversationHistoryReader
-    from .database.ask_repo import PendingAskRepository
-    from .database.claims_repo import ClaimRepository
     from .database.inbox_repo import ThreadInboxRepository
-    from .database.ingest_repo import IngestResultRepository
-    from .database.lounge_repo import LoungeRepository
-    from .database.models import init_db
-    from .database.repository import SessionRepository, UsageStatsRepository
-    from .database.resume_repo import PendingResumeRepository
-    from .database.settings_repo import SettingsRepository
-    from .database.summary_repo import ThreadSummaryRepository
     from .database.task_repo import TaskRepository
     from .discord_ui.thread_context import DEFAULT_DAYS
     from .worktree import WorktreeManager
@@ -323,20 +319,26 @@ async def setup_bridge(
         )
 
     # --- Session DB (also hosts lounge_messages and pending_resumes tables) ---
-    os.makedirs(os.path.dirname(session_db_path) or ".", exist_ok=True)
-    await init_db(session_db_path)
-    session_repo = SessionRepository(session_db_path)
-    settings_repo = SettingsRepository(session_db_path)
-    ask_repo = PendingAskRepository(session_db_path)
-    lounge_repo = LoungeRepository(session_db_path)
-    claims_repo = ClaimRepository(session_db_path)
-    resume_repo = PendingResumeRepository(session_db_path)
-    usage_repo = UsageStatsRepository(session_db_path)
-    ingest_repo = IngestResultRepository(session_db_path)
-    await ingest_repo.init_db()
-    summary_repo = ThreadSummaryRepository(session_db_path)
-    await summary_repo.init_db()
-    logger.info("Session DB initialized: %s", session_db_path)
+    # Everything below this line is frontend-neutral, so it lives in its own
+    # module: a Teams deployment needs the same stores and none of the Discord
+    # wiring that follows.
+    from .frontend import DiscordFrontend
+    from .stores import build_session_stores
+
+    # The frontend seam. Built once and handed to everything that needs to
+    # reach a conversation, so a Cog never has to call bot.get_channel itself.
+    frontend = DiscordFrontend(bot)
+
+    stores = await build_session_stores(session_db_path)
+    session_repo = stores.sessions
+    settings_repo = stores.settings
+    ask_repo = stores.asks
+    lounge_repo = stores.lounge
+    claims_repo = stores.claims
+    resume_repo = stores.resumes
+    usage_repo = stores.usage
+    ingest_repo = stores.ingest
+    summary_repo = stores.summaries
 
     # Attach repos to bot so generic cogs (e.g. AutoUpgradeCog) can discover them
     # without a hard import dependency on ccdb internals.
@@ -445,6 +447,7 @@ async def setup_bridge(
             session_repo=session_repo,
             backend_factory=backend_factory,
             backend_settings=backend_settings,
+            frontend=frontend,
         )
         await bot.add_cog(scheduler_cog)
         logger.info("Registered SchedulerCog")
@@ -485,6 +488,7 @@ async def setup_bridge(
         summary_repo=summary_repo,
         backend_factory=backend_factory,
         backend_settings=backend_settings,
+        frontend=frontend,
     )
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided

@@ -1065,6 +1065,8 @@ claude_discord/
   cog_loader.py            # 动态自定义 Cog 加载器（CUSTOM_COGS_DIR）
   bot.py                   # Discord Bot 类
   protocols.py             # 共享协议（DrainAware）
+  frontend.py              # DiscordFrontend — resolve/create a conversation by key
+  stores.py                # build_session_stores() — every repo, no frontend
   concurrency.py           # Worktree 指令 + 活跃会话注册表
   collision.py             # 文件写入跟踪 + 碰撞规则（纯函数，注入时钟）
   lounge.py                # AI 休息室提示构建器
