@@ -85,3 +85,21 @@ async def test_attachment_marker_is_delivered_by_surface(tmp_path) -> None:
 
     assert surface.conformance_delivered_files == ["result.txt"]
     assert not marker.exists()
+
+
+async def test_system_event_with_text_and_no_session_id_becomes_a_warning() -> None:
+    """The anonymization gateway reports "sent anyway" through this path.
+
+    Before this branch existed the session_id guard dropped the text silently,
+    which is the worst possible outcome for a privacy warning.
+    """
+    surface = MemorySurface()
+    runner = MagicMock()
+    processor = EventProcessor(_config(surface, runner))
+
+    await processor.process(
+        StreamEvent(message_type=MessageType.SYSTEM, text="⚠️ possible replacement miss")
+    )
+
+    assert [notice.level for notice in surface.notices] == [NoticeLevel.WARNING]
+    assert "replacement miss" in surface.notices[0].body

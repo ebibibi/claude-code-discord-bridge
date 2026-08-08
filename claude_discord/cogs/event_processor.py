@@ -379,6 +379,16 @@ class EventProcessor:
             await self._handle_hook_lifecycle(event)
             return
 
+        # Out-of-band notice carried by a SYSTEM event that has no session_id —
+        # currently the anonymization gateway reporting that it sent anyway.
+        # Without this branch the session_id guard below swallows the text, and
+        # a warning nobody sees is worse than no warning at all.
+        if event.text and not event.session_id:
+            await self._config.surface.send_notice(
+                Notice(level=NoticeLevel.WARNING, body=event.text)
+            )
+            return
+
         if not event.session_id:
             return
 

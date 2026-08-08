@@ -40,6 +40,8 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 10. **CLI env overlay** (`CCDB_CLI_ENV_FILE`): Optional `KEY=VALUE` file read on every CLI spawn to inject env vars into the subprocess. Enables live configuration changes (e.g., switching to Azure Foundry) without restarting the bot. The file is read by `_build_env()` in `runner.py`.
 11. **Model suggestions are discovered, not hardcoded** (`model_catalog.py`): the `/model` autocomplete asks `GET /v1/models` (reusing the CLI's own credentials) instead of shipping a constant that goes stale on every model launch. This is the *only* sanctioned direct Anthropic API call, and it is strictly non-essential: no credentials, no network, a 3P provider, or `CCDB_MODEL_DISCOVERY=0` all degrade to the static `SUGGESTED_MODELS` fallback. Never let it raise into a command path, and never log the token.
 
+12. **Anonymization replaces by rule, inspects by model** (`claude_code_core/privacy/`): an optional gateway wraps any `SessionBackend` and swaps organisation-identifying terms for stable aliases before the prompt reaches the CLI, restoring them in the answer. The substitution is a rule table — never a model — because a model produces a different alias every run and an alias that changes cannot be restored. The local LLM's only job is to *report* proper nouns the rules missed. Reversing those two roles breaks the feature. Off until a rules file exists; a malformed rules file raises rather than silently degrading to "send the real names". See `docs/anonymization.md`.
+
 ### Why REST API over stdout markers for Claude→ccdb communication
 
 Alternative considered: Claude embeds `<!-- ccdb:schedule {...} -->` in response text; ccdb parses stdout.
@@ -261,6 +263,20 @@ examples/
 pyproject.toml           # Package metadata + dependencies
 uv.lock                  # Dependency lock file
 CONTRIBUTING.md          # Contribution guidelines
+```
+
+`claude_code_core/privacy/` — the anonymization gateway (surface-agnostic, so a
+Teams or CLI frontend gets it for free):
+
+```
+  rules.py               # Rule table loader (literals, regexes, builtin detectors)
+  mapping.py             # 対応表 — persistent, local, bidirectional alias store
+  engine.py              # Deterministic replace + restore. Calls no model, ever
+  inspector.py           # Local Ollama-compatible leftover check. Reports only
+  config.py              # Env-driven config; absent rules file = feature off
+  audit.py               # JSONL trail of what actually left the machine
+  gateway.py             # Policy (block/warn/off) + process-wide accessor
+  backend.py             # AnonymizingBackend — SessionBackend decorator
 ```
 
 ### Adding a New Cog

@@ -64,11 +64,31 @@ def create_backend(
     if backend == "claude":
         from .runner import ClaudeRunner
 
-        return ClaudeRunner(model=model, **kwargs)  # type: ignore[arg-type]
-
-    if backend == "codex":
+        runner: SessionBackend = ClaudeRunner(model=model, **kwargs)  # type: ignore[arg-type]
+    elif backend == "codex":
         from .codex_runner import CodexRunner
 
-        return CodexRunner(model=model, **kwargs)  # type: ignore[arg-type]
+        runner = CodexRunner(model=model, **kwargs)  # type: ignore[arg-type]
+    else:
+        raise ValueError(f"Unknown backend: {backend!r}")
 
-    raise ValueError(f"Unknown backend: {backend!r}")
+    return _apply_privacy_gateway(runner, backend=backend, thread_id=kwargs.get("thread_id"))
+
+
+def _apply_privacy_gateway(
+    runner: SessionBackend,
+    *,
+    backend: str,
+    thread_id: object = None,
+) -> SessionBackend:
+    """Wrap ``runner`` with the anonymization gateway when one is configured.
+
+    Auto-discovery keeps this zero-config: with no rules file the gateway is
+    ``None`` and the runner is returned untouched.
+    """
+    from .privacy import AnonymizingBackend, get_gateway
+
+    gateway = get_gateway()
+    if gateway is None:
+        return runner
+    return AnonymizingBackend(runner, gateway, backend=backend, thread_id=thread_id)
