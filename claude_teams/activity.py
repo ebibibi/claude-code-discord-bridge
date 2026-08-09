@@ -37,6 +37,7 @@ class InboundActivity:
     from_name: str
     recipient_id: str
     text: str
+    conversation_type: str | None
     tenant_id: str | None
     channel_id: str | None
     team_id: str | None
@@ -50,6 +51,7 @@ class InboundActivity:
             service_url=self.service_url,
             conversation_id=self.conversation_id,
             reply_to_id=self.id or None,
+            conversation_type=self.conversation_type,
         )
 
     @property
@@ -88,6 +90,8 @@ def parse_activity(payload: Any) -> InboundActivity:
 
     channel_data = payload.get("channelData")
     channel_data = channel_data if isinstance(channel_data, dict) else {}
+    conversation = payload.get("conversation")
+    conversation = conversation if isinstance(conversation, dict) else {}
 
     return InboundActivity(
         type=text_field("type", required=True),
@@ -98,6 +102,7 @@ def parse_activity(payload: Any) -> InboundActivity:
         from_name=text_field("from", "name"),
         recipient_id=text_field("recipient", "id"),
         text=_string(payload, "text") or "",
+        conversation_type=_nested(conversation, "conversationType"),
         tenant_id=_nested(channel_data, "tenant", "id"),
         channel_id=_nested(channel_data, "channel", "id"),
         team_id=_nested(channel_data, "team", "id"),
