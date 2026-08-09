@@ -282,6 +282,12 @@ claude_teams/            # Microsoft Teams frontend (optional extra: [teams])
   pacer.py               # Coalescing per target, one update per interval — the 1,800/hour budget
   endpoint.py            # The aiohttp route. Nothing is done before the token check; 5xx is never the answer after acceptance
   http.py                # The only file that knows about aiohttp — everything else takes its transport as a callable
+  relay/                 # Inbound for Teams without inbound on the session host — see docs/teams-relay.md
+    receiver.py          # Public side: verify, enqueue, answer. No client secret, no route to the host
+    puller.py            # Private side: poll outbound, ack only when done, filter duplicates, drop poison
+    envelope.py          # What crosses the queue — carries the token's serviceurl, not the body's
+    queue.py             # push/pull/ack. A separate ack is what makes it at-least-once
+    storage_queue.py     # Azure Queue Storage over REST, defusedxml, pop receipts fully URL-encoded
 tests/                   # pytest test suite
 examples/
   ebibot/                # Real-world example: personal bot with custom Cogs
