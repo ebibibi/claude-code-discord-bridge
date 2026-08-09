@@ -148,9 +148,27 @@ def _kid(token: str) -> str:
     return kid
 
 
+#: The Bot Connector spells this claim in **lower case**. Measured on a real
+#: inbound token (2026-08-09): ``['aud', 'exp', 'iss', 'nbf', 'serviceurl']``.
+#: The camelCase spelling that appears everywhere in the activity *body* does
+#: not exist in the token, and reading it there rejected every genuine request
+#: — a bug the unit tests could not see, because the fixtures were written with
+#: the same wrong name. Both spellings are accepted now: the documented one,
+#: and the one a future token might use.
+_SERVICE_URL_CLAIMS = ("serviceurl", "serviceUrl")
+
+
+def _claimed_service_url(claims: dict[str, Any]) -> str | None:
+    for name in _SERVICE_URL_CLAIMS:
+        value = claims.get(name)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def _check_service_url(claims: dict[str, Any], service_url: str | None) -> None:
-    claimed = claims.get("serviceUrl")
-    if not isinstance(claimed, str) or not claimed:
+    claimed = _claimed_service_url(claims)
+    if claimed is None:
         raise TokenError("token has no serviceUrl claim")
     if service_url is None:
         raise TokenError("activity has no serviceUrl to match against the token")

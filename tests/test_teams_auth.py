@@ -44,7 +44,9 @@ def make_token(**overrides: object) -> str:
     claims: dict[str, object] = {
         "iss": BOT_CONNECTOR_ISSUER,
         "aud": APP_ID,
-        "serviceUrl": SERVICE_URL,
+        # Lower case, as the Bot Connector actually spells it. See
+        # TestTheClaimNameIsLowerCase for why this matters more than it looks.
+        "serviceurl": SERVICE_URL,
         "exp": int(time.time()) + 300,
         "iat": int(time.time()) - 5,
     }
@@ -160,12 +162,59 @@ class TestServiceUrlBinding:
         claims = await verifier().verify(
             f"Bearer {make_token()}", service_url=SERVICE_URL.rstrip("/")
         )
-        assert claims["serviceUrl"] == SERVICE_URL
+        assert claims["serviceurl"] == SERVICE_URL
 
     async def test_a_token_without_a_service_url_claim_is_rejected(self) -> None:
         token = make_token()
         payload = jwt.decode(token, options={"verify_signature": False})
-        del payload["serviceUrl"]
+        del payload["serviceurl"]
+        token = jwt.encode(payload, _PRIVATE_KEY, algorithm="RS256", headers={"kid": KID})
+        with pytest.raises(TokenError, match="serviceUrl"):
+            await verifier().verify(f"Bearer {token}", service_url=SERVICE_URL)
+
+
+class TestTheClaimNameIsLowerCase:
+    """The bug that only real traffic could find.
+
+    Every genuine Teams request was rejected with "token has no serviceUrl
+    claim" while the whole suite stayed green — because the fixtures were built
+    with the same wrong name the implementation read. A test that constructs its
+    own input cannot catch a wrong assumption about that input; the first real
+    inbound token can, and did.
+
+    Measured on a live Bot Framework token (2026-08-09), the claim set is
+    exactly ``['aud', 'exp', 'iss', 'nbf', 'serviceurl']``. The camelCase
+    spelling that appears all over the activity *body* is not in the token.
+    """
+
+    async def test_the_lower_case_claim_is_what_teams_sends(self) -> None:
+        token = make_token()
+        payload = jwt.decode(token, options={"verify_signature": False})
+        assert "serviceurl" in payload
+        assert "serviceUrl" not in payload
+
+        claims = await verifier().verify(f"Bearer {token}", service_url=SERVICE_URL)
+        assert claims["serviceurl"] == SERVICE_URL
+
+    async def test_the_camel_case_spelling_is_still_accepted(self) -> None:
+        # Defensive: a future token, or another channel, may use it. Accepting
+        # both costs one tuple; guessing wrong costs every request.
+        payload = {
+            "iss": BOT_CONNECTOR_ISSUER,
+            "aud": APP_ID,
+            "serviceUrl": SERVICE_URL,
+            "exp": int(time.time()) + 300,
+        }
+        token = jwt.encode(payload, _PRIVATE_KEY, algorithm="RS256", headers={"kid": KID})
+        claims = await verifier().verify(f"Bearer {token}", service_url=SERVICE_URL)
+        assert claims["serviceUrl"] == SERVICE_URL
+
+    async def test_a_token_with_neither_spelling_is_still_refused(self) -> None:
+        payload = {
+            "iss": BOT_CONNECTOR_ISSUER,
+            "aud": APP_ID,
+            "exp": int(time.time()) + 300,
+        }
         token = jwt.encode(payload, _PRIVATE_KEY, algorithm="RS256", headers={"kid": KID})
         with pytest.raises(TokenError, match="serviceUrl"):
             await verifier().verify(f"Bearer {token}", service_url=SERVICE_URL)
