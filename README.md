@@ -1150,9 +1150,20 @@ python -m claude_teams manifest --out dist/teams-app.zip
 
 What exists today: configuration and validation, the app package generator
 (resource-specific consent and SSO included), inbound Bot Framework token
-verification, and an echo endpoint that proves a message reaches this process
-and gets answered. The surface that turns an inbound message into a session is
-next.
+verification, an endpoint, and `TeamsSurface` — the output side, which the
+shared conformance contract is run against.
+
+The Teams experience is not a port of the Discord one. An answer that Discord
+fragments into fifteen messages arrives as **one**, and the column of embeds
+Discord posts per tool call becomes **a single card that keeps up to date** —
+because Teams allows 1,800 operations per hour per conversation, and the
+Discord design would spend a long session's whole budget on scrollback.
+
+Two things are deliberately *not* claimed yet: file contents are not
+transferred, and card actions cannot be routed back, so prompts are visible but
+unanswerable. Both say so in the message they post, and the conformance run
+reports 17 passed / 1 failed with that one gap pinned by name rather than
+skipped.
 
 Unlike Discord, Teams needs a **public HTTPS endpoint**, and coding-agent
 sessions sit behind it. See [docs/teams.md](docs/teams.md) for the setup and for

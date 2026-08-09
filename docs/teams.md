@@ -1,8 +1,10 @@
 # The Microsoft Teams frontend
 
-> Status: skeleton. Configuration, the app package, inbound authentication and
-> an echo endpoint are here. The `ConversationSurface` that turns an inbound
-> message into a session is not yet — that is the next step.
+> Status: the output side works. Configuration, the app package, inbound
+> authentication, the endpoint and `TeamsSurface` are here, and the shared
+> conformance contract runs against the surface that ships. What is not here
+> yet: routing a card action back (so prompts are visible but unanswerable) and
+> transferring file contents. Both say so rather than pretending.
 
 Discord and Teams are siblings, not a base and a port. `claude_discord` and
 `claude_teams` each implement the vocabulary in `claude_code_core.frontend`,
@@ -88,6 +90,52 @@ Teams must reach `https://<host>/api/teams/messages`. A tunnel (Cloudflare
 Tunnel, ngrok) in front of the machine running ccdb is the usual arrangement;
 what matters is that the host in the manifest, the Azure Bot messaging
 endpoint, and what actually answers are the same thing.
+
+## What the surface does differently from Discord
+
+| intent | Discord | Teams |
+|---|---|---|
+| a long answer | fifteen messages | **one** message |
+| `open_activity` | an embed per tool call | a line on **one card** |
+| `set_status` | an emoji on the user's message | the status row of that same card |
+| `deliver_files` | inline attachment | **not yet** (see below) |
+
+The card is the design. Discord posts an embed per tool call and edits it,
+which is right there — editing is cheap and there is no hourly ceiling. Teams
+allows 1,800 operations per hour per conversation, so the same approach would
+spend a long session's entire budget on scrollback and then go silent. Here a
+tool starting, the status changing and a tool finishing are three events and
+one operation — repaint — and three of them inside one pacing interval cost one
+request, not three.
+
+`claude_teams/pacer.py` is what enforces that. It coalesces per target and
+sends at most one update per interval, keeping the newest state rather than
+the oldest. Per *target* matters: the card and a streaming reply are different
+messages, and collapsing them onto one key would have a card repaint silently
+swallow a pending stream edit — the answer would stop growing with nothing to
+see.
+
+## What is deliberately not claimed yet
+
+**File contents are not transferred.** A bot cannot attach a file to a Teams
+channel message; real delivery is an upload plus a consent card the user
+accepts. `deliver_files` names the files and says the contents were not sent,
+so a session cannot believe its output was handed over. The conformance run
+therefore reports **17 passed, 1 failed**, and that one failure is pinned by
+name in `tests/test_teams_conformance.py` — closing the gap is what makes the
+test pass, and nothing else does.
+
+**Prompts are visible but unanswerable.** `prompt_choice` and `prompt_form`
+post the question and return `None`, which the contract defines as
+"unanswered" and which callers already handle — a tool-permission request
+applies its `default_on_timeout`, which denies. Returning a *choice* instead
+would be the dangerous failure: the caller cannot distinguish "the user
+allowed it" from "the surface invented allow".
+
+**No Stop button is rendered.** An `Action.Execute` that nothing routes shows
+the user an error when they press it, which is worse than the absence of a
+control. `offer_interrupt` returns a working handle with the seam the invoke
+handler will use.
 
 ## How a Teams conversation becomes a ccdb session
 

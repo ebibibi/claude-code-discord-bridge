@@ -145,7 +145,7 @@ class TestConnector:
             posted.append((url, payload, headers))
 
         connector = BotConnector(StubTokens(), post_json)
-        await connector.send_text(parse_activity(body()), "pong")
+        await connector.send_text(parse_activity(body()).ref, "pong")
 
         url, payload, headers = posted[0]
         assert url.startswith(SERVICE_URL.rstrip("/") + "/v3/conversations/")
@@ -160,5 +160,5 @@ class TestConnector:
             posted.append(url)
 
         connector = BotConnector(StubTokens(), post_json)
-        await connector.send_text(parse_activity(body(serviceUrl=SERVICE_URL)), "pong")
+        await connector.send_text(parse_activity(body(serviceUrl=SERVICE_URL)).ref, "pong")
         assert "//v3" not in posted[0]

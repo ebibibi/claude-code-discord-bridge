@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .conversation import ConversationRef
+
 __all__ = ["InboundActivity", "parse_activity"]
 
 MESSAGE = "message"
@@ -40,6 +42,15 @@ class InboundActivity:
     team_id: str | None
     locale: str | None
     raw: dict[str, Any]
+
+    @property
+    def ref(self) -> ConversationRef:
+        """Where a reply to this activity goes, threaded under it."""
+        return ConversationRef(
+            service_url=self.service_url,
+            conversation_id=self.conversation_id,
+            reply_to_id=self.id or None,
+        )
 
     @property
     def is_message(self) -> bool:

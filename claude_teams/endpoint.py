@@ -37,6 +37,7 @@ from aiohttp import web
 from .activity import InboundActivity, parse_activity
 from .auth import TokenError
 from .config import DEFAULT_ENDPOINT_PATH
+from .conversation import ConversationRef
 
 __all__ = ["TeamsEndpoint"]
 
@@ -56,7 +57,7 @@ class Verifier(Protocol):
 
 
 class Connector(Protocol):
-    async def send_text(self, activity: InboundActivity, text: str) -> Any: ...
+    async def send_text(self, ref: ConversationRef, text: str) -> Any: ...
 
 
 class TeamsEndpoint:
@@ -139,7 +140,7 @@ class TeamsEndpoint:
             raise _BadBodyError from exc
 
     async def _echo(self, activity: InboundActivity) -> None:
-        await self._connector.send_text(activity, f"echo: {activity.text}")
+        await self._connector.send_text(activity.ref, f"echo: {activity.text}")
 
 
 class _BodyTooLargeError(Exception):

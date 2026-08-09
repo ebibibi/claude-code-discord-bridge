@@ -24,7 +24,7 @@ from .endpoint import MessageHandler, TeamsEndpoint
 from .jwks import OpenIdKeyStore
 from .token import OutboundTokenProvider
 
-__all__ = ["build_endpoint", "form_poster", "json_fetcher", "json_poster"]
+__all__ = ["build_endpoint", "form_poster", "json_fetcher", "json_poster", "json_putter"]
 
 #: Applies to every outbound call this package makes. aiohttp stopped accepting
 #: a bare number here, and a request with no timeout at all is how a hung
@@ -68,6 +68,20 @@ def json_poster(session: ClientSession) -> Any:
     return post
 
 
+def json_putter(session: ClientSession) -> Any:
+    async def put(url: str, payload: dict[str, Any], headers: dict[str, str]) -> Any:
+        async with session.put(
+            url, json=payload, headers=headers, timeout=DEFAULT_TIMEOUT
+        ) as response:
+            if response.status >= 400:
+                raise RuntimeError(f"PUT {url} returned {response.status}")
+            if response.content_type == "application/json":
+                return await response.json()
+            return None
+
+    return put
+
+
 def build_endpoint(
     config: TeamsConfig,
     session: ClientSession,
@@ -96,6 +110,7 @@ def build_endpoint(
             form_poster(session),
         ),
         json_poster(session),
+        json_putter(session),
     )
     return TeamsEndpoint(
         app_id=config.app_id,
