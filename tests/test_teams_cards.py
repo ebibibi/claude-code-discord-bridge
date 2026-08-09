@@ -17,7 +17,7 @@ import json
 import pytest
 
 from claude_code_core.frontend import StatusKind
-from claude_teams.cards import MAX_CARD_BYTES, ActivityLine, SessionCard
+from claude_teams.cards import ACTION_VERB, MAX_CARD_BYTES, ActivityLine, SessionCard
 
 
 def card(**overrides: object) -> SessionCard:
@@ -101,10 +101,21 @@ class TestSize:
         assert len(payload.encode()) <= MAX_CARD_BYTES
 
 
-class TestActionsAreNotClaimedEarly:
-    def test_no_action_is_rendered_yet(self) -> None:
-        # A Stop button that nothing routes is worse than no button: Teams
-        # shows the user an error when the action goes unanswered. The control
-        # appears in the change that can handle its invoke.
+class TestStopAction:
+    def test_no_action_is_rendered_without_an_id(self) -> None:
+        # A control nothing routes is worse than no control: Teams shows the
+        # user an error when the action goes unanswered.
         content = card().to_attachment()["content"]
-        assert not content.get("actions"), "an unroutable action must not be offered"
+        assert not content.get("actions")
+
+    def test_the_stop_action_carries_the_id_that_routes_it(self) -> None:
+        content = card(stop_action_id="abc123").to_attachment()["content"]
+        assert [a["title"] for a in content["actions"]] == ["Stop"]
+        assert content["actions"][0]["data"]["ccdb_prompt"] == "abc123"
+        assert content["actions"][0]["verb"] == ACTION_VERB
+
+    def test_it_is_a_universal_action_so_the_press_arrives_as_an_invoke(self) -> None:
+        # Action.Submit would arrive as an ordinary message and could not be
+        # answered inline, which is what Teams needs for a card press.
+        content = card(stop_action_id="abc123").to_attachment()["content"]
+        assert content["actions"][0]["type"] == "Action.Execute"

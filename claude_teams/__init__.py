@@ -20,10 +20,11 @@ What is here
 Configuration, the real Teams capability numbers, an app-package generator,
 inbound token validation, an echo endpoint, and ``TeamsSurface`` — the
 :class:`~claude_code_core.frontend.ConversationSurface` implementation, which
-the shared conformance contract is run against. What is *not* here yet is
-interaction (card actions cannot be routed back) and file transfer; both are
-stated as such rather than faked, and the conformance gap is pinned by name in
-``tests/test_teams_conformance.py``.
+the shared conformance contract is run against. Prompts are answerable:
+an Adaptive Card action arrives as an invoke, is checked against the
+conversation it was posted in, and resolves the caller waiting on it. What is
+*not* here yet is file transfer, which is stated as such rather than faked —
+the conformance gap is pinned by name in ``tests/test_teams_conformance.py``.
 """
 
 from __future__ import annotations
@@ -31,12 +32,14 @@ from __future__ import annotations
 from .capabilities import TEAMS_CAPABILITIES
 from .config import TeamsConfig
 from .conversation import ConversationRef
+from .interactions import InteractionRegistry
 from .surface import TEAMS_FRONTEND, TeamsSurface
 
 __all__ = [
     "TEAMS_CAPABILITIES",
     "TEAMS_FRONTEND",
     "ConversationRef",
+    "InteractionRegistry",
     "TeamsConfig",
     "TeamsSurface",
 ]

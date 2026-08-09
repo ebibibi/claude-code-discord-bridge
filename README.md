@@ -1159,10 +1159,15 @@ Discord posts per tool call becomes **a single card that keeps up to date** —
 because Teams allows 1,800 operations per hour per conversation, and the
 Discord design would spend a long session's whole budget on scrollback.
 
-Two things are deliberately *not* claimed yet: file contents are not
-transferred, and card actions cannot be routed back, so prompts are visible but
-unanswerable. Both say so in the message they post, and the conformance run
-reports 17 passed / 1 failed with that one gap pinned by name rather than
+Prompts are answerable: a card press arrives as an invoke, is checked against
+the conversation it was posted in, and resolves the session waiting on it. An
+unanswered permission request denies, and so does one whose card could not be
+posted — a prompt nobody could see must not be safer to ignore than one nobody
+answered.
+
+One thing is deliberately *not* claimed yet: file contents are not
+transferred. It says so in the message it posts, and the conformance run
+reports 17 passed / 1 failed with that gap pinned by name rather than
 skipped.
 
 Unlike Discord, Teams needs a **public HTTPS endpoint**, and coding-agent

@@ -22,24 +22,30 @@ per hour per conversation, that difference is the difference between a session
 that keeps showing its work for an hour and one that goes quiet halfway
 through.
 
+Prompts, and failing closed
+---------------------------
+``prompt_choice`` posts an Adaptive Card and waits. When the clock runs out it
+applies ``default_on_timeout`` — which for a tool-permission request is the
+denying choice — and the same fallback runs when the card could not be posted
+at all, because "the prompt never reached anyone" and "nobody answered" must
+have the same consequence. The contract deliberately does not check this: from
+outside, a surface that denies on timeout and one that invents a denial are
+indistinguishable. ``TestFailClosed`` in ``tests/test_teams_prompts.py`` is
+where it is proved, by withholding the answer.
+
 What this surface deliberately does not claim
 ---------------------------------------------
 ``deliver_files`` names the files and says plainly that their contents have not
 been transferred. A bot cannot attach a file to a Teams channel message; real
-delivery is an upload plus a consent card, and it needs an interaction this
-surface cannot yet route. Rather than let the conformance run report a green it
-has not earned, the gap is pinned by name in
+delivery is an upload plus a consent card, and it needs a file-transfer flow
+this surface does not have yet. Rather than let the conformance run report a
+green it has not earned, the gap is pinned by name in
 ``tests/test_teams_conformance.py``.
-
-``prompt_choice`` and ``prompt_form`` post the question so a human can see it
-and then return ``None`` — "unanswered", which the contract allows and which
-callers already handle by applying their own default. That is honest: the
-Adaptive Card actions that make them answerable arrive with the invoke handler
-that can receive the reply.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
@@ -59,8 +65,9 @@ from claude_code_core.frontend import (
 from claude_code_core.rendering import render_for
 
 from .capabilities import TEAMS_CAPABILITIES
-from .cards import ActivityLine, SessionCard
+from .cards import ActivityLine, SessionCard, choice_prompt_card, form_prompt_card
 from .conversation import ConversationRef
+from .interactions import InteractionRegistry
 from .pacer import UpdatePacer
 
 __all__ = ["TEAMS_FRONTEND", "TeamsSurface"]
@@ -96,6 +103,7 @@ class TeamsSurface:
         title: str = "Session",
         capabilities: SurfaceCapabilities = TEAMS_CAPABILITIES,
         pacer: UpdatePacer | None = None,
+        interactions: InteractionRegistry | None = None,
     ) -> None:
         """
         Args:
@@ -106,17 +114,23 @@ class TeamsSurface:
             pacer: Defaults to one built from the capabilities' resolved
                 interval — the number that already accounts for the hourly
                 quota.
+            interactions: Where prompts wait to be answered. A deployment
+                shares one registry across its conversations so the endpoint
+                has a single place to route an inbound action to; a lone
+                surface gets its own.
         """
         self._thread_key = thread_key
         self._ref = ref
         self._connector = connector
         self._capabilities = capabilities
         self._pacer = pacer or UpdatePacer(capabilities.min_update_interval)
+        self._interactions = interactions or InteractionRegistry()
 
         self._card_title = title
         self._status: StatusKind | None = None
         self._activities: list[ActivityLine] = []
         self._card_id: str | None = None
+        self._stop_action_id: str | None = None
 
     # -- identity ----------------------------------------------------------
 
@@ -139,6 +153,10 @@ class TeamsSurface:
     @property
     def ref(self) -> ConversationRef:
         return self._ref
+
+    @property
+    def interactions(self) -> InteractionRegistry:
+        return self._interactions
 
     # -- output ------------------------------------------------------------
 
@@ -209,41 +227,70 @@ class TeamsSurface:
     # -- interaction -------------------------------------------------------
 
     async def prompt_choice(self, prompt: ChoicePrompt) -> tuple[str, ...] | None:
-        """Show the question; return ``None`` because nothing can answer yet.
+        """Post an answerable card and wait for the press.
 
-        ``None`` means unanswered, and callers already know what to do with
-        it — a permission request applies its ``default_on_timeout``, which
-        denies. Returning a *choice* here instead would be the dangerous
-        failure: the caller cannot tell "the user allowed it" from "the
-        surface invented allow".
+        On timeout — and on a failure to post at all — this applies
+        ``default_on_timeout``, which a tool-permission request sets to the
+        denying choice. The two cases share a path on purpose: a prompt nobody
+        could see must not be safer to ignore than one nobody answered.
         """
-        lines = [f"**{prompt.header}**" if prompt.header else "", prompt.question]
-        lines.extend(f"- `{c.value}` — {c.label}" for c in prompt.choices)
-        lines.append("_Answering from Teams is not wired up yet._")
-        await self._post({"type": "message", "text": "\n".join(x for x in lines if x)})
-        return None
+        pending = self._interactions.register_choice(
+            self.external_id,
+            values=tuple(c.value for c in prompt.choices),
+            multi_select=prompt.multi_select,
+            allow_free_text=prompt.allow_free_text,
+        )
+        try:
+            await self._post(
+                {
+                    "type": "message",
+                    "attachments": [choice_prompt_card(prompt, pending.id)],
+                }
+            )
+        except Exception:
+            logger.warning("Failed to post a Teams choice prompt", exc_info=True)
+            self._interactions.cancel(pending.id)
+            return _fallback(prompt.default_on_timeout)
+
+        answer = await _await_answer(pending.future, prompt.timeout_seconds)
+        if answer is None:
+            self._interactions.cancel(pending.id)
+            return _fallback(prompt.default_on_timeout)
+        return answer
 
     async def prompt_form(self, prompt: FormPrompt) -> dict[str, str] | None:
-        lines = [f"**{prompt.title}**"]
-        if prompt.description:
-            lines.append(prompt.description)
-        lines.extend(f"- {f.label}" for f in prompt.fields)
-        lines.append("_Answering from Teams is not wired up yet._")
-        await self._post({"type": "message", "text": "\n".join(lines)})
-        return None
+        pending = self._interactions.register_form(
+            self.external_id, keys=tuple(f.key for f in prompt.fields)
+        )
+        try:
+            await self._post(
+                {"type": "message", "attachments": [form_prompt_card(prompt, pending.id)]}
+            )
+        except Exception:
+            logger.warning("Failed to post a Teams form prompt", exc_info=True)
+            self._interactions.cancel(pending.id)
+            return None
+
+        answer = await _await_answer(pending.future, prompt.timeout_seconds)
+        if answer is None:
+            self._interactions.cancel(pending.id)
+        return answer
 
     async def prompt_url(self, title: str, url: str, *, notify: Mention | None = None) -> bool:
         await self._post({"type": "message", "text": f"**{title}**\n{url}"})
         return False
 
     async def offer_interrupt(self, on_stop: Callable[[], Awaitable[None]]) -> TeamsInterruptHandle:
-        """Hand back an inert handle until an action can be routed to it.
+        """Put a Stop control on the session card.
 
-        No Stop control is rendered. An ``Action.Execute`` that nothing answers
-        shows the user an error when they press it, which is worse than the
-        absence of a button.
+        The card is where it belongs: Discord re-posts its Stop button to keep
+        it in view because messages scroll away from it, and here the card is
+        the one message that is already being kept current.
         """
-        return TeamsInterruptHandle(on_stop)
+        pending = self._interactions.register_stop(self.external_id, on_stop)
+        self._stop_action_id = pending.id
+        await self._repaint()
+        return TeamsInterruptHandle(self, pending.id)
 
     # -- management --------------------------------------------------------
 
@@ -284,6 +331,7 @@ class TeamsSurface:
             title=self._card_title,
             status=self._status,
             activities=tuple(self._activities),
+            stop_action_id=self._stop_action_id,
         )
         body = {"type": "message", "attachments": [card.to_attachment()]}
         if self._card_id is None:
@@ -411,22 +459,47 @@ class TeamsTextStream:
 
 
 class TeamsInterruptHandle:
-    """The Stop control's placeholder until an action can be routed to it."""
+    """The Stop control on the session card."""
 
-    def __init__(self, on_stop: Callable[[], Awaitable[None]]) -> None:
-        self._on_stop = on_stop
+    def __init__(self, surface: TeamsSurface, action_id: str) -> None:
+        self._surface = surface
+        self._action_id = action_id
         self._disabled = False
 
     async def bump(self) -> None:
-        """No-op: the card stays in place, so there is nothing to move."""
+        """No-op. Discord re-posts its Stop button because messages scroll
+        away from it; the card is already the message being kept current."""
 
     async def disable(self) -> None:
-        self._disabled = True
+        """Take the control off the card and stop honouring its id.
 
-    async def fire(self) -> None:
-        """Run the stop callback. The seam the invoke handler will use."""
-        if not self._disabled:
-            await self._on_stop()
+        Idempotent: the session-end path and the user pressing Stop can both
+        reach it, and a Stop that still worked afterwards would interrupt
+        whatever ran next.
+        """
+        if self._disabled:
+            return
+        self._disabled = True
+        self._surface._interactions.cancel(self._action_id)
+        if self._surface._stop_action_id == self._action_id:
+            self._surface._stop_action_id = None
+            await self._surface._repaint()
+
+
+async def _await_answer(future: asyncio.Future[Any], timeout: float | None) -> Any:
+    """Wait for an answer, treating a timeout as no answer.
+
+    ``shield`` keeps the future usable if this wait is cancelled: the prompt
+    is still live on screen, and a cancelled *wait* is not a cancelled prompt.
+    """
+    try:
+        return await asyncio.wait_for(asyncio.shield(future), timeout)
+    except (TimeoutError, asyncio.CancelledError):
+        return None
+
+
+def _fallback(default: str | None) -> tuple[str, ...] | None:
+    return (default,) if default is not None else None
 
 
 def _render_notice(notice: Notice) -> str:

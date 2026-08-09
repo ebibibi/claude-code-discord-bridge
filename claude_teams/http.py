@@ -21,6 +21,7 @@ from .auth import InboundTokenVerifier
 from .config import TeamsConfig
 from .connector import BotConnector
 from .endpoint import MessageHandler, TeamsEndpoint
+from .interactions import InteractionRegistry
 from .jwks import OpenIdKeyStore
 from .token import OutboundTokenProvider
 
@@ -87,6 +88,7 @@ def build_endpoint(
     session: ClientSession,
     *,
     on_message: MessageHandler | None = None,
+    interactions: InteractionRegistry | None = None,
 ) -> TeamsEndpoint:
     """Assemble a ready-to-mount endpoint from configuration.
 
@@ -118,4 +120,5 @@ def build_endpoint(
         connector=connector,
         path=config.endpoint_path,
         on_message=on_message,
+        interactions=interactions,
     )
