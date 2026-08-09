@@ -97,8 +97,8 @@ class TestDeveloperUrlDefaults:
         # on a field nobody deploying internally has an answer for.
         manifest = build_manifest(make())
         assert manifest["developer"]["websiteUrl"] == "https://relay.example.com"
-        assert manifest["developer"]["privacyUrl"].startswith("https://relay.example.com")
-        assert manifest["developer"]["termsOfUseUrl"].startswith("https://relay.example.com")
+        assert manifest["developer"]["privacyUrl"] == "https://relay.example.com/privacy"
+        assert manifest["developer"]["termsOfUseUrl"] == "https://relay.example.com/terms"
 
     def test_explicit_urls_win(self) -> None:
         manifest = build_manifest(make(privacy_url="https://example.org/privacy"))
