@@ -26,6 +26,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from .commands import default_menu
 from .config import TeamsConfig
 from .icons import color_icon_png, outline_icon_png
 
@@ -43,15 +44,11 @@ MAX_FULL_NAME = 100
 MAX_SHORT_DESCRIPTION = 80
 MAX_FULL_DESCRIPTION = 4000
 
-#: Suggested message text shown in the bot's command menu. Teams has no slash
-#: commands for bots — picking an entry only pre-fills the compose box — so
-#: these are advertisements for the text router, not a command surface.
-_COMMANDS: list[dict[str, str]] = [
-    {"title": "help", "description": "Show what this bot can do"},
-    {"title": "sessions", "description": "List the sessions running right now"},
-    {"title": "model", "description": "Switch the model for this conversation"},
-    {"title": "stop", "description": "Interrupt the session in this conversation"},
-]
+# The command menu is generated from :mod:`claude_teams.commands` rather than
+# written here. Teams has no slash commands for bots — picking an entry only
+# pre-fills the compose box — so these are advertisements for the text router,
+# and an advertisement the router does not answer is the failure mode worth
+# designing out.
 
 
 def _checked(value: str, limit: int, field_name: str) -> str:
@@ -60,12 +57,20 @@ def _checked(value: str, limit: int, field_name: str) -> str:
     return value
 
 
-def build_manifest(config: TeamsConfig) -> dict[str, Any]:
+def build_manifest(
+    config: TeamsConfig, *, commands: list[dict[str, str]] | None = None
+) -> dict[str, Any]:
     """Build the manifest document for *config*.
+
+    Args:
+        commands: The command menu. Defaults to what a deployment registering
+            the standard commands answers; pass ``router.menu()`` to advertise
+            exactly what a custom router handles.
 
     Raises:
         ValueError: if a field exceeds the length Teams allows.
     """
+    menu = default_menu() if commands is None else commands
     site = f"https://{config.public_host}"
     return {
         "$schema": _SCHEMA,
@@ -94,9 +99,7 @@ def build_manifest(config: TeamsConfig) -> dict[str, Any]:
                 "scopes": ["personal", "team", "groupChat"],
                 "supportsFiles": True,
                 "isNotificationOnly": False,
-                "commandLists": [
-                    {"scopes": ["personal", "team", "groupChat"], "commands": _COMMANDS}
-                ],
+                "commandLists": [{"scopes": ["personal", "team", "groupChat"], "commands": menu}],
             }
         ],
         "permissions": ["identity", "messageTeamMembers"],
@@ -128,6 +131,7 @@ def write_app_package(
     *,
     color_icon: Path | None = None,
     outline_icon: Path | None = None,
+    commands: list[dict[str, str]] | None = None,
 ) -> Path:
     """Write the installable ``.zip`` for *config* and return its path.
 
@@ -136,7 +140,7 @@ def write_app_package(
         color_icon: 192x192 PNG. Generated as a flat placeholder when omitted.
         outline_icon: 32x32 white-on-transparent PNG. Likewise.
     """
-    manifest = build_manifest(config)
+    manifest = build_manifest(config, commands=commands)
     color = color_icon.read_bytes() if color_icon else color_icon_png()
     outline = outline_icon.read_bytes() if outline_icon else outline_icon_png()
 

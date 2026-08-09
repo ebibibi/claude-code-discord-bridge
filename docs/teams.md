@@ -194,6 +194,32 @@ scroll away from it; here the card is already the one message being kept
 current. Disabling it takes the control off the card *and* stops honouring its
 id, so a late press cannot interrupt whatever runs next.
 
+## Commands and mentions
+
+Teams has **no slash commands for bots**. The manifest's `commandLists` only
+pre-fills the compose box, so what arrives is an ordinary message whose text
+starts with a slash — which makes `claude_teams/commands.py` the whole command
+surface rather than a convenience.
+
+Only *registered* names are commands. `/tmp/build.log is missing` is a sentence
+about a path, and a router that parsed first and dispatched later would swallow
+it; here an unrecognised name simply is not a command and the text reaches the
+session unchanged.
+
+The menu Teams shows and the commands this process answers come from **one
+list**, so a documented command that does nothing cannot happen. Pass
+`router.menu()` to `build_manifest()` to advertise exactly what a custom router
+handles.
+
+In a channel a message addressed to the bot arrives as `<at>Relay</at> fix the
+parser`, with the mention repeated in an `entities` array. Both parts are used
+differently: the entities decide *whether the bot was addressed* — matched on
+id, because display names are neither unique nor stable — and the markup is
+stripped before the model sees the text. Leaving the tag in would make every
+channel prompt start with something the session has to learn to ignore, and
+would put `/model opus` somewhere no parser will find it. `raw_text` keeps what
+Teams delivered; `clean_text` is what the model should see.
+
 ## How a Teams conversation becomes a ccdb session
 
 Teams conversation ids are strings (`19:...@thread.tacv2;messageid=...`), and

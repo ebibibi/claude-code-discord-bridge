@@ -30,15 +30,19 @@ the conformance gap is pinned by name in ``tests/test_teams_conformance.py``.
 from __future__ import annotations
 
 from .capabilities import TEAMS_CAPABILITIES
+from .commands import CommandRouter
 from .config import TeamsConfig
 from .conversation import ConversationRef
+from .files import FileTransferRegistry
 from .interactions import InteractionRegistry
 from .surface import TEAMS_FRONTEND, TeamsSurface
 
 __all__ = [
     "TEAMS_CAPABILITIES",
     "TEAMS_FRONTEND",
+    "CommandRouter",
     "ConversationRef",
+    "FileTransferRegistry",
     "InteractionRegistry",
     "TeamsConfig",
     "TeamsSurface",
