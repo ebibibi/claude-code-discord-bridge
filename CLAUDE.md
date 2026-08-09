@@ -261,6 +261,17 @@ claude_discord/          # Installable Python package
     ingest_manifest.py   # Reconciles attachments_manifest against delivered files
   utils/
     logger.py            # Logging setup
+claude_teams/            # Microsoft Teams frontend (optional extra: [teams])
+  capabilities.py        # The Teams column of SurfaceCapabilities — the shipped one, imported by the conformance tests
+  config.py              # TeamsConfig — validates the identity/addressing whose mistakes Teams reports as silence
+  manifest.py            # App package generator (RSC + SSO declared); icons.py writes placeholder PNGs with no dependency
+  auth.py                # Inbound Bot Framework token verification — algorithms pinned, serviceUrl bound to the body
+  jwks.py                # Signing keys: refresh on unknown kid, rate-limited because that trigger is public
+  token.py               # Outbound client-credentials token, cached and refreshed before it expires
+  activity.py            # InboundActivity — the fields a reply needs, parsed once
+  connector.py           # Posting a reply back to the serviceUrl the activity named
+  endpoint.py            # The aiohttp route. Nothing is done before the token check; 5xx is never the answer after acceptance
+  http.py                # The only file that knows about aiohttp — everything else takes its transport as a callable
 tests/                   # pytest test suite
 examples/
   ebibot/                # Real-world example: personal bot with custom Cogs

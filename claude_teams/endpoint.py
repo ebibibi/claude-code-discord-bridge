@@ -1,0 +1,150 @@
+"""The HTTPS endpoint Teams delivers activities to.
+
+This is the first part of ccdb that is reachable from the open internet, and
+what sits behind it starts coding-agent sessions with a shell. So the shape of
+this handler is driven less by what Teams sends than by what an unauthenticated
+caller must not be able to cause:
+
+* **Nothing before the token check.** The body is not parsed, and no work is
+  scheduled, until :mod:`claude_teams.auth` has approved the request. The one
+  exception is reading ``serviceUrl``, which the verifier itself needs — done
+  under a size limit, and used for nothing else if verification fails.
+* **A size limit that applies to strangers.** Reading an arbitrary body into
+  memory to discover it was junk is the cheapest denial of service available.
+* **4xx and 5xx are not interchangeable.** Teams redelivers on 5xx. A downstream
+  failure that answers 500 turns one user message into a retry loop that
+  processes it again and again, so failures after acceptance are logged and
+  answered 200.
+
+Why aiohttp and not the framework the design sketch named
+--------------------------------------------------------
+ccdb already runs an aiohttp server in this process (``ext/api_server.py``).
+Adding a second HTTP framework to serve one route would mean two servers, two
+sets of middleware and two lifecycles inside one bot, and buy nothing: what
+this handler needs is a route and a request body. The deviation is deliberate
+and its cost is one import, not an architecture.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any, Protocol
+
+from aiohttp import web
+
+from .activity import InboundActivity, parse_activity
+from .auth import TokenError
+from .config import DEFAULT_ENDPOINT_PATH
+
+__all__ = ["TeamsEndpoint"]
+
+logger = logging.getLogger(__name__)
+
+#: Largest inbound body accepted. Teams activities are small; the cap exists
+#: for everyone who is not Teams.
+DEFAULT_MAX_BODY_BYTES = 512 * 1024
+
+MessageHandler = Callable[[InboundActivity], Awaitable[None]]
+
+
+class Verifier(Protocol):
+    async def verify(
+        self, authorization: str | None, *, service_url: str | None
+    ) -> dict[str, Any]: ...
+
+
+class Connector(Protocol):
+    async def send_text(self, activity: InboundActivity, text: str) -> Any: ...
+
+
+class TeamsEndpoint:
+    """Receives Bot Framework activities and dispatches them."""
+
+    def __init__(
+        self,
+        app_id: str,
+        verifier: Verifier,
+        connector: Connector,
+        *,
+        path: str = DEFAULT_ENDPOINT_PATH,
+        on_message: MessageHandler | None = None,
+        max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+    ) -> None:
+        """
+        Args:
+            on_message: What to do with an inbound message. Defaults to an
+                echo, which is what makes this skeleton provable end to end
+                before a surface exists. The session frontend replaces it.
+        """
+        self.app_id = app_id
+        self.path = path
+        self._verifier = verifier
+        self._connector = connector
+        self._on_message = on_message or self._echo
+        self._max_body_bytes = max_body_bytes
+
+    def add_routes(self, app: web.Application) -> None:
+        """Register this endpoint on an existing aiohttp application."""
+        app.router.add_post(self.path, self.handle)
+
+    async def handle(self, request: web.Request) -> web.Response:
+        try:
+            payload = await self._read_body(request)
+        except _BodyTooLargeError:
+            return web.json_response({"error": "payload too large"}, status=413)
+        except _BadBodyError:
+            return web.json_response({"error": "invalid request"}, status=400)
+
+        service_url = payload.get("serviceUrl") if isinstance(payload, dict) else None
+        try:
+            await self._verifier.verify(
+                request.headers.get("Authorization"),
+                service_url=service_url if isinstance(service_url, str) else None,
+            )
+        except TokenError as exc:
+            # The reason is worth having locally and worth withholding from the
+            # caller, who may be probing.
+            logger.warning("Rejected inbound Teams activity: %s", exc)
+            return web.json_response({"error": "unauthorized"}, status=401)
+
+        try:
+            activity = parse_activity(payload)
+        except ValueError as exc:
+            logger.warning("Malformed Teams activity: %s", exc)
+            return web.json_response({"error": "invalid activity"}, status=400)
+
+        if activity.is_message and not activity.is_from(self.app_id):
+            try:
+                await self._on_message(activity)
+            except Exception:
+                # Accepted and mishandled. Answering 5xx here would have Teams
+                # redeliver it, so the user's message would be processed again
+                # on every retry.
+                logger.exception("Teams message handler failed")
+
+        return web.json_response({"status": "ok"})
+
+    async def _read_body(self, request: web.Request) -> Any:
+        declared = request.content_length
+        if declared is not None and declared > self._max_body_bytes:
+            raise _BodyTooLargeError
+        raw = await request.content.read(self._max_body_bytes + 1)
+        if len(raw) > self._max_body_bytes:
+            raise _BodyTooLargeError
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise _BadBodyError from exc
+
+    async def _echo(self, activity: InboundActivity) -> None:
+        await self._connector.send_text(activity, f"echo: {activity.text}")
+
+
+class _BodyTooLargeError(Exception):
+    pass
+
+
+class _BadBodyError(Exception):
+    pass
