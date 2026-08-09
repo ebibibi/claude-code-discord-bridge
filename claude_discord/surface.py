@@ -255,6 +255,18 @@ class DiscordSurface:
         return str(self._thread.id)
 
     @property
+    def native_thread(self) -> discord.Thread | discord.TextChannel:
+        """The Discord object behind this surface.
+
+        An escape hatch for the flows that are still Discord-only — chiefly
+        AskUserQuestion, whose views are persisted and restored across a bot
+        restart. Everything expressible in the protocol should use the protocol;
+        this exists so the remainder does not have to smuggle a raw thread
+        alongside the surface.
+        """
+        return self._thread
+
+    @property
     def capabilities(self) -> SurfaceCapabilities:
         return DISCORD_CAPABILITIES
 

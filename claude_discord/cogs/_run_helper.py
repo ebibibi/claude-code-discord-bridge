@@ -140,7 +140,9 @@ async def _build_system_context(config: RunConfig) -> str | None:
     if config.lounge_repo is not None:
         try:
             recent = await config.lounge_repo.get_recent(limit=10)
-            lounge_context = build_lounge_prompt(recent, current_thread_id=config.thread.id)
+            lounge_context = build_lounge_prompt(
+                recent, current_thread_id=config.surface.thread_key
+            )
             parts.append(lounge_context)
             logger.debug("Lounge context built (%d recent message(s))", len(recent))
         except Exception:
@@ -148,19 +150,22 @@ async def _build_system_context(config: RunConfig) -> str | None:
 
     # Layer 1 + 2: Register session and build concurrency notice.
     if config.registry is not None:
-        config.registry.register(config.thread.id, config.prompt[:100], config.runner.working_dir)
-        others = config.registry.list_others(config.thread.id)
-        notice = config.registry.build_concurrency_notice(config.thread.id)
+        config.registry.register(
+            config.surface.thread_key, config.prompt[:100], config.runner.working_dir
+        )
+        others = config.registry.list_others(config.surface.thread_key)
+        notice = config.registry.build_concurrency_notice(config.surface.thread_key)
         parts.append(notice)
         logger.info(
             "Concurrency notice built for thread %d (%d other active session(s), dir=%s)",
-            config.thread.id,
+            config.surface.thread_key,
             len(others),
             config.runner.working_dir or "(default)",
         )
     else:
         logger.debug(
-            "No session registry — concurrency notice skipped for thread %d", config.thread.id
+            "No session registry — concurrency notice skipped for thread %d",
+            config.surface.thread_key,
         )
 
     # File delivery marker: always injected so Claude knows the per-thread
@@ -169,7 +174,7 @@ async def _build_system_context(config: RunConfig) -> str | None:
     from .event_processor import _attachment_marker_name
 
     wd = config.runner.working_dir or "your current working directory"
-    marker = _attachment_marker_name(config.thread.id)
+    marker = _attachment_marker_name(config.surface.thread_key)
     parts.append(
         "## File Delivery\n"
         "When you need to send files to Discord, use your Bash tool to append "
@@ -186,7 +191,7 @@ async def _build_system_context(config: RunConfig) -> str | None:
     # Post-compact guardrail: prevent auto-execution of "pending tasks" from summary.
     if config.post_compact_rerun:
         parts.append(_POST_COMPACT_GUARDRAIL)
-        logger.info("Post-compact guardrail injected for thread %d", config.thread.id)
+        logger.info("Post-compact guardrail injected for thread %d", config.surface.thread_key)
 
     return "\n\n".join(parts) if parts else None
 
@@ -204,12 +209,12 @@ async def _cleanup_session_worktree(config: RunConfig) -> None:
     try:
         result = await asyncio.to_thread(
             config.worktree_manager.cleanup_for_thread,
-            config.thread.id,
+            config.surface.thread_key,
         )
         if result.removed:
             logger.info(
                 "Cleaned up session worktree for thread %d: %s",
-                config.thread.id,
+                config.surface.thread_key,
                 result.path,
             )
         elif result.reason == "worktree directory does not exist":
@@ -218,20 +223,28 @@ async def _cleanup_session_worktree(config: RunConfig) -> None:
         else:
             logger.warning(
                 "Could not clean up worktree for thread %d (%s): %s",
-                config.thread.id,
+                config.surface.thread_key,
                 result.path,
                 result.reason,
             )
             # Notify the Discord thread if there are uncommitted changes
             if "uncommitted changes" in result.reason:
-                with contextlib.suppress(discord.HTTPException):
-                    await config.thread.send(
-                        f"⚠️ **Worktree not cleaned up** — `{result.path}` has uncommitted "
-                        f"changes. Please commit or stash them, then run:\n"
-                        f"```\ngit worktree remove {result.path}\n```"
+                with contextlib.suppress(Exception):
+                    await config.surface.send_notice(
+                        Notice(
+                            level=NoticeLevel.WARNING,
+                            title="Worktree not cleaned up",
+                            body=(
+                                f"`{result.path}` has uncommitted changes. Please commit or "
+                                f"stash them, then run:\n```\ngit worktree remove "
+                                f"{result.path}\n```"
+                            ),
+                        )
                     )
     except Exception:
-        logger.exception("Unexpected error during worktree cleanup for thread %d", config.thread.id)
+        logger.exception(
+            "Unexpected error during worktree cleanup for thread %d", config.surface.thread_key
+        )
 
 
 async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
@@ -245,7 +258,7 @@ async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
     if repo is None:
         logger.warning(
             "ScheduleWakeup requested in thread %d but scheduler is disabled — ignoring",
-            config.thread.id,
+            config.surface.thread_key,
         )
         return
 
@@ -260,8 +273,8 @@ async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
         prompt = _AUTONOMOUS_LOOP_PROMPT
     reason = str(wakeup.get("reason") or "").strip()
 
-    name = f"wakeup-thread-{config.thread.id}"
-    channel_id = getattr(config.thread, "parent_id", None) or config.thread.id
+    name = f"wakeup-thread-{config.surface.thread_key}"
+    channel_id = getattr(config.thread, "parent_id", None) or config.surface.thread_key
 
     try:
         # Replace any previous wakeup for this thread — last call wins.
@@ -273,21 +286,23 @@ async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
             channel_id=channel_id,
             working_dir=getattr(config.runner, "working_dir", None),
             run_immediately=False,
-            thread_id=config.thread.id,
+            thread_id=config.surface.thread_key,
             one_shot=True,
         )
     except Exception:
-        logger.exception("Failed to schedule wakeup task for thread %d", config.thread.id)
-        with contextlib.suppress(discord.HTTPException):
-            await config.thread.send("-# ⚠️ Wakeup could not be scheduled (scheduler error)")
+        logger.exception("Failed to schedule wakeup task for thread %d", config.surface.thread_key)
+        with contextlib.suppress(Exception):
+            await config.surface.send_notice(
+                Notice(level=NoticeLevel.WARNING, body="Wakeup could not be scheduled")
+            )
         return
 
     label = f"⏰ Wakeup scheduled in {delay}s"
     if reason:
         label += f" — {reason}"
-    logger.info("Wakeup scheduled for thread %d in %ds", config.thread.id, delay)
+    logger.info("Wakeup scheduled for thread %d in %ds", config.surface.thread_key, delay)
     with contextlib.suppress(discord.HTTPException):
-        await config.thread.send(f"-# {label}")
+        await config.surface.send_notice(Notice(level=NoticeLevel.SUBTLE, body=label))
 
 
 async def _get_pr_completion_prompt(
@@ -389,10 +404,15 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
     # --- Session slot limiter (global semaphore) ---
     sem = _global_semaphore
     if sem is not None and sem.locked():
-        with contextlib.suppress(discord.HTTPException):
-            await config.thread.send(
-                f"\u23f3 Waiting for a free session slot\u2026 "
-                f"({_max_concurrent} max sessions running)"
+        with contextlib.suppress(Exception):
+            await config.surface.send_notice(
+                Notice(
+                    level=NoticeLevel.SUBTLE,
+                    body=(
+                        f"\u23f3 Waiting for a free session slot\u2026 "
+                        f"({_max_concurrent} max sessions running)"
+                    ),
+                )
             )
     if sem is not None:
         await sem.acquire()
@@ -403,11 +423,15 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
                 continue
             await processor.process(event)
     except Exception as exc:
-        logger.exception("Error running Claude CLI for thread %d", config.thread.id)
+        logger.exception("Error running Claude CLI for thread %d", config.surface.thread_key)
         with contextlib.suppress(Exception):
             detail = f"{type(exc).__name__}: {exc}"
-            await config.thread.send(
-                embed=error_embed(f"An unexpected error occurred.\n```\n{detail}\n```")
+            await config.surface.send_notice(
+                Notice(
+                    level=NoticeLevel.ERROR,
+                    title="Error",
+                    body=f"An unexpected error occurred.\n```\n{detail}\n```",
+                )
             )
         if config.status:
             with contextlib.suppress(Exception):
@@ -419,7 +443,7 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
             sem.release()
         await processor.finalize()
         if config.registry is not None:
-            config.registry.unregister(config.thread.id)
+            config.registry.unregister(config.surface.thread_key)
         if config.worktree_manager is not None:
             await _cleanup_session_worktree(config)
 
@@ -495,7 +519,7 @@ async def _emit_result_sink(config: RunConfig, text: str | None, error: str | No
     try:
         await config.result_sink(text, error)
     except Exception:
-        logger.exception("result_sink callback failed for thread %d", config.thread.id)
+        logger.exception("result_sink callback failed for thread %d", config.surface.thread_key)
 
 
 async def run_claude_in_thread(

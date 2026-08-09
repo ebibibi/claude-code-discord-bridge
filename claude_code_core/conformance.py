@@ -59,10 +59,11 @@ from .frontend import (
     Notice,
     NoticeLevel,
     OutboundFile,
+    SessionFrontend,
     StatusKind,
 )
 
-__all__ = ["ConformanceReport", "check_surface"]
+__all__ = ["ConformanceReport", "check_frontend", "check_surface"]
 
 
 @dataclass
@@ -344,4 +345,104 @@ _CHECKS: list[tuple[str, Callable[[ConversationSurface], Awaitable[None]]]] = [
     ("all files are delivered", _check_all_files_are_delivered),
     ("empty file list is a no-op", _check_empty_file_list_is_a_noop),
     ("rename never raises", _check_rename_never_raises),
+]
+
+
+# ---------------------------------------------------------------------------
+# The whole frontend
+# ---------------------------------------------------------------------------
+#
+# ``check_surface`` covers one conversation. This covers the object that hands
+# them out — the seam a scheduler, a webhook or the REST API uses to reach a
+# conversation without knowing which platform it lives on. The obligations are
+# few but easy to get subtly wrong, and each one is something a caller silently
+# depends on:
+#
+#   * a conversation resolves to the same key it was created with, or the
+#     scheduler's follow-up posts land in a different thread than the one the
+#     session ran in;
+#   * an unknown key returns None rather than raising, because "that thread was
+#     deleted" is ordinary and must not take a scheduler loop down;
+#   * every surface handed out declares this frontend's name, so a persisted
+#     ThreadKey can be traced back to the platform that minted it.
+
+FrontendFactory = Callable[[], Awaitable[SessionFrontend]]
+
+
+async def check_frontend(make_frontend: FrontendFactory, *, parent_id: str) -> ConformanceReport:
+    """Run every contract check against frontends produced by *make_frontend*.
+
+    Args:
+        make_frontend: Async callable returning a ready frontend, called once
+            per check so leftovers cannot leak between them.
+        parent_id: A channel/team the frontend may create conversations under.
+
+    Returns:
+        A report. ``report.ok`` is the verdict; ``report.summary()`` explains.
+    """
+    report = ConformanceReport()
+    for name, check in _FRONTEND_CHECKS:
+        try:
+            frontend = await make_frontend()
+            await check(frontend, parent_id)
+        except AssertionError as exc:
+            report.failures.append(f"{name}: {exc}")
+        except Exception as exc:  # noqa: BLE001 — an unexpected raise is also a failure
+            report.failures.append(f"{name}: raised {type(exc).__name__}: {exc}")
+        else:
+            report.passed.append(name)
+    return report
+
+
+async def _check_frontend_is_named(frontend: SessionFrontend, parent_id: str) -> None:
+    assert frontend.name, "SessionFrontend.name must not be empty"
+
+
+async def _check_created_conversation_resolves(frontend: SessionFrontend, parent_id: str) -> None:
+    created = await frontend.create_surface(parent_id=parent_id, title="conformance")
+    resolved = await frontend.resolve_surface(created.thread_key)
+    assert resolved is not None, "a conversation just created did not resolve"
+    assert resolved.thread_key == created.thread_key, (
+        f"resolve_surface returned key {resolved.thread_key}, expected {created.thread_key}"
+    )
+
+
+async def _check_surfaces_carry_the_frontend_name(
+    frontend: SessionFrontend, parent_id: str
+) -> None:
+    created = await frontend.create_surface(parent_id=parent_id, title="conformance")
+    assert created.frontend == frontend.name, (
+        f"surface reports frontend {created.frontend!r}, "
+        f"but it came from {frontend.name!r} — a persisted ThreadKey could not be traced back"
+    )
+
+
+async def _check_unknown_key_is_none_not_an_error(
+    frontend: SessionFrontend, parent_id: str
+) -> None:
+    """A deleted thread is ordinary. It must not take the caller down."""
+    missing = await frontend.resolve_surface(_UNUSED_THREAD_KEY)
+    assert missing is None, f"resolve_surface invented a surface for an unknown key: {missing!r}"
+
+
+async def _check_two_conversations_do_not_share_a_key(
+    frontend: SessionFrontend, parent_id: str
+) -> None:
+    first = await frontend.create_surface(parent_id=parent_id, title="conformance one")
+    second = await frontend.create_surface(parent_id=parent_id, title="conformance two")
+    assert first.thread_key != second.thread_key, (
+        "two conversations were given the same ThreadKey — sessions would overwrite each other"
+    )
+
+
+#: A key no frontend should ever have minted. Large enough to sit outside any
+#: real Discord snowflake yet inside SQLite's signed 64-bit range.
+_UNUSED_THREAD_KEY = 4_000_000_000_000_000_001
+
+_FRONTEND_CHECKS: list[tuple[str, Callable[[SessionFrontend, str], Awaitable[None]]]] = [
+    ("frontend is named", _check_frontend_is_named),
+    ("a created conversation resolves", _check_created_conversation_resolves),
+    ("surfaces carry the frontend name", _check_surfaces_carry_the_frontend_name),
+    ("unknown key resolves to None", _check_unknown_key_is_none_not_an_error),
+    ("two conversations do not share a key", _check_two_conversations_do_not_share_a_key),
 ]
