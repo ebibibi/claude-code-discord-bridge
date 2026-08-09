@@ -1135,6 +1135,31 @@ curl -X POST http://localhost:8080/api/tasks \
 
 ---
 
+## Microsoft Teams (in progress)
+
+Teams is being added as a **sibling** frontend, not a port. `claude_discord` and
+`claude_teams` each implement the vocabulary in `claude_code_core.frontend`,
+neither imports the other, and the same conformance contract runs against both —
+which is what stops "the Teams side is missing something" from being found by a
+user months later.
+
+```bash
+uv add "claude-code-discord-bridge[teams]"
+python -m claude_teams manifest --out dist/teams-app.zip
+```
+
+What exists today: configuration and validation, the app package generator
+(resource-specific consent and SSO included), inbound Bot Framework token
+verification, and an echo endpoint that proves a message reaches this process
+and gets answered. The surface that turns an inbound message into a session is
+next.
+
+Unlike Discord, Teams needs a **public HTTPS endpoint**, and coding-agent
+sessions sit behind it. See [docs/teams.md](docs/teams.md) for the setup and for
+what that endpoint refuses to do.
+
+---
+
 ## Architecture
 
 ```

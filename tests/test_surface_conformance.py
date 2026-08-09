@@ -13,7 +13,9 @@ implementation is written against it. So Slack's real numbers are checked
 against the model here even though no Slack frontend exists yet.
 
 Capability figures below are from vendor documentation, cited inline. They are
-test data, not configuration — the real presets live with each frontend.
+test data, not configuration — the real presets live with each frontend, and
+Teams' is now imported from :mod:`claude_teams.capabilities` rather than
+restated here. A preset a test owns only proves the test is self-consistent.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from claude_code_core.frontend import (
     SurfaceCapabilities,
 )
 from claude_code_core.memory_surface import MemorySurface
+from claude_teams.capabilities import TEAMS_CAPABILITIES
 
 # --- Capability presets under test -----------------------------------------
 # Discord: 2,000 chars/message; bot reactions; no hourly edit budget.
@@ -47,23 +50,9 @@ DISCORD = SurfaceCapabilities(
     max_files_per_message=10,
     monospace_width=55,
 )
-# Teams: ~100 KB/message (80 KB recommended); no bot reaction API; 1,800
-# operations per hour per conversation.
-# https://learn.microsoft.com/microsoftteams/platform/bots/how-to/rate-limit
-TEAMS = SurfaceCapabilities(
-    max_message_chars=80_000,
-    supports_reactions=False,
-    supports_message_edit=True,
-    supports_message_delete=True,
-    supports_slash_commands=False,
-    supports_pinned_dashboard=False,
-    supports_thread_rename=False,
-    live_update_budget_per_hour=1800,
-    stream_min_interval=1.0,
-    max_files_per_message=1,
-    file_delivery="link",
-    monospace_width=100,
-)
+# Teams: the shipped preset, not a copy of it. If the frontend's own numbers
+# ever stop satisfying the contract, that is the failure worth having.
+TEAMS = TEAMS_CAPABILITIES
 # Slack: 4,000 chars recommended per message; bots may add reactions;
 # chat.postMessage is limited to ~1 message per second per channel with no
 # hourly cap. https://docs.slack.dev/apis/web-api/rate-limits
