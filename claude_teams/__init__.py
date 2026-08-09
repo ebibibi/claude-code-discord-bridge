@@ -34,6 +34,7 @@ from .commands import CommandRouter
 from .config import TeamsConfig
 from .conversation import ConversationRef
 from .files import FileTransferRegistry
+from .frontend import TeamsFrontend
 from .interactions import InteractionRegistry
 from .surface import TEAMS_FRONTEND, TeamsSurface
 
@@ -45,5 +46,6 @@ __all__ = [
     "FileTransferRegistry",
     "InteractionRegistry",
     "TeamsConfig",
+    "TeamsFrontend",
     "TeamsSurface",
 ]
