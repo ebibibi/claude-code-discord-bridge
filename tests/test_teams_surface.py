@@ -311,31 +311,46 @@ class TestFilesAreNotClaimed:
         assert connector.sent == []
 
 
-class TestPromptsAreVisibleButUnanswerable:
-    async def test_a_choice_prompt_is_shown_and_returns_unanswered(self) -> None:
-        # Returning a *choice* would be the dangerous failure: the caller
-        # cannot tell "the user allowed it" from "the surface invented allow".
+class TestPromptsPostAnAnswerableCard:
+    async def test_a_choice_prompt_posts_a_card_with_an_action_per_choice(self) -> None:
         connector = RecordingConnector()
         s = build(connector)
-        answer = await s.prompt_choice(
-            ChoicePrompt(
-                question="Run it?",
-                choices=(Choice(value="allow", label="Allow"), Choice(value="deny", label="Deny")),
-                default_on_timeout="deny",
+        task = asyncio.create_task(
+            s.prompt_choice(
+                ChoicePrompt(
+                    question="Run it?",
+                    choices=(
+                        Choice(value="allow", label="Allow"),
+                        Choice(value="deny", label="Deny"),
+                    ),
+                    default_on_timeout="deny",
+                )
             )
         )
-        assert answer is None
-        assert "Run it?" in connector.texts[0]
-        assert "allow" in connector.texts[0]
+        await asyncio.sleep(0)
+        card = connector.cards[0]["attachments"][0]["content"]
+        assert [a["title"] for a in card["actions"]] == ["Allow", "Deny"]
 
-    async def test_a_form_prompt_is_shown_and_returns_unanswered(self) -> None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    async def test_a_form_prompt_posts_an_input_per_field(self) -> None:
         connector = RecordingConnector()
         s = build(connector)
-        answer = await s.prompt_form(
-            FormPrompt(title="Details", fields=(FormField(key="name", label="Name", kind="text"),))
+        task = asyncio.create_task(
+            s.prompt_form(
+                FormPrompt(
+                    title="Details",
+                    fields=(FormField(key="name", label="Name", kind="text"),),
+                )
+            )
         )
-        assert answer is None
-        assert "Name" in connector.texts[0]
+        await asyncio.sleep(0)
+        card = connector.cards[0]["attachments"][0]["content"]
+        assert any(b.get("id") == "name" for b in card["body"])
+
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     async def test_prompt_url_reports_that_it_was_not_confirmed(self) -> None:
         connector = RecordingConnector()
@@ -345,26 +360,42 @@ class TestPromptsAreVisibleButUnanswerable:
 
 
 class TestInterrupt:
-    async def test_the_handle_is_inert_but_wired(self) -> None:
-        stopped: list[bool] = []
-
+    async def test_stop_appears_on_the_card_and_disabling_removes_it(self) -> None:
         async def on_stop() -> None:
-            stopped.append(True)
+            return None
 
         connector = RecordingConnector()
         s = build(connector)
         handle = await s.offer_interrupt(on_stop)
-        await handle.bump()
-        assert connector.sent == [], "no control is offered until an action can be routed"
 
-        await handle.fire()
-        assert stopped == [True], "the seam the invoke handler will use has to work"
+        card = connector.cards[0]["attachments"][0]["content"]
+        assert [a["title"] for a in card["actions"]] == ["Stop"]
+
+        await handle.disable()
+        await s.close()
+        assert not connector.updated[-1][1]["attachments"][0]["content"].get("actions")
+
+    async def test_disabling_twice_is_harmless_and_stops_honouring_the_id(self) -> None:
+        # The session-end path and the user pressing Stop both reach disable().
+        # A Stop that still worked afterwards would interrupt whatever ran next.
+        fired: list[int] = []
+
+        async def on_stop() -> None:
+            fired.append(1)
+
+        connector = RecordingConnector()
+        s = build(connector)
+        handle = await s.offer_interrupt(on_stop)
+        action_id = connector.cards[0]["attachments"][0]["content"]["actions"][0]["data"][
+            "ccdb_prompt"
+        ]
 
         await handle.disable()
         await handle.disable()
-        stopped.clear()
-        await handle.fire()
-        assert stopped == [], "a disabled handle must not still stop the session"
+        assert not s.interactions.resolve(s.external_id, {"ccdb_prompt": action_id})
+        await asyncio.sleep(0)
+        assert fired == []
+        await s.close()
 
 
 class TestTranscript:

@@ -24,9 +24,27 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from claude_code_core.frontend import StatusKind
+from claude_code_core.frontend import ChoicePrompt, FormField, FormPrompt, StatusKind
 
-__all__ = ["ActivityLine", "MAX_CARD_BYTES", "SessionCard"]
+from .interactions import CHOICE_VALUE_KEY, FREE_TEXT_KEY, PROMPT_ID_KEY
+
+__all__ = [
+    "ACTION_VERB",
+    "ActivityLine",
+    "MAX_CARD_BYTES",
+    "SessionCard",
+    "choice_prompt_card",
+    "form_prompt_card",
+]
+
+#: Every ccdb action uses one verb. Routing is by prompt id, which is what the
+#: registry validates; the verb only tells Teams this is a Universal Action so
+#: the press arrives as an ``adaptiveCard/action`` invoke it expects an inline
+#: answer to.
+ACTION_VERB = "ccdb.action"
+
+#: Above this many choices, buttons stop being usable and become a dropdown.
+MAX_CHOICE_BUTTONS = 5
 
 ADAPTIVE_CARD_CONTENT_TYPE = "application/vnd.microsoft.card.adaptive"
 ADAPTIVE_CARD_SCHEMA = "http://adaptivecards.io/schemas/adaptive-card.json"
@@ -101,6 +119,10 @@ class SessionCard:
     activities: tuple[ActivityLine, ...] = field(default_factory=tuple)
     footer: str | None = None
     max_activities: int = DEFAULT_MAX_ACTIVITIES
+    #: When set, the card carries a Stop control carrying this id. Left unset
+    #: no action is rendered at all: a control nothing routes shows the user an
+    #: error when they press it, which is worse than its absence.
+    stop_action_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.title:
@@ -120,31 +142,146 @@ class SessionCard:
         if self.footer:
             blocks.append(_text(_clip(self.footer, MAX_DETAIL_CHARS), subtle=True, small=True))
 
-        attachment = _attachment(blocks)
+        actions = (
+            [_execute("Stop", {PROMPT_ID_KEY: self.stop_action_id}, style="destructive")]
+            if self.stop_action_id
+            else []
+        )
+        attachment = _attachment(blocks, actions)
         # Belt and braces: the per-field clipping above is what normally keeps
         # a card small, but a caller can hand over more activities than
         # expected, and a card Teams refuses is a card that stops updating
         # without saying so.
         while len(json.dumps(attachment).encode()) > MAX_CARD_BYTES and len(blocks) > 1:
             del blocks[1]
-            attachment = _attachment(blocks)
+            attachment = _attachment(blocks, actions)
         return attachment
 
 
-def _attachment(blocks: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "contentType": ADAPTIVE_CARD_CONTENT_TYPE,
-        "content": {
-            "$schema": ADAPTIVE_CARD_SCHEMA,
-            "type": "AdaptiveCard",
-            # 1.5 is what Teams renders today. No actions are declared yet:
-            # an Action.Execute that nothing routes shows the user an error
-            # when they press it, which is worse than no control at all. The
-            # Stop control arrives with the invoke handler that can answer it.
-            "version": "1.5",
-            "body": list(blocks),
-        },
+def choice_prompt_card(prompt: ChoicePrompt, prompt_id: str) -> dict[str, Any]:
+    """Render a :class:`ChoicePrompt` as an answerable card.
+
+    A short list of choices becomes one button each, because a permission
+    request answered in one press is the difference between a session that
+    flows and one that nags. Longer or multi-select lists become a dropdown —
+    a row of fifteen buttons is unusable, and Teams wraps them badly.
+
+    Every action carries the prompt id and the chosen *value*. Neither is
+    trusted on the way back: :class:`~claude_teams.interactions.InteractionRegistry`
+    checks the conversation and that the value was actually offered.
+    """
+    blocks: list[dict[str, Any]] = []
+    if prompt.header:
+        blocks.append(_text(_clip(prompt.header, MAX_TITLE_CHARS), weight="Bolder"))
+    blocks.append(_text(prompt.question))
+
+    actions: list[dict[str, Any]] = []
+    as_dropdown = prompt.multi_select or len(prompt.choices) > MAX_CHOICE_BUTTONS
+    if prompt.choices and as_dropdown:
+        blocks.append(
+            {
+                "type": "Input.ChoiceSet",
+                "id": CHOICE_VALUE_KEY,
+                "isMultiSelect": prompt.multi_select,
+                "style": "compact",
+                "choices": [
+                    {"title": _clip(c.label, MAX_DETAIL_CHARS), "value": c.value}
+                    for c in prompt.choices
+                ],
+            }
+        )
+    if prompt.allow_free_text:
+        blocks.append(
+            {
+                "type": "Input.Text",
+                "id": FREE_TEXT_KEY,
+                "placeholder": "Or type an answer",
+                "isMultiline": False,
+            }
+        )
+    if prompt.choices and not as_dropdown:
+        actions.extend(
+            _execute(
+                _clip(c.label, MAX_DETAIL_CHARS),
+                {PROMPT_ID_KEY: prompt_id, CHOICE_VALUE_KEY: c.value},
+                style=_ACTION_STYLE.get(c.style),
+            )
+            for c in prompt.choices
+        )
+    else:
+        actions.append(_execute("Submit", {PROMPT_ID_KEY: prompt_id}))
+    return _attachment(blocks, actions)
+
+
+def form_prompt_card(prompt: FormPrompt, prompt_id: str) -> dict[str, Any]:
+    """Render a :class:`FormPrompt` as a card with one input per field.
+
+    A card submit merges *every* input into the payload, so the ids here are
+    the field keys and the registry returns only the keys it declared —
+    anything else on the card, or added to the payload, is dropped.
+    """
+    blocks: list[dict[str, Any]] = [_text(_clip(prompt.title, MAX_TITLE_CHARS), weight="Bolder")]
+    if prompt.description:
+        blocks.append(_text(prompt.description))
+    for field_spec in prompt.fields:
+        blocks.append(_text(_field_label(field_spec), subtle=True, small=True))
+        blocks.append(_input(field_spec))
+    return _attachment(
+        blocks, [_execute(prompt.submit_label or "Submit", {PROMPT_ID_KEY: prompt_id})]
+    )
+
+
+def _field_label(field_spec: FormField) -> str:
+    return f"{field_spec.label} *" if field_spec.required else field_spec.label
+
+
+def _input(field_spec: FormField) -> dict[str, Any]:
+    common: dict[str, Any] = {"id": field_spec.key}
+    if field_spec.placeholder:
+        common["placeholder"] = field_spec.placeholder
+    if field_spec.kind == "toggle":
+        return {"type": "Input.Toggle", "title": field_spec.label, **common}
+    if field_spec.kind == "number":
+        return {"type": "Input.Number", **common}
+    if field_spec.kind == "choice":
+        return {
+            "type": "Input.ChoiceSet",
+            "style": "compact",
+            "choices": [
+                {"title": _clip(c.label, MAX_DETAIL_CHARS), "value": c.value}
+                for c in field_spec.choices
+            ],
+            **common,
+        }
+    return {"type": "Input.Text", "isMultiline": field_spec.kind == "multiline", **common}
+
+
+def _execute(title: str, data: dict[str, Any], *, style: str | None = None) -> dict[str, Any]:
+    action: dict[str, Any] = {
+        "type": "Action.Execute",
+        "title": title,
+        "verb": ACTION_VERB,
+        "data": data,
     }
+    if style:
+        action["style"] = style
+    return action
+
+
+_ACTION_STYLE: dict[str, str] = {"positive": "positive", "destructive": "destructive"}
+
+
+def _attachment(blocks: list[dict[str, Any]], actions: list[dict[str, Any]]) -> dict[str, Any]:
+    content: dict[str, Any] = {
+        "$schema": ADAPTIVE_CARD_SCHEMA,
+        "type": "AdaptiveCard",
+        # 1.5 is what Teams renders today.
+        "version": "1.5",
+        "body": list(blocks),
+    }
+    if actions:
+        content["actions"] = list(actions)
+    return {"contentType": ADAPTIVE_CARD_CONTENT_TYPE, "content": content}
 
 
 def _text(

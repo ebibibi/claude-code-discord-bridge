@@ -1,10 +1,10 @@
 # The Microsoft Teams frontend
 
-> Status: the output side works. Configuration, the app package, inbound
-> authentication, the endpoint and `TeamsSurface` are here, and the shared
-> conformance contract runs against the surface that ships. What is not here
-> yet: routing a card action back (so prompts are visible but unanswerable) and
-> transferring file contents. Both say so rather than pretending.
+> Status: output and interaction work. Configuration, the app package, inbound
+> authentication, the endpoint, `TeamsSurface` and answerable prompts are here,
+> and the shared conformance contract runs against the surface that ships. What
+> is not here yet: transferring file contents. It says so rather than
+> pretending.
 
 Discord and Teams are siblings, not a base and a port. `claude_discord` and
 `claude_teams` each implement the vocabulary in `claude_code_core.frontend`,
@@ -125,17 +125,51 @@ therefore reports **17 passed, 1 failed**, and that one failure is pinned by
 name in `tests/test_teams_conformance.py` — closing the gap is what makes the
 test pass, and nothing else does.
 
-**Prompts are visible but unanswerable.** `prompt_choice` and `prompt_form`
-post the question and return `None`, which the contract defines as
-"unanswered" and which callers already handle — a tool-permission request
-applies its `default_on_timeout`, which denies. Returning a *choice* instead
-would be the dangerous failure: the caller cannot distinguish "the user
-allowed it" from "the surface invented allow".
+## Answering a prompt
 
-**No Stop button is rendered.** An `Action.Execute` that nothing routes shows
-the user an error when they press it, which is worse than the absence of a
-control. `offer_interrupt` returns a working handle with the seam the invoke
-handler will use.
+`prompt_choice` posts an Adaptive Card — a button per choice for a short list,
+a dropdown for a long or multi-select one — and waits. `prompt_form` posts one
+input per field. Pressing a control sends an **invoke**, which is not like a
+message: Teams reads the HTTP response body as the answer, so a bare 200 shows
+the user an error even though the press worked.
+
+Everything in that payload is untrusted. The Bot Connector proves a Teams user
+sent it; it proves nothing about the payload matching a card this process
+posted. `claude_teams/interactions.py` applies four rules, in the order they
+matter:
+
+1. **The conversation must match.** Without this, someone who learns a prompt
+   id can approve a tool run in a conversation they are not part of — and the
+   session sees an ordinary approval with nothing odd about it.
+2. **The value must have been offered**, or a crafted action returns any string
+   as "what the user chose".
+3. **Once only**, so a replay cannot answer the next prompt and a re-pressed
+   Stop cannot interrupt the session after this one.
+4. **Only declared keys come back from a form.** A card submit merges every
+   input into the payload.
+
+Refusals all look the same to the caller: one sentence, no reason. "Wrong
+conversation" and "expired" are both free information to whoever is probing.
+
+### Failing closed
+
+When the clock runs out, `prompt_choice` applies the prompt's
+`default_on_timeout` — for a tool-permission request, the denying choice. The
+same fallback runs when the card could not be **posted at all**, because a
+prompt nobody could see must not be safer to ignore than one nobody answered.
+
+The shared contract deliberately does not check this: from outside, a surface
+that denies on timeout and one that invents a denial return the same value.
+`tests/test_teams_prompts.py::TestFailClosed` is where it is proved, by
+withholding the answer.
+
+### Stop
+
+`offer_interrupt` puts a Stop control on the session card rather than posting a
+button. Discord re-posts its Stop button to keep it in view because messages
+scroll away from it; here the card is already the one message being kept
+current. Disabling it takes the control off the card *and* stops honouring its
+id, so a late press cannot interrupt whatever runs next.
 
 ## How a Teams conversation becomes a ccdb session
 

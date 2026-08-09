@@ -272,7 +272,8 @@ claude_teams/            # Microsoft Teams frontend (optional extra: [teams])
   conversation.py        # ConversationRef — the Bot Connector host + conversation a message belongs to
   connector.py           # Posting and editing activities on the serviceUrl the conversation named
   surface.py             # TeamsSurface — the ConversationSurface. One card, not a column of embeds
-  cards.py               # The session card, bounded to the 28 KB payload Teams accepts
+  cards.py               # The session card and the prompt cards, bounded to the 28 KB payload Teams accepts
+  interactions.py        # Who may answer a prompt and with what — every field of an inbound action is untrusted
   pacer.py               # Coalescing per target, one update per interval — the 1,800/hour budget
   endpoint.py            # The aiohttp route. Nothing is done before the token check; 5xx is never the answer after acceptance
   http.py                # The only file that knows about aiohttp — everything else takes its transport as a callable
