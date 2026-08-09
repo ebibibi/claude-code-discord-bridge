@@ -26,6 +26,10 @@ class ConversationRef:
     #: The activity a reply should thread under. Optional because a scheduled
     #: post is not a reply to anything.
     reply_to_id: str | None = None
+    #: ``personal``, ``channel`` or ``groupChat``. Not decoration: a file
+    #: consent card only works in a personal chat, so a surface that does not
+    #: know which kind it is in cannot tell whether it can deliver a file.
+    conversation_type: str | None = None
 
     def __post_init__(self) -> None:
         if not self.service_url:
@@ -48,6 +52,12 @@ class ConversationRef:
             f"{self.conversation_id}/activities/{activity_id}"
         )
 
+    @property
+    def is_personal(self) -> bool:
+        return self.conversation_type == "personal"
+
     def without_reply(self) -> ConversationRef:
         """The same conversation, addressed as a fresh post rather than a reply."""
-        return ConversationRef(self.service_url, self.conversation_id)
+        return ConversationRef(
+            self.service_url, self.conversation_id, conversation_type=self.conversation_type
+        )

@@ -42,6 +42,12 @@ from .activity import INVOKE, InboundActivity, parse_activity
 from .auth import TokenError
 from .config import DEFAULT_ENDPOINT_PATH
 from .conversation import ConversationRef
+from .files import (
+    FILE_CONSENT_INVOKE,
+    FileTransferRegistry,
+    file_info_card,
+    is_microsoft_upload_url,
+)
 from .interactions import InteractionRegistry
 
 __all__ = ["TeamsEndpoint"]
@@ -63,6 +69,9 @@ _INVOKE_MESSAGE_TYPE = "application/vnd.microsoft.activity.message"
 #: information to whoever is probing.
 _REFUSED_TEXT = "This prompt is no longer active."
 
+#: What the user sees when an accepted file could not be transferred.
+_UPLOAD_FAILED_TEXT = "That file could not be sent."
+
 MessageHandler = Callable[[InboundActivity], Awaitable[None]]
 
 
@@ -74,6 +83,8 @@ class Verifier(Protocol):
 
 class Connector(Protocol):
     async def send_text(self, ref: ConversationRef, text: str) -> Any: ...
+
+    async def send_activity(self, ref: ConversationRef, body: dict[str, Any]) -> Any: ...
 
 
 class TeamsEndpoint:
@@ -88,6 +99,8 @@ class TeamsEndpoint:
         path: str = DEFAULT_ENDPOINT_PATH,
         on_message: MessageHandler | None = None,
         interactions: InteractionRegistry | None = None,
+        files: FileTransferRegistry | None = None,
+        upload_bytes: Any | None = None,
         max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
     ) -> None:
         """
@@ -98,6 +111,12 @@ class TeamsEndpoint:
             interactions: Where prompts wait to be answered. One registry is
                 shared with every surface in the deployment, so a press has a
                 single place to be routed to.
+            files: Transfers offered and not yet accepted. Shared with the
+                surfaces for the same reason.
+            upload_bytes: ``async (url, content) -> None``. Without it an
+                accepted file is refused rather than half-transferred, because
+                a deployment that cannot upload should say so to the person
+                who just pressed Accept.
         """
         self.app_id = app_id
         self.path = path
@@ -105,11 +124,17 @@ class TeamsEndpoint:
         self._connector = connector
         self._on_message = on_message or self._echo
         self._interactions = interactions or InteractionRegistry()
+        self._files = files or FileTransferRegistry()
+        self._upload_bytes = upload_bytes
         self._max_body_bytes = max_body_bytes
 
     @property
     def interactions(self) -> InteractionRegistry:
         return self._interactions
+
+    @property
+    def files(self) -> FileTransferRegistry:
+        return self._files
 
     def add_routes(self, app: web.Application) -> None:
         """Register this endpoint on an existing aiohttp application."""
@@ -142,6 +167,8 @@ class TeamsEndpoint:
             return web.json_response({"error": "invalid activity"}, status=400)
 
         if activity.type == INVOKE:
+            if activity.raw.get("name") == FILE_CONSENT_INVOKE:
+                return await self._handle_file_consent(activity)
             return self._handle_invoke(activity)
 
         if activity.is_message and not activity.is_from(self.app_id):
@@ -175,6 +202,60 @@ class TeamsEndpoint:
             return _invoke_message("Recorded.")
         logger.info("A Teams card action did not match a live prompt")
         return _invoke_message(_REFUSED_TEXT)
+
+    async def _handle_file_consent(self, activity: InboundActivity) -> web.Response:
+        """Transfer a file the user just accepted.
+
+        The upload URL arrives in this payload, which makes it the one place
+        where something off the wire decides where the contents of a local
+        file are written. It is checked against the hosts Microsoft hands
+        upload sessions out on before a single byte moves — the invoke is
+        authenticated, so this is defence in depth, but it is the difference
+        between a file transfer and an exfiltration primitive if anything
+        upstream is ever wrong.
+        """
+        value = activity.raw.get("value")
+        value = value if isinstance(value, dict) else {}
+        action = value.get("action")
+
+        if action == "decline":
+            context = value.get("context")
+            if isinstance(context, dict):
+                claimed = self._files.claim(activity.conversation_id, context)
+                if claimed is not None:
+                    logger.info("The user declined a file transfer")
+            return _invoke_message("")
+
+        if action != "accept":
+            return _invoke_message("")
+
+        pending = self._files.claim(activity.conversation_id, value.get("context"))
+        if pending is None:
+            return _invoke_message(_REFUSED_TEXT)
+
+        upload_info = value.get("uploadInfo")
+        upload_info = upload_info if isinstance(upload_info, dict) else {}
+        upload_url = upload_info.get("uploadUrl")
+        if not is_microsoft_upload_url(upload_url):
+            logger.error("Refused to upload a file to a URL outside Microsoft's hosts")
+            return _invoke_message(_UPLOAD_FAILED_TEXT)
+        if self._upload_bytes is None:
+            logger.error("A file was accepted but this deployment has no upload transport")
+            return _invoke_message(_UPLOAD_FAILED_TEXT)
+
+        try:
+            await self._upload_bytes(upload_url, pending.content)
+            await self._connector.send_activity(
+                activity.ref.without_reply(),
+                {
+                    "type": "message",
+                    "attachments": [file_info_card(pending.display_name, upload_info)],
+                },
+            )
+        except Exception:
+            logger.exception("Failed to upload an accepted Teams file")
+            return _invoke_message(_UPLOAD_FAILED_TEXT)
+        return _invoke_message("")
 
     async def _read_body(self, request: web.Request) -> Any:
         declared = request.content_length

@@ -21,11 +21,19 @@ from .auth import InboundTokenVerifier
 from .config import TeamsConfig
 from .connector import BotConnector
 from .endpoint import MessageHandler, TeamsEndpoint
+from .files import FileTransferRegistry
 from .interactions import InteractionRegistry
 from .jwks import OpenIdKeyStore
 from .token import OutboundTokenProvider
 
-__all__ = ["build_endpoint", "form_poster", "json_fetcher", "json_poster", "json_putter"]
+__all__ = [
+    "build_endpoint",
+    "bytes_putter",
+    "form_poster",
+    "json_fetcher",
+    "json_poster",
+    "json_putter",
+]
 
 #: Applies to every outbound call this package makes. aiohttp stopped accepting
 #: a bare number here, and a request with no timeout at all is how a hung
@@ -83,12 +91,35 @@ def json_putter(session: ClientSession) -> Any:
     return put
 
 
+def bytes_putter(session: ClientSession) -> Any:
+    """PUT raw bytes to a one-time upload URL.
+
+    No Authorization header: the URL Teams hands back is itself the
+    credential, and attaching this deployment's token to a request aimed at a
+    host it did not choose would be exactly the wrong instinct.
+    """
+
+    async def put(url: str, content: bytes) -> None:
+        headers = {
+            "Content-Length": str(len(content)),
+            "Content-Range": f"bytes 0-{max(len(content) - 1, 0)}/{len(content)}",
+        }
+        async with session.put(
+            url, data=content, headers=headers, timeout=DEFAULT_TIMEOUT
+        ) as response:
+            if response.status >= 400:
+                raise RuntimeError(f"file upload returned {response.status}")
+
+    return put
+
+
 def build_endpoint(
     config: TeamsConfig,
     session: ClientSession,
     *,
     on_message: MessageHandler | None = None,
     interactions: InteractionRegistry | None = None,
+    files: FileTransferRegistry | None = None,
 ) -> TeamsEndpoint:
     """Assemble a ready-to-mount endpoint from configuration.
 
@@ -121,4 +152,6 @@ def build_endpoint(
         path=config.endpoint_path,
         on_message=on_message,
         interactions=interactions,
+        files=files,
+        upload_bytes=bytes_putter(session),
     )

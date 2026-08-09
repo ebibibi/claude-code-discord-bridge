@@ -1,10 +1,9 @@
 # The Microsoft Teams frontend
 
-> Status: output and interaction work. Configuration, the app package, inbound
-> authentication, the endpoint, `TeamsSurface` and answerable prompts are here,
-> and the shared conformance contract runs against the surface that ships. What
-> is not here yet: transferring file contents. It says so rather than
-> pretending.
+> Status: output, interaction and files work in a personal chat. The shared
+> conformance contract runs against the surface that ships — **a personal chat
+> passes every check; a channel fails exactly one**, file delivery, and that is
+> pinned by name rather than skipped.
 
 Discord and Teams are siblings, not a base and a port. `claude_discord` and
 `claude_teams` each implement the vocabulary in `claude_code_core.frontend`,
@@ -115,15 +114,39 @@ messages, and collapsing them onto one key would have a card repaint silently
 swallow a pending stream edit — the answer would stop growing with nothing to
 see.
 
-## What is deliberately not claimed yet
+## Files
 
-**File contents are not transferred.** A bot cannot attach a file to a Teams
-channel message; real delivery is an upload plus a consent card the user
-accepts. `deliver_files` names the files and says the contents were not sent,
-so a session cannot believe its output was handed over. The conformance run
-therefore reports **17 passed, 1 failed**, and that one failure is pinned by
-name in `tests/test_teams_conformance.py` — closing the gap is what makes the
-test pass, and nothing else does.
+A bot cannot attach a file to a Teams message. What it can do, in a **personal
+chat**, is offer one: `deliver_files` sends a consent card per file, and when
+the user accepts, Teams hands back a one-time upload URL to PUT the bytes to.
+A file that cannot be read, or is over the capability's size limit, is named
+and refused rather than silently dropped or truncated — a truncated file looks
+complete and is not.
+
+In a **channel** the files are named and the message says their contents were
+not sent. Consent cards are personal-scope only, and writing into a channel's
+folder is a Graph permission this deployment does not hold.
+
+That difference is why the conformance contract is run twice. A personal chat
+passes all 18 checks; a channel fails exactly one, and
+`tests/test_teams_conformance.py` asserts *which* one. The assertion breaks in
+both directions, so the gap cannot quietly widen or quietly close.
+
+### Where the bytes are allowed to go
+
+The accept invoke carries the upload URL, which makes it the one place
+something off the wire decides where the contents of a local file get written.
+The host is checked against the domains Microsoft hands upload sessions out on
+before a single byte moves, on the parsed **hostname** rather than by
+substring — `https://contoso.sharepoint.com@evil.example.com/` and
+`https://evil.example.com/?x=.sharepoint.com` both contain the suffix and
+neither is SharePoint.
+
+The invoke is authenticated, so this is defence in depth. It is also two lines,
+and it is the difference between a file transfer and an exfiltration primitive
+if anything upstream is ever wrong. No `Authorization` header is attached to
+the upload: the URL Teams returns is itself the credential, and sending this
+deployment's token to a host it did not choose is exactly the wrong instinct.
 
 ## Answering a prompt
 

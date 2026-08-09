@@ -1165,10 +1165,11 @@ unanswered permission request denies, and so does one whose card could not be
 posted — a prompt nobody could see must not be safer to ignore than one nobody
 answered.
 
-One thing is deliberately *not* claimed yet: file contents are not
-transferred. It says so in the message it posts, and the conformance run
-reports 17 passed / 1 failed with that gap pinned by name rather than
-skipped.
+Files reach a personal chat through a consent card and a one-time upload URL —
+whose host is checked against Microsoft's own domains before a byte moves. A
+channel is told plainly that it cannot receive files yet. The conformance
+contract runs twice because of that: a personal chat passes all 18 checks, a
+channel fails exactly one, and the test asserts which.
 
 Unlike Discord, Teams needs a **public HTTPS endpoint**, and coding-agent
 sessions sit behind it. See [docs/teams.md](docs/teams.md) for the setup and for

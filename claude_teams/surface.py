@@ -33,14 +33,14 @@ outside, a surface that denies on timeout and one that invents a denial are
 indistinguishable. ``TestFailClosed`` in ``tests/test_teams_prompts.py`` is
 where it is proved, by withholding the answer.
 
-What this surface deliberately does not claim
+Files, and the one place they still cannot go
 ---------------------------------------------
-``deliver_files`` names the files and says plainly that their contents have not
-been transferred. A bot cannot attach a file to a Teams channel message; real
-delivery is an upload plus a consent card, and it needs a file-transfer flow
-this surface does not have yet. Rather than let the conformance run report a
-green it has not earned, the gap is pinned by name in
-``tests/test_teams_conformance.py``.
+In a personal chat ``deliver_files`` offers each file with a consent card; the
+bytes move when the user accepts. In a channel it names the files and says
+their contents were **not** sent, because consent cards are personal-scope only
+and writing into a channel's folder is a Graph permission this does not have. A
+session believing its output was handed over is worse than one that knows it
+was not, so the difference is stated rather than smoothed over.
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 from claude_code_core.frontend import (
@@ -67,6 +68,7 @@ from claude_code_core.rendering import render_for
 from .capabilities import TEAMS_CAPABILITIES
 from .cards import ActivityLine, SessionCard, choice_prompt_card, form_prompt_card
 from .conversation import ConversationRef
+from .files import FileTransferRegistry, consent_card
 from .interactions import InteractionRegistry
 from .pacer import UpdatePacer
 
@@ -104,6 +106,7 @@ class TeamsSurface:
         capabilities: SurfaceCapabilities = TEAMS_CAPABILITIES,
         pacer: UpdatePacer | None = None,
         interactions: InteractionRegistry | None = None,
+        files: FileTransferRegistry | None = None,
     ) -> None:
         """
         Args:
@@ -125,6 +128,7 @@ class TeamsSurface:
         self._capabilities = capabilities
         self._pacer = pacer or UpdatePacer(capabilities.min_update_interval)
         self._interactions = interactions or InteractionRegistry()
+        self._files = files or FileTransferRegistry()
 
         self._card_title = title
         self._status: StatusKind | None = None
@@ -158,6 +162,10 @@ class TeamsSurface:
     def interactions(self) -> InteractionRegistry:
         return self._interactions
 
+    @property
+    def files(self) -> FileTransferRegistry:
+        return self._files
+
     # -- output ------------------------------------------------------------
 
     async def send_text(self, text: str) -> str | None:
@@ -180,23 +188,46 @@ class TeamsSurface:
         return await self._post({"type": "message", "text": rendered})
 
     async def deliver_files(self, files: Sequence[OutboundFile]) -> None:
-        """Name the files, and say that their contents have not been sent.
+        """Offer each file, or say why it could not be offered.
 
-        A bot cannot attach a file to a Teams channel message. Real delivery
-        is an upload plus a consent card the user accepts, which needs an
-        interaction this surface cannot route yet. Saying so is the point: a
-        silent no-op would leave a session believing its output was handed
-        over.
+        A personal chat gets a consent card per file — Teams hands back a
+        one-time upload URL when the user accepts, and the bytes move then. A
+        channel gets the list and a plain statement that the contents were not
+        sent: consent cards do not work there, and posting into a channel's
+        folder is a Graph permission this deployment does not hold.
         """
         if not files:
             return
+        if not self._ref.is_personal:
+            await self._report_undeliverable(files, "a Teams channel cannot receive files yet")
+            return
+
+        undeliverable: list[tuple[OutboundFile, str]] = []
+        for outbound in files:
+            content, problem = await _read(outbound, self._capabilities.max_file_bytes)
+            if content is None:
+                undeliverable.append((outbound, problem or "could not be read"))
+                continue
+            pending = self._files.offer(self.external_id, outbound.display_name, content)
+            pending.consent_activity_id = await self._post(
+                {"type": "message", "attachments": [consent_card(pending)]}
+            )
+        for outbound, reason in undeliverable:
+            await self._post(
+                {
+                    "type": "message",
+                    "text": f"**{outbound.display_name}** was not sent — {reason}.",
+                }
+            )
+
+    async def _report_undeliverable(self, files: Sequence[OutboundFile], reason: str) -> None:
         names = "\n".join(f"- {f.display_name}" for f in files)
         await self._post(
             {
                 "type": "message",
                 "text": (
-                    f"**{len(files)} file(s) produced.** File transfer is not available in "
-                    f"this Teams build yet, so the contents have **not** been sent:\n{names}"
+                    f"**{len(files)} file(s) produced.** Their contents were **not** sent — "
+                    f"{reason}:\n{names}"
                 ),
             }
         )
@@ -500,6 +531,28 @@ async def _await_answer(future: asyncio.Future[Any], timeout: float | None) -> A
 
 def _fallback(default: str | None) -> tuple[str, ...] | None:
     return (default,) if default is not None else None
+
+
+async def _read(outbound: OutboundFile, limit: int) -> tuple[bytes | None, str | None]:
+    """Load a file's bytes, refusing rather than truncating an oversized one.
+
+    Reading happens off the event loop: a session delivering a large artefact
+    would otherwise stall every other conversation in the process while the
+    disk works.
+    """
+    if outbound.blob is not None:
+        content = outbound.blob
+    else:
+        path = Path(outbound.path or "")
+        try:
+            content = await asyncio.to_thread(path.read_bytes)
+        except OSError as exc:
+            logger.warning("Could not read %s for delivery: %s", path, exc)
+            return None, "it could not be read from disk"
+    if len(content) > limit:
+        # Truncating would hand over a file that looks complete and is not.
+        return None, f"it is larger than the {limit // (1024 * 1024)} MB limit"
+    return content, None
 
 
 def _render_notice(notice: Notice) -> str:
