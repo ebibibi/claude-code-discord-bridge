@@ -33,7 +33,18 @@ def main(argv: list[str] | None = None) -> int:
     package.add_argument("--color-icon", type=Path, help="192x192 PNG (a placeholder is generated)")
     package.add_argument("--outline-icon", type=Path, help="32x32 white-on-transparent PNG")
 
+    run = sub.add_parser(
+        "serve", help="Run the echo endpoint (starts no sessions) for a first connectivity check"
+    )
+    run.add_argument("--host", default="127.0.0.1")
+    run.add_argument("--port", type=int, default=3978)
+
     args = parser.parse_args(argv)
+
+    if args.command == "serve":
+        from .serve import main as serve_main
+
+        return serve_main(["--host", args.host, "--port", str(args.port)])
 
     try:
         config = TeamsConfig.from_env(os.environ)

@@ -265,7 +265,8 @@ claude_teams/            # Microsoft Teams frontend (optional extra: [teams])
   capabilities.py        # The Teams column of SurfaceCapabilities — the shipped one, imported by the conformance tests
   config.py              # TeamsConfig — validates the identity/addressing whose mistakes Teams reports as silence
   manifest.py            # App package generator (RSC + SSO declared); icons.py writes placeholder PNGs with no dependency
-  auth.py                # Inbound Bot Framework token verification — algorithms pinned, serviceUrl bound to the body
+  auth.py                # Inbound token verification — algorithms pinned; the claim is `serviceurl`, lower case (measured)
+  serve.py               # `python -m claude_teams serve` — echo-only endpoint for first-contact verification
   jwks.py                # Signing keys: refresh on unknown kid, rate-limited because that trigger is public
   token.py               # Outbound client-credentials token, cached and refreshed before it expires
   activity.py            # InboundActivity — the fields a reply needs, parsed once
