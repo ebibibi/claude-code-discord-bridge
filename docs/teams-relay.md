@@ -91,6 +91,40 @@ The queue SAS URL is a credential in a URL: it never appears in a log line, an
 exception, or a `repr`. The failures raised here name the operation and the
 status code and nothing else.
 
+## Measured, on a real deployment
+
+Azure Container Apps in `japaneast`, 0.25 vCPU / 0.5 GiB, receiver only. Times
+are from the Teams transcript — user message to bot reply, end to end through
+Teams, the Bot Connector, the receiver, the queue, the poller at home, and back
+out to the Bot Connector.
+
+| | latency |
+|---|---|
+| home endpoint behind a Cloudflare tunnel (no relay) | 1.8 s |
+| **through the relay**, first message (outbound token not yet cached) | 2.1 s |
+| **through the relay**, steady state | **0.8 s / 1.1 s** |
+
+The relay is *faster* than the tunnel it replaced. The queue hop costs less
+than the tunnel did, and the receiver sits in the same region as the tenant.
+
+The receiver's own share, measured from the internet: **68 ms median** to
+verify and answer (8 samples, warm).
+
+### Cold start, and why `min-replicas` is 1
+
+Scale-to-zero is the wrong default here, and not for cost reasons. Teams gives
+the messaging endpoint a short budget, and a **card press is answered from the
+HTTP response body within seconds** — a cold start lands squarely inside that
+window, so the first press after an idle period would show the user an error
+even though everything worked.
+
+Running one replica always-on removes the variable entirely. Container Apps
+bills a running-but-idle replica at a reduced rate, and for a container that
+verifies a JWT and writes to a queue, 0.25 vCPU is generous.
+
+If you do run at zero, the failure is not "slow" — it is "the first person to
+press a button after lunch sees an error".
+
 ## Why not the Azure SDK
 
 Four HTTP calls — put, get, delete, and a `visibilitytimeout` that does the

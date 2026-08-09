@@ -62,9 +62,7 @@ from .frontend import (
     ThreadKey,
     derive_thread_key,
 )
-from .lounge_repo import LoungeMessage, LoungeRepository
 from .memory_surface import MemorySurface
-from .models import init_db
 
 # Parser
 from .parser import parse_line
@@ -77,7 +75,6 @@ from .rewind import TurnEntry, find_session_jsonl, parse_user_turns, truncate_js
 
 # Runner
 from .runner import ClaudeRunner
-from .session_repo import SessionRecord, SessionRepository, UsageStatsRepository
 
 # Types (all frontend-agnostic types)
 from .types import (
@@ -164,3 +161,41 @@ __all__ = [
     "parse_user_turns",
     "truncate_jsonl_at_line",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Lazily imported members
+# ---------------------------------------------------------------------------
+#
+# The database-backed repositories need ``aiosqlite``. Importing them here
+# meant that ``claude_code_core.frontend`` — a module of protocols and value
+# objects with no storage in it — could not be imported without a database
+# driver installed. That is not a theoretical tidiness point: the Teams relay
+# receiver runs on a public machine deliberately built with nothing but an HTTP
+# server and a JWT library, and it fell over on `import aiosqlite` at startup.
+#
+# PEP 562: these resolve on first attribute access, so
+# ``from claude_code_core import SessionRepository`` still works exactly as
+# before, and ``from claude_code_core.frontend import ...`` no longer drags a
+# storage layer in behind it.
+_LAZY: dict[str, str] = {
+    "LoungeMessage": ".lounge_repo",
+    "LoungeRepository": ".lounge_repo",
+    "init_db": ".models",
+    "SessionRecord": ".session_repo",
+    "SessionRepository": ".session_repo",
+    "UsageStatsRepository": ".session_repo",
+}
+
+
+def __getattr__(name: str):  # noqa: ANN202 — module-level PEP 562 hook
+    module_name = _LAZY.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    return getattr(import_module(module_name, __name__), name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
