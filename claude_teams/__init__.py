@@ -15,18 +15,28 @@ claude-code-discord-bridge[teams]``. Importing this package without them raises
 at import time with the install command, rather than at the first inbound
 request with a traceback nobody sees.
 
-What is here after PR8
-----------------------
-The skeleton: configuration, the real Teams capability numbers, an app-package
-generator, inbound token validation and an echo endpoint — enough to prove a
-message can reach this process from Teams and be answered. The
-:class:`~claude_code_core.frontend.ConversationSurface` implementation itself
-lands next.
+What is here
+------------
+Configuration, the real Teams capability numbers, an app-package generator,
+inbound token validation, an echo endpoint, and ``TeamsSurface`` — the
+:class:`~claude_code_core.frontend.ConversationSurface` implementation, which
+the shared conformance contract is run against. What is *not* here yet is
+interaction (card actions cannot be routed back) and file transfer; both are
+stated as such rather than faked, and the conformance gap is pinned by name in
+``tests/test_teams_conformance.py``.
 """
 
 from __future__ import annotations
 
 from .capabilities import TEAMS_CAPABILITIES
 from .config import TeamsConfig
+from .conversation import ConversationRef
+from .surface import TEAMS_FRONTEND, TeamsSurface
 
-__all__ = ["TEAMS_CAPABILITIES", "TeamsConfig"]
+__all__ = [
+    "TEAMS_CAPABILITIES",
+    "TEAMS_FRONTEND",
+    "ConversationRef",
+    "TeamsConfig",
+    "TeamsSurface",
+]
