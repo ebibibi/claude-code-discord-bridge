@@ -239,6 +239,7 @@ claude_discord/          # Installable Python package
     lounge_repo.py       # AI Lounge message CRUD
     resume_repo.py       # Startup resume CRUD (pending resumes)
     settings_repo.py     # Per-guild settings
+    frontend_thread_repo.py # ThreadKey → where the conversation lives
   discord_ui/
     status.py            # Emoji reaction status manager (debounced)
     chunker.py           # Discord's limits + shim over claude_code_core.rendering

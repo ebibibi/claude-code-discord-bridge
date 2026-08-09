@@ -34,6 +34,7 @@ from discord.ext import commands
 
 from claude_code_core.frontend import ThreadKey
 
+from .database.frontend_thread_repo import FrontendThreadRepository
 from .surface import DiscordSurface
 
 logger = logging.getLogger(__name__)
@@ -47,12 +48,20 @@ class DiscordFrontend:
     Args:
         bot: The connected bot. Conversations are resolved from its cache
             first and fetched from the API only when the cache misses.
+        ledger: Optional ``frontend_threads`` repository. Discord does not need
+            it to function — its snowflake is already the key — but every
+            conversation is recorded anyway, so a deployment that later gains a
+            second frontend has one table that answers "where does this key
+            live" for *all* of its conversations rather than half of them.
     """
 
     name = "discord"
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(
+        self, bot: commands.Bot, *, ledger: FrontendThreadRepository | None = None
+    ) -> None:
         self._bot = bot
+        self._ledger = ledger
 
     async def start(self) -> None:
         """A no-op: the bot's own lifecycle is owned by ``setup_bridge``.
@@ -79,8 +88,10 @@ class DiscordFrontend:
         if not isinstance(channel, discord.Thread | discord.TextChannel):
             # Categories, forums, voice channels and stage channels are not
             # places a session can hold a conversation. So is a deleted thread,
-            # which arrives here as None.
+            # which arrives here as None. Neither is recorded: a ledger entry
+            # for a thread that does not exist is worse than a missing one.
             return None
+        await self._record(channel)
         return DiscordSurface(channel)
 
     async def create_surface(self, *, parent_id: str, title: str) -> DiscordSurface:
@@ -107,4 +118,25 @@ class DiscordFrontend:
         # the channel view shows what the conversation is for.
         starter = await channel.send(title[:2000])
         thread = await starter.create_thread(name=title[:100])
+        await self._record(thread)
         return DiscordSurface(thread)
+
+    async def _record(self, channel: discord.Thread | discord.TextChannel) -> None:
+        """Note the conversation in the ledger. Never fatal.
+
+        Bookkeeping must not be able to kill a session: if the write fails the
+        conversation still works, and the next resolve will try again.
+        """
+        if self._ledger is None:
+            return
+        parent = getattr(channel, "parent_id", None)
+        try:
+            await self._ledger.register(
+                self.name,
+                str(channel.id),
+                parent_external_id=str(parent) if parent is not None else None,
+            )
+        except Exception:
+            logger.warning(
+                "Could not record conversation %s in the ledger", channel.id, exc_info=True
+            )

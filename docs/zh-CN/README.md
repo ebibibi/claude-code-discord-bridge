@@ -1101,6 +1101,7 @@ claude_discord/
     claims_repo.py         # 建议性资源占用 CRUD（受 TTL 约束）
     resume_repo.py         # 启动恢复 CRUD（跨 Bot 重启的待恢复项）
     settings_repo.py       # 每个 guild 的设置
+    frontend_thread_repo.py  # ThreadKey → 会话所在位置
     inbox_repo.py          # 线程收件箱 CRUD（THREAD_INBOX_ENABLED）
   discord_ui/
     status.py              # 表情反应管理器（防抖）

@@ -1185,6 +1185,7 @@ claude_discord/
     claims_repo.py         # アドバイザリなリソースクレーム CRUD（TTL 付き）
     resume_repo.py         # スタートアップリジューム CRUD（Bot 再起動をまたいだ保留リジューム）
     settings_repo.py       # ギルドごとの設定
+    frontend_thread_repo.py  # ThreadKey → 会話の実際の場所
     inbox_repo.py          # スレッドインボックス CRUD（THREAD_INBOX_ENABLED）
   discord_ui/
     status.py              # 絵文字リアクションステータスマネージャー（デバウンス付き）
