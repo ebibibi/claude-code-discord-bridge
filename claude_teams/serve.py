@@ -25,12 +25,14 @@ import sys
 
 from aiohttp import ClientSession, web
 
+from .auth import InboundTokenVerifier
 from .config import TeamsConfig
-from .http import build_endpoint
+from .http import build_endpoint, json_fetcher
+from .jwks import OpenIdKeyStore
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["serve"]
+__all__ = ["serve", "serve_relay"]
 
 #: Loopback by default. Anything reaching this process should have come
 #: through a tunnel or a proxy that terminated TLS and can be pointed
@@ -75,7 +77,8 @@ async def _healthz(_request: web.Request) -> web.Response:
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
-    parser = argparse.ArgumentParser(prog="python -m claude_teams serve")
+    parser = argparse.ArgumentParser(prog="python -m claude_teams")
+    parser.add_argument("mode", choices=("serve", "relay"), nargs="?", default="serve")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args(argv)
@@ -84,9 +87,52 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     )
     try:
+        run = serve_relay if args.mode == "relay" else serve
         with contextlib.suppress(KeyboardInterrupt):
-            asyncio.run(serve(args.host, args.port))
+            asyncio.run(run(args.host, args.port))
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+async def serve_relay(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
+    """Run the relay receiver: verify, enqueue, answer. Never reply.
+
+    This is what goes on the disposable machine. It holds the bot's public
+    application id and a credential for one queue, and nothing else — no client
+    secret, because it never speaks as the bot; no route to the session host,
+    because the host has no listening port.
+
+    Requires ``CCDB_TEAMS_QUEUE_URL``: an Azure Storage queue SAS URL. Treat
+    the whole string as a secret.
+    """
+    from .relay import RelayReceiver
+    from .relay.storage_queue import StorageQueue, aiohttp_request
+
+    config = TeamsConfig.from_env(os.environ)
+    queue_url = os.environ.get("CCDB_TEAMS_QUEUE_URL", "").strip()
+    if not queue_url:
+        raise ValueError("CCDB_TEAMS_QUEUE_URL is required to run the relay receiver")
+
+    async with ClientSession() as session:
+        verifier = InboundTokenVerifier(
+            app_id=config.app_id, key_store=OpenIdKeyStore(json_fetcher(session))
+        )
+        receiver = RelayReceiver(
+            verifier,
+            StorageQueue(queue_url, aiohttp_request(session)),
+            path=config.endpoint_path,
+        )
+        app = web.Application()
+        receiver.add_routes(app)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, host, port).start()
+        logger.info("Teams relay receiver listening on http://%s:%s%s", host, port, receiver.path)
+        logger.info("This process cannot reply to Teams and holds no client secret")
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await runner.cleanup()

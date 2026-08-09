@@ -39,12 +39,20 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--host", default="127.0.0.1")
     run.add_argument("--port", type=int, default=3978)
 
+    relay = sub.add_parser(
+        "relay",
+        help="Run the relay receiver: verify inbound activities and enqueue them. "
+        "Holds no client secret and cannot reply — this is what goes on the public machine.",
+    )
+    relay.add_argument("--host", default="0.0.0.0")  # noqa: S104 — a container's own interface
+    relay.add_argument("--port", type=int, default=8080)
+
     args = parser.parse_args(argv)
 
-    if args.command == "serve":
+    if args.command in ("serve", "relay"):
         from .serve import main as serve_main
 
-        return serve_main(["--host", args.host, "--port", str(args.port)])
+        return serve_main([args.command, "--host", args.host, "--port", str(args.port)])
 
     try:
         config = TeamsConfig.from_env(os.environ)
