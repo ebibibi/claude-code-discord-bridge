@@ -138,6 +138,16 @@ class RunConfig:
                 working_dir=getattr(self.runner, "working_dir", None),
                 interrupt_view=self.stop_view,
             )
+        elif self.thread is None:
+            # The reverse direction. A caller that passes only a surface still
+            # reaches code that is genuinely Discord-only (AskUserQuestion's
+            # restorable views, a thread's parent channel), and leaving this
+            # None made those blow up on the first scheduled run rather than at
+            # construction. On a non-Discord surface it stays None, which is
+            # correct: there is no Discord object to hand out.
+            native = getattr(self.surface, "native_thread", None)
+            if native is not None:
+                self.thread = native
 
     def with_prompt(self, prompt: str) -> RunConfig:
         """Return a new RunConfig with a different prompt (immutable copy)."""
