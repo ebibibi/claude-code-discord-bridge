@@ -470,6 +470,7 @@ Behind the scenes:
 - **Secret isolation** — Bot token stripped from subprocess environment
 - **User authorization** — `allowed_user_ids` restricts who can invoke Claude
 - **Log injection prevention** — User-provided API values are sanitized (newlines stripped) before writing to logs
+- **Local-model backend** (optional) — `/backend local` runs a thread against a model on your own hardware. ccdb owns a separate CLI home with the update check and analytics disabled, because a "local" run otherwise still contacts the vendor; it refuses to start if those settings are missing — see [docs/local-backend.md](docs/local-backend.md)
 - **Anonymization gateway** (optional) — Replaces organisation-identifying terms with stable aliases before the prompt reaches Claude or Codex, and restores them in the answer. A local model checks the result for replacement misses and, by default, blocks the send when it finds one. Off until you write a rules file — see [docs/anonymization.md](docs/anonymization.md)
 
 ---

@@ -52,8 +52,10 @@ class ConversationHistoryReader:
         if backend == "claude":
             path = self._find_claude_session(session_id)
             messages = self._read_claude(path) if path is not None else []
-        elif backend == "codex":
-            path = self._find_codex_session(session_id)
+        elif backend in ("codex", "local"):
+            # Same CLI, same transcript format — but local sessions live in the
+            # ccdb-owned CODEX_HOME, not the user's ~/.codex.
+            path = self._find_codex_session(session_id, local=backend == "local")
             messages = self._read_codex(path) if path is not None else []
         else:
             logger.warning("Cannot read transcript for unknown backend %r", backend)
@@ -67,8 +69,11 @@ class ConversationHistoryReader:
             return None
         return next(root.rglob(f"{session_id}.jsonl"), None)
 
-    def _find_codex_session(self, session_id: str) -> Path | None:
-        sessions = self._codex_home / "sessions"
+    def _find_codex_session(self, session_id: str, *, local: bool = False) -> Path | None:
+        from claude_code_core.local_backend import LocalModelConfig
+
+        home = LocalModelConfig.from_env().resolved_codex_home if local else self._codex_home
+        sessions = home / "sessions"
         if not sessions.is_dir():
             return None
         return next(sessions.rglob(f"*-{session_id}.jsonl"), None)

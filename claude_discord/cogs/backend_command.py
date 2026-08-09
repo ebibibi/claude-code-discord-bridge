@@ -46,6 +46,7 @@ SCOPE_GLOBAL = "global"
 VALID_EFFORTS: dict[str, frozenset[str]] = {
     "claude": frozenset({"low", "medium", "high", "max"}),
     "codex": VALID_CODEX_EFFORTS,
+    "local": VALID_CODEX_EFFORTS,  # same CLI, same levels
 }
 
 # Ordered effort levels per backend for the /effort autocomplete (frozensets are
@@ -53,6 +54,7 @@ VALID_EFFORTS: dict[str, frozenset[str]] = {
 EFFORT_ORDER: dict[str, list[str]] = {
     "claude": ["low", "medium", "high", "max"],
     "codex": ["minimal", "low", "medium", "high", "xhigh"],
+    "local": ["minimal", "low", "medium", "high", "xhigh"],
 }
 
 # Suggested model ids per backend for the /model autocomplete. The model field is
@@ -77,6 +79,11 @@ SUGGESTED_MODELS: dict[str, list[tuple[str, str]]] = {
         ("gpt-5.5", "GPT-5.5 (previous default)"),
         ("gpt-5.5-codex", "GPT-5.5 Codex"),
         ("o4-mini", "o4-mini (fast)"),
+    ],
+    # Whatever your local runtime has pulled. CCDB_LOCAL_MODEL sets the default.
+    "local": [
+        ("gpt-oss:120b", "gpt-oss 120B (tool use, needs real VRAM)"),
+        ("qwen3.5:35b", "Qwen3.5 35B"),
     ],
 }
 
@@ -215,7 +222,7 @@ class BackendCommandCog(commands.Cog):
             if resolved_scope == SCOPE_THREAD and target_thread_id is not None
             else "**globally**"
         )
-        emoji = "\U0001f300" if name == "codex" else "\U0001f916"
+        emoji = {"codex": "\U0001f300", "local": "\U0001f3e0"}.get(name, "\U0001f916")
         await interaction.response.send_message(
             f"{emoji} Backend set to `{name}` {scope_label}. Next session will use it.",
             ephemeral=False,

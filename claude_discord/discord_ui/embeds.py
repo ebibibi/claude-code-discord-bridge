@@ -23,10 +23,12 @@ AUTOCOMPACT_THRESHOLD = 83.5
 _BACKEND_TITLE: dict[str, str] = {
     "claude": "\U0001f916 Claude Code",  # robot face 🤖
     "codex": "\U0001f300 OpenAI Codex",  # cyclone 🌀
+    "local": "\U0001f3e0 Local model",  # house 🏠
 }
 _BACKEND_COLOR_START: dict[str, int] = {
     "claude": COLOR_INFO,  # Discord blurple
     "codex": 0x10A37F,  # OpenAI teal-green
+    "local": 0x6B8E23,  # olive — "stays on your hardware"
 }
 
 
