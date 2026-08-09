@@ -325,11 +325,11 @@ async def setup_bridge(
     from .frontend import DiscordFrontend
     from .stores import build_session_stores
 
+    stores = await build_session_stores(session_db_path)
+
     # The frontend seam. Built once and handed to everything that needs to
     # reach a conversation, so a Cog never has to call bot.get_channel itself.
-    frontend = DiscordFrontend(bot)
-
-    stores = await build_session_stores(session_db_path)
+    frontend = DiscordFrontend(bot, ledger=stores.frontend_threads)
     session_repo = stores.sessions
     settings_repo = stores.settings
     ask_repo = stores.asks

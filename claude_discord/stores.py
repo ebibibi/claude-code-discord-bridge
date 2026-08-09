@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from .database.ask_repo import PendingAskRepository
 from .database.claims_repo import ClaimRepository
+from .database.frontend_thread_repo import FrontendThreadRepository
 from .database.ingest_repo import IngestResultRepository
 from .database.lounge_repo import LoungeRepository
 from .database.models import init_db
@@ -46,6 +47,7 @@ class SessionStores:
     usage: UsageStatsRepository
     ingest: IngestResultRepository
     summaries: ThreadSummaryRepository
+    frontend_threads: FrontendThreadRepository
 
 
 async def build_session_stores(session_db_path: str) -> SessionStores:
@@ -66,6 +68,12 @@ async def build_session_stores(session_db_path: str) -> SessionStores:
     summaries = ThreadSummaryRepository(session_db_path)
     await summaries.init_db()
 
+    # Adopt every thread this deployment already has, so the ledger answers for
+    # all of its conversations rather than only the ones opened from now on.
+    # Idempotent: a no-op on every run after the first.
+    frontend_threads = FrontendThreadRepository(session_db_path)
+    await frontend_threads.backfill_discord()
+
     logger.info("Session DB initialized: %s", session_db_path)
     return SessionStores(
         db_path=session_db_path,
@@ -78,4 +86,5 @@ async def build_session_stores(session_db_path: str) -> SessionStores:
         usage=UsageStatsRepository(session_db_path),
         ingest=ingest,
         summaries=summaries,
+        frontend_threads=frontend_threads,
     )

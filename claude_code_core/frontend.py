@@ -54,7 +54,7 @@ production into a number you read before you loop.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Container, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
@@ -82,6 +82,7 @@ __all__ = [
     "SurfaceCapabilities",
     "TextStream",
     "ThreadKey",
+    "issue_thread_key",
     "derive_thread_key",
 ]
 
@@ -97,6 +98,9 @@ __all__ = [
 #: and a Discord session land in *one* ledger — which is the whole reason ccdb
 #: can notice that two live sessions are editing the same file.
 ThreadKey = int
+
+#: The one frontend whose conversation ids are already integers.
+DISCORD_FRONTEND = "discord"
 
 # Derived keys are pushed above this floor so they can never be mistaken for a
 # Discord snowflake, which is used verbatim as its own thread key. Snowflakes
@@ -132,6 +136,61 @@ def derive_thread_key(frontend: str, external_id: str) -> ThreadKey:
         digest_size=8,
     ).digest()
     return _DERIVED_KEY_FLOOR + (int.from_bytes(digest, "big") % _DERIVED_KEY_SPAN)
+
+
+#: How many times a collision is probed before giving up. A blake2b collision
+#: in a 2**63 space is already astronomically unlikely; fifty consecutive ones
+#: mean something is wrong with the caller, not with luck.
+_MAX_KEY_PROBES = 50
+
+
+def issue_thread_key(frontend: str, external_id: str, *, taken: Container[int]) -> ThreadKey:
+    """Mint the key this conversation will be known by, avoiding *taken* ones.
+
+    ``derive_thread_key`` answers "what key does this id hash to". This answers
+    the question a frontend actually has: "what key may I use for it". The
+    difference is collisions. ``ThreadKey`` is the primary key of the sessions
+    table, so two conversations sharing one does not raise — the second session
+    quietly overwrites the first, and a thread ends up showing somebody else's
+    history. Probing costs one extra row; sharing costs a conversation.
+
+    Discord is special-cased rather than hashed: its snowflake *is* the id every
+    Discord API call needs, so hashing it would produce a key nothing could be
+    posted to.
+
+    Args:
+        frontend: The platform name, e.g. ``"discord"`` or ``"teams"``.
+        external_id: The frontend's own conversation id.
+        taken: Keys already in use. Anything supporting ``in`` will do, so a
+            caller can pass a set, or a view backed by the database.
+
+    Raises:
+        ValueError: for an empty argument, a non-numeric Discord id, or if
+            fifty consecutive probes are all taken.
+    """
+    if not frontend:
+        raise ValueError("frontend must not be empty")
+    if not external_id:
+        raise ValueError("external_id must not be empty")
+
+    if frontend == DISCORD_FRONTEND:
+        try:
+            return int(external_id)
+        except ValueError as exc:
+            raise ValueError(
+                f"a discord conversation id must be a snowflake, got {external_id!r}"
+            ) from exc
+
+    candidate = derive_thread_key(frontend, external_id)
+    for probe in range(_MAX_KEY_PROBES):
+        if candidate not in taken:
+            return candidate
+        # Re-derive rather than increment: a linear walk would march a whole
+        # cluster of collided keys through the same occupied stretch.
+        candidate = derive_thread_key(frontend, f"{external_id}\x00{probe}")
+    raise ValueError(
+        f"could not find a free thread key for {frontend}:{external_id} in {_MAX_KEY_PROBES} probes"
+    )
 
 
 # ---------------------------------------------------------------------------

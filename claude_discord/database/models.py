@@ -97,6 +97,22 @@ CREATE TABLE IF NOT EXISTS resource_claims (
 );
 
 CREATE INDEX IF NOT EXISTS idx_resource_claims_thread ON resource_claims(thread_id);
+
+-- Where a ThreadKey actually lives. Every other table stores a conversation as
+-- a bare integer; for Discord that integer is the thread's snowflake and needs
+-- no translation, but a frontend whose ids are strings mints a surrogate here.
+-- A surrogate is a hash, and a hash does not run backwards — without this row
+-- a session could be looked up and still be unreplyable.
+CREATE TABLE IF NOT EXISTS frontend_threads (
+    thread_key INTEGER PRIMARY KEY,
+    frontend TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    parent_external_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(frontend, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_frontend_threads_frontend ON frontend_threads(frontend);
 """
 
 # Migrations for existing databases that lack new columns.
