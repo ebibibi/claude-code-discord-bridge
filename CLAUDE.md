@@ -42,6 +42,8 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 
 12. **Anonymization replaces by rule, inspects by model** (`claude_code_core/privacy/`): an optional gateway wraps any `SessionBackend` and swaps organisation-identifying terms for stable aliases before the prompt reaches the CLI, restoring them in the answer. The substitution is a rule table — never a model — because a model produces a different alias every run and an alias that changes cannot be restored. The local LLM's only job is to *report* proper nouns the rules missed. Reversing those two roles breaks the feature. Off until a rules file exists; a malformed rules file raises rather than silently degrading to "send the real names". See `docs/anonymization.md`.
 
+13. **A local backend is a measured claim, not a configured one** (`claude_code_core/local_backend.py`): `/backend local` runs the Codex CLI against a model on the user's own hardware. Pointing the CLI at a local endpoint is not sufficient — measured on codex-cli 0.145.0, a fully local, logged-out run still contacts `chatgpt.com` for the startup update check and analytics. ccdb therefore generates and owns a separate `CODEX_HOME` with both disabled, re-verifies those settings on every spawn, and refuses to start rather than run a "local" thread that phones home. The check is structural (works on Windows too), not an OS egress rule; re-measure after a CLI upgrade. See `docs/local-backend.md`.
+
 ### Why REST API over stdout markers for Claude→ccdb communication
 
 Alternative considered: Claude embeds `<!-- ccdb:schedule {...} -->` in response text; ccdb parses stdout.

@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 def _backend_name_from_runner(runner: object) -> str:
     """Best-effort mapping from runner class name to embed backend tag."""
     cls = type(runner).__name__
+    # LocalCodexRunner subclasses CodexRunner, so it has to be matched first.
+    if cls == "LocalCodexRunner":
+        return "local"
     if cls == "CodexRunner":
         return "codex"
     return "claude"
