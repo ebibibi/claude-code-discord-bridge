@@ -73,6 +73,10 @@ class TeamsConfig:
     privacy_url: str = ""
     terms_url: str = ""
     version: str = DEFAULT_VERSION
+    #: The Bot Connector host this tenant is served from. Optional, and worth
+    #: setting: without it a scheduled post into a conversation this process
+    #: has not heard from since starting has nowhere to go.
+    service_url: str = ""
     #: The Teams app id. Left unset it is derived from ``app_id`` — deriving
     #: rather than generating matters, because a random id would change on
     #: every build and every already-installed conversation would quietly stop
@@ -140,5 +144,6 @@ class TeamsConfig:
             privacy_url=optional("CCDB_TEAMS_PRIVACY_URL"),
             terms_url=optional("CCDB_TEAMS_TERMS_URL"),
             version=optional("CCDB_TEAMS_APP_VERSION", DEFAULT_VERSION),
+            service_url=optional("CCDB_TEAMS_SERVICE_URL"),
             manifest_id=optional("CCDB_TEAMS_MANIFEST_ID"),
         )

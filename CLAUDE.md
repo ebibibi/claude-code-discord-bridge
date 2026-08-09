@@ -272,6 +272,7 @@ claude_teams/            # Microsoft Teams frontend (optional extra: [teams])
   conversation.py        # ConversationRef — the Bot Connector host + conversation a message belongs to
   connector.py           # Posting and editing activities on the serviceUrl the conversation named
   surface.py             # TeamsSurface — the ConversationSurface. One card, not a column of embeds
+  frontend.py            # TeamsFrontend — resolve/create a conversation by key. Passes check_frontend
   cards.py               # The session card and the prompt cards, bounded to the 28 KB payload Teams accepts
   interactions.py        # Who may answer a prompt and with what — every field of an inbound action is untrusted
   files.py               # The consent handshake, and the host allowlist the file's bytes are checked against

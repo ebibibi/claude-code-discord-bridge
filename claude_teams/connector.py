@@ -63,6 +63,25 @@ class BotConnector:
             raise RuntimeError("this connector was built without a PUT transport")
         await self._put_json(ref.activity_url(activity_id), body, await self._headers())
 
+    async def create_conversation(self, service_url: str, parent_id: str, title: str) -> str | None:
+        """Start a new reply chain in a channel. Returns its conversation id.
+
+        This is what keeps ccdb's Thread=Session rule intact on a platform
+        whose threads are a property of a message rather than objects of their
+        own: the id Teams returns already encodes the root message, so every
+        later reply lands in the same chain.
+        """
+        response = await self._post_json(
+            f"{service_url.rstrip('/')}/v3/conversations",
+            {
+                "isGroup": True,
+                "channelData": {"channel": {"id": parent_id}},
+                "activity": {"type": "message", "text": title},
+            },
+            await self._headers(),
+        )
+        return _activity_id(response)
+
     async def _headers(self) -> dict[str, str]:
         token = await self._token_provider.token()
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
