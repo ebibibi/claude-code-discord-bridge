@@ -275,6 +275,8 @@ claude_teams/            # Microsoft Teams frontend (optional extra: [teams])
   cards.py               # The session card and the prompt cards, bounded to the 28 KB payload Teams accepts
   interactions.py        # Who may answer a prompt and with what — every field of an inbound action is untrusted
   files.py               # The consent handshake, and the host allowlist the file's bytes are checked against
+  commands.py            # The text command router — Teams has no slash commands, so this is the whole surface
+  mentions.py            # Who was addressed (by id, not name), and taking the <at> markup out of the prompt
   pacer.py               # Coalescing per target, one update per interval — the 1,800/hour budget
   endpoint.py            # The aiohttp route. Nothing is done before the token check; 5xx is never the answer after acceptance
   http.py                # The only file that knows about aiohttp — everything else takes its transport as a callable

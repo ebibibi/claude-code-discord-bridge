@@ -16,7 +16,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from claude_code_core.frontend import Mention
+
 from .conversation import ConversationRef
+from .mentions import mentions_in, strip_mention_markup, was_mentioned
 
 __all__ = ["InboundActivity", "parse_activity"]
 
@@ -57,6 +60,24 @@ class InboundActivity:
     @property
     def is_message(self) -> bool:
         return self.type == MESSAGE
+
+    def mentions_bot(self, app_id: str) -> bool:
+        """Whether this message @mentioned *app_id*, by id rather than name."""
+        return was_mentioned(self.raw, app_id)
+
+    def mentions(self, *, exclude: str = "") -> tuple[Mention, ...]:
+        """Everyone mentioned, optionally minus one id — normally the bot's."""
+        return mentions_in(self.raw, exclude=exclude)
+
+    @property
+    def clean_text(self) -> str:
+        """The text with mention markup removed — what the model should see.
+
+        ``text`` is what Teams delivered, tags and all. Handing that to a
+        session makes it learn to strip ``<at>…</at>`` itself, and puts a tag
+        in front of any command the user typed.
+        """
+        return strip_mention_markup(self.text)
 
     def is_from(self, app_id: str) -> bool:
         """Whether this activity is the bot hearing itself.
