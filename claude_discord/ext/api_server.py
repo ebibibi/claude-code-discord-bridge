@@ -2220,6 +2220,12 @@ class ApiServer:
                 # it wrong costs one extra sync, not a hole in the history.
                 "newest_have_mid": plan.newest_have_mid,
                 "pending": meta.get("pending_attachments") or [],
+                # What this server supports, so a client can tell it apart from
+                # an older one. `conversation_scope` is the permission a client
+                # needs before it may upload a partially-scrolled chat: against
+                # a server without it, each partial scan reports a different
+                # root mid and lands in its own folder.
+                "capabilities": {"conversation_scope": True},
             }
         )
 
