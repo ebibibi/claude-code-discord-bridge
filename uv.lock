@@ -193,6 +193,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+agui = [
+    { name = "aiohttp" },
+]
 api = [
     { name = "aiohttp" },
 ]
@@ -220,6 +223,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", marker = "extra == 'agui'", specifier = ">=3.14.3" },
     { name = "aiohttp", marker = "extra == 'api'", specifier = ">=3.14.3" },
     { name = "aiohttp", marker = "extra == 'teams'", specifier = ">=3.14.3" },
     { name = "aiosqlite", specifier = ">=0.20,<1.0" },
@@ -229,7 +233,7 @@ requires-dist = [
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'teams'", specifier = ">=2.13.0,<3.0" },
     { name = "python-dotenv", specifier = ">=1.2.2,<2.0" },
 ]
-provides-extras = ["api", "images", "teams"]
+provides-extras = ["api", "agui", "images", "teams"]
 
 [package.metadata.requires-dev]
 dev = [

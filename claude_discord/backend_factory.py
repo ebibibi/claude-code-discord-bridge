@@ -26,8 +26,13 @@ logger = logging.getLogger(__name__)
 # ``--model`` entirely so the Codex CLI uses its own default (the ``model``
 # key in ~/.codex/config.toml, currently gpt-5.6-sol). Hard-coding a version
 # here only goes stale as the Codex console default moves.
-DEFAULT_MODEL: dict[str, str | None] = {"claude": "sonnet", "codex": None, "local": None}
-DEFAULT_COMMAND = {"claude": "claude", "codex": "codex", "local": "codex"}
+DEFAULT_MODEL: dict[str, str | None] = {
+    "claude": "sonnet",
+    "codex": None,
+    "local": None,
+    "agui": None,
+}
+DEFAULT_COMMAND = {"claude": "claude", "codex": "codex", "local": "codex", "agui": "ag-ui"}
 
 
 class BackendFactory:
@@ -47,6 +52,8 @@ class BackendFactory:
         effort: str | None,
         api_port: int | None = None,
         api_secret: str | None = None,
+        agui_url: str | None = None,
+        agui_token: str | None = None,
     ) -> None:
         self.claude_command = claude_command or DEFAULT_COMMAND["claude"]
         self.codex_command = codex_command or DEFAULT_COMMAND["codex"]
@@ -59,6 +66,8 @@ class BackendFactory:
         self.effort = effort
         self.api_port = api_port
         self.api_secret = api_secret
+        self.agui_url = agui_url
+        self.agui_token = agui_token
 
     def command_for(self, backend: str) -> str:
         if backend == "claude":
@@ -67,6 +76,8 @@ class BackendFactory:
             # The local backend is the same CLI, pointed at a ccdb-owned
             # CODEX_HOME that pins it to a model on your own hardware.
             return self.codex_command
+        if backend == "agui":
+            return DEFAULT_COMMAND["agui"]
         raise ValueError(f"Unknown backend: {backend!r}")
 
     def default_model_for(self, backend: str) -> str | None:
@@ -95,6 +106,12 @@ class BackendFactory:
             "dangerously_skip_permissions": self.dangerously_skip_permissions,
             "allowed_tools": self.allowed_tools,
         }
+        if backend == "agui":
+            if not self.agui_url:
+                raise ValueError("CCDB_AGUI_URL is required for the AG-UI backend")
+            kwargs["endpoint_url"] = self.agui_url
+            if self.agui_token:
+                kwargs["auth_token"] = self.agui_token
         if thread_id is not None:
             kwargs["thread_id"] = thread_id
         # ``append_system_prompt`` and the env-level ``effort`` are Claude-only

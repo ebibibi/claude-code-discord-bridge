@@ -324,11 +324,11 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Automatic (any shutdown)** — `ClaudeChatCog.cog_unload()` marks all mid-run sessions whenever the bot shuts down via any mechanism (`systemctl stop`, `bot.close()`, SIGTERM, etc.).
 - **Manual** — Any session can call `POST /api/mark-resume` directly.
 
-### Backend Switching — Claude / Codex on Demand
+### Backend Switching — Claude / Codex / AG-UI on Demand
 
 ccdb 3.0 introduces three slash commands that change which AI handles the next session, with no bot restart:
 
-- `/backend [name] [scope]` — show or switch backend. `name` is `claude` or `codex`. `scope` is `thread` (this thread only) or `global` (server-wide default). When you omit `scope`, the command auto-resolves: in a thread it scopes to that thread, otherwise it sets the global default.
+- `/backend [name] [scope]` — show or switch backend. `name` is `claude`, `codex`, `local`, or `agui`. `scope` is `thread` (this thread only) or `global` (server-wide default). When you omit `scope`, the command auto-resolves: in a thread it scopes to that thread, otherwise it sets the global default.
 - `/model [name] [scope]` — show or switch the model used by the **current** backend. Each backend remembers its own model preference, so flipping backend back and forth keeps your favoured models intact. Leave a backend's model unset to defer to that CLI's own default (e.g. Codex uses the `model` in `~/.codex/config.toml`, so ccdb tracks the console default instead of pinning a version).
   The `name` autocomplete is **discovered live**: ccdb asks the Anthropic models endpoint (using the credentials the Claude Code CLI already has) which models your account can see, so a model released this morning shows up in the dropdown without a ccdb upgrade. Aliases (`opus`, `sonnet`, …) are labelled with the model they currently resolve to. Offline, unauthenticated, or on Bedrock/Vertex/Foundry it silently falls back to a small static list; set `CCDB_MODEL_DISCOVERY=0` to always use that list. Codex suggestions stay static (the Codex CLI exposes no model listing) — any id you type still works.
 - `/effort [level] [scope]` — show or switch the **reasoning effort** used by the current backend. Valid levels are backend-specific: Claude accepts `low/medium/high/max`; Codex accepts `minimal/low/medium/high/xhigh` (mapped to the CLI's `model_reasoning_effort`). Leave it unset to defer to the CLI default.
@@ -357,6 +357,7 @@ Concrete example:
 /effort xhigh                          # global → codex reasons at xhigh effort
                                        # …open a thread, send a message…
 /backend claude scope:thread          # this thread only → switch back to claude
+/backend agui scope:thread            # this thread only → configured remote AG-UI agent
 /model opus scope:thread              # this thread only → claude/opus
 /effort max scope:thread              # this thread only → claude reasons at max
                                        # other threads keep the global codex defaults
@@ -364,7 +365,7 @@ Concrete example:
 
 Behind the scenes:
 
-- `BackendFactory` — captures the static configuration at boot (per-backend command path, permission mode, working dir, allowed tools, timeout, append-system-prompt, effort, api_port, api_secret) and builds a fresh `ClaudeRunner` or `CodexRunner` on demand. `api_port` is wired automatically by `setup_bridge` after the REST API server starts, so factory-built runners always have `CCDB_API_URL` injected into their subprocess environment.
+- `BackendFactory` — captures the static configuration at boot (per-backend command path or AG-UI endpoint, permission mode, working dir, allowed tools, timeout, append-system-prompt, effort, api_port, api_secret) and builds a fresh `ClaudeRunner`, `CodexRunner`, or `AgUiBackend` on demand. `api_port` is wired automatically by `setup_bridge` after the REST API server starts, so factory-built CLI runners always have `CCDB_API_URL` injected into their subprocess environment.
 - `BackendSettings` — thin wrapper over `SettingsRepository` that resolves the active backend with **thread > global > env** precedence and persists writes from the slash commands.
 - `SessionBackend` Protocol — the abstract interface that both runners satisfy. Internal plumbing (cogs, embeds, views, scheduler, webhook trigger) takes a `SessionBackend`, never one concrete runner class.
 
@@ -471,6 +472,7 @@ Behind the scenes:
 - **User authorization** — `allowed_user_ids` restricts who can invoke Claude
 - **Log injection prevention** — User-provided API values are sanitized (newlines stripped) before writing to logs
 - **Local-model backend** (optional) — `/backend local` runs a thread against a model on your own hardware. ccdb owns a separate CLI home with the update check and analytics disabled, because a "local" run otherwise still contacts the vendor; it refuses to start if those settings are missing — see [docs/local-backend.md](docs/local-backend.md)
+- **Remote AG-UI backend** (optional) — `/backend agui` connects the existing Discord/Teams session machinery to any HTTP/SSE AG-UI agent while preserving ccdb's session ledger, rendering, cancellation, and operational controls — see [docs/agui-backend.md](docs/agui-backend.md)
 - **Anonymization gateway** (optional) — Replaces organisation-identifying terms with stable aliases before the prompt reaches Claude or Codex, and restores them in the answer. A local model checks the result for replacement misses and, by default, blocks the send when it finds one. Off until you write a rules file — see [docs/anonymization.md](docs/anonymization.md)
 
 ---
@@ -813,10 +815,12 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 |----------|-------------|---------|
 | `DISCORD_BOT_TOKEN` | Your Discord bot token | (required) |
 | `DISCORD_CHANNEL_ID` | Channel ID for Claude chat | (required) |
-| `CCDB_BACKEND` | CLI backend to use: `claude` (Claude Code CLI) or `codex` (OpenAI Codex CLI) | `claude` |
+| `CCDB_BACKEND` | Backend to use: `claude`, `codex`, `local`, or `agui` | `claude` |
 | `CCDB_COMMAND` | Path or name of the CLI binary (overrides `CLAUDE_COMMAND`). Used by the initial runner picked from `CCDB_BACKEND`; superseded by the two per-backend variables below when `/backend` switches at runtime. | _(auto: `claude` or `codex`)_ |
 | `CCDB_CLAUDE_COMMAND` | Explicit path to the Claude CLI binary. Used by `BackendFactory` whenever `/backend claude` is active, regardless of the initial `CCDB_BACKEND`. Falls back to `CLAUDE_COMMAND`, then `claude` (PATH). | (optional) |
 | `CCDB_CODEX_COMMAND` | Explicit path to the OpenAI Codex CLI binary. Required when running the bot under systemd (default service PATH does not include `~/.npm-global/bin`). Falls back to `codex` (PATH). | (optional) |
+| `CCDB_AGUI_URL` | Exact HTTP(S) run endpoint for `/backend agui`. Redirects are rejected. | (required for `agui`) |
+| `CCDB_AGUI_TOKEN` | Optional bearer token for the AG-UI endpoint. Stripped from Claude/Codex subprocess environments. | (optional) |
 | `PATH` | Binary search path for the bot **and every CLI session it spawns** — sessions inherit the bot's environment. Set it in `.env` when running under systemd, which starts units with a minimal PATH and never reads `~/.bashrc` / `~/.profile`. See [Toolchain PATH](#toolchain-path--set-it-in-env). | (inherited from the parent process) |
 | `CCDB_MODEL` | Model to use (overrides `CLAUDE_MODEL`) | `sonnet` |
 | `CCDB_MODEL_DISCOVERY` | Set to `0` to stop the `/model` autocomplete from asking the Anthropic models endpoint which models your credentials can see, and always use the static suggestion list instead. Discovery is read-only, reuses the Claude Code CLI's own auth, and already falls back on its own when offline, unauthenticated, or on Bedrock/Vertex/Foundry | `1` |

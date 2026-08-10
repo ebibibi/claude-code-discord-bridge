@@ -30,6 +30,8 @@ Usage::
 
 from __future__ import annotations
 
+from .agui_backend import AgUiBackend, AgUiEventMapper
+
 # API provider detection
 from .api_provider import detect_api_provider
 
@@ -119,6 +121,8 @@ __all__ = [
     "detect_api_provider",
     # Backend
     "CodexRunner",
+    "AgUiBackend",
+    "AgUiEventMapper",
     "SessionBackend",
     "create_backend",
     "parse_codex_line",

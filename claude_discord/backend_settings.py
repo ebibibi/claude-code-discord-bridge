@@ -1,6 +1,6 @@
 """Persistent, runtime-mutable backend/model selection.
 
-Reads and writes the current backend (claude/codex) and per-backend
+Reads and writes the current backend (claude/codex/local/agui) and per-backend
 model preference to ``SettingsRepository`` (sqlite key-value store).
 
 Resolution order for any field:
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Valid backend names. Keep in sync with claude_code_core.backend.create_backend().
-ALL_BACKENDS = ("claude", "codex", "local")
+ALL_BACKENDS = ("claude", "codex", "local", "agui")
 
 # Settings keys
 BACKEND_GLOBAL = "backend.global"
@@ -73,6 +73,8 @@ class BackendSettings:
             # The local model is chosen by CCDB_LOCAL_MODEL, read by
             # LocalModelConfig at spawn time; no separate env knob here.
             "local": "",
+            # AG-UI identifies the model on the remote agent, not in ccdb.
+            "agui": "",
         }
 
     # ── Resolution ──────────────────────────────────────────
