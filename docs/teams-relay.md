@@ -154,11 +154,11 @@ public registry instead. Nothing in it is secret; that is the point of the
 Dockerfile.
 
 The measured deployment was subsequently moved from Azure Container Registry
-to `ghcr.io/ebibibi/ccdb-teams-relay:v2`, and the dedicated Basic registry was
-deleted. The image digest remained identical across registries. A fresh
+to `ghcr.io/ebibibi/ebi-agent-chat-relay:v2`, and the dedicated Basic registry
+was deleted. The image digest remained identical across registries. A fresh
 Container Apps replica was then pulled and started after the Azure registry and
-its credentials were gone; three health checks completed in 65 ms. This removes
-the $5.1/month registry line from the table above.
+its credentials were gone; three health checks completed in 71–74 ms. This
+removes the $5.1/month registry line from the table above.
 
 GitHub Container Registry makes command-line-published packages private by
 default, and changing package visibility is a web-settings operation rather
