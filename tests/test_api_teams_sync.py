@@ -807,3 +807,133 @@ async def test_readme_names_the_company(client: TestClient) -> None:
     )
     readme = (Path((await resp.json())["folder"]) / "README.md").read_text()
     assert "- 会社: 日本工営" in readme
+
+
+# ---------------------------------------------------------------------------
+# conversation-scoped identity (long chats that cannot be scrolled to the top)
+# ---------------------------------------------------------------------------
+#
+# A chat has no team GUID, so the extension derives one. It used to derive it
+# from the chat's *oldest* message id, which meant the identity only existed
+# once the whole history had been scrolled. On a long chat Teams becomes
+# unstable well before that, so the client threw the partial scan away rather
+# than fork the folder — and the longest conversations could never sync at all.
+#
+# `identity_scope: "conversation"` says the team alone is the identity, so the
+# root mid is free to move as the client works backwards through the history.
+
+
+def chat_body(root_mid: str, *, scope: str = "conversation", **over) -> dict:
+    body = thread_body()
+    body["thread"] = dict(body["thread"], root_mid=root_mid, identity_scope=scope)
+    body.update(over)
+    return body
+
+
+@pytest.mark.asyncio
+async def test_conversation_scope_keeps_one_folder_as_the_root_mid_moves(
+    client: TestClient, vault: Path
+) -> None:
+    """The newest chunk lands first; scrolling back must reuse the same folder."""
+    newest = await client.post(
+        "/api/teams/sync/push",
+        json=chat_body("1784800000000", messages=[msg("1784800000000", "new", "h1")]),
+        headers=AUTH,
+    )
+    assert newest.status == 200
+    # A later chunk reaches further back, so the oldest mid it can see is older.
+    older = await client.post(
+        "/api/teams/sync/push",
+        json=chat_body("1770000000000", messages=[msg("1770000000000", "old", "h2")]),
+        headers=AUTH,
+    )
+    assert older.status == 200
+
+    folders = [p for p in vault.rglob("thread.json")]
+    assert len(folders) == 1, f"a moving root mid forked the vault: {folders}"
+    stored = sorted(p.name for p in (folders[0].parent / "messages").glob("*.md"))
+    assert stored == ["1770000000000.md", "1784800000000.md"]
+
+
+@pytest.mark.asyncio
+async def test_conversation_scope_records_the_oldest_mid_seen_so_far(
+    client: TestClient, vault: Path
+) -> None:
+    await client.post(
+        "/api/teams/sync/push",
+        json=chat_body("1784800000000", messages=[msg("1784800000000", "new", "h1")]),
+        headers=AUTH,
+    )
+    await client.post(
+        "/api/teams/sync/push",
+        json=chat_body("1770000000000", messages=[msg("1770000000000", "old", "h2")]),
+        headers=AUTH,
+    )
+    meta = json.loads(next(vault.rglob("thread.json")).read_text(encoding="utf-8"))
+    assert meta["root_mid"] == "1770000000000", "the root must follow the history back"
+    # A newer chunk arriving later must not drag the root forward again.
+    await client.post(
+        "/api/teams/sync/push",
+        json=chat_body("1790000000000", messages=[msg("1790000000000", "newer", "h3")]),
+        headers=AUTH,
+    )
+    meta = json.loads(next(vault.rglob("thread.json")).read_text(encoding="utf-8"))
+    assert meta["root_mid"] == "1770000000000"
+
+
+@pytest.mark.asyncio
+async def test_a_plan_finds_the_folder_by_conversation_alone(client: TestClient) -> None:
+    await client.post(
+        "/api/teams/sync/push",
+        json=chat_body("1784800000000", messages=[msg("1784800000000", "new", "h1")]),
+        headers=AUTH,
+    )
+    plan = await client.post("/api/teams/sync/plan", json=chat_body("1770000000000"), headers=AUTH)
+    body = await plan.json()
+    assert body["exists"] is True, "a different root mid must still find the chat"
+    assert body["have"] == 1, "the stored message is already accounted for"
+
+
+@pytest.mark.asyncio
+async def test_without_the_scope_a_different_root_is_still_a_different_thread(
+    client: TestClient, vault: Path
+) -> None:
+    """Channels and pre-upgrade clients keep the old {team}/{root_mid} key.
+
+    A real team GUID holds many threads, so team-only matching there would merge
+    unrelated conversations into one folder.
+    """
+    for root in ("1784800000000", "1770000000000"):
+        res = await client.post(
+            "/api/teams/sync/push",
+            json=chat_body(root, scope="oldest-mid", messages=[msg(root, "x", "h" + root)]),
+            headers=AUTH,
+        )
+        assert res.status == 200
+    assert len(list(vault.rglob("thread.json"))) == 2
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_scope_falls_back_to_the_strict_key(
+    client: TestClient, vault: Path
+) -> None:
+    """Never widen matching because of a value this version does not understand."""
+    for root in ("1784800000000", "1770000000000"):
+        await client.post(
+            "/api/teams/sync/push",
+            json=chat_body(root, scope="something-new", messages=[msg(root, "x", "h" + root)]),
+            headers=AUTH,
+        )
+    assert len(list(vault.rglob("thread.json"))) == 2
+
+
+@pytest.mark.asyncio
+async def test_plan_advertises_conversation_scope_support(client: TestClient) -> None:
+    """The client must be able to tell an upgraded server from an old one.
+
+    Without this it cannot know whether flushing a partial scan is safe, and the
+    safe default (never flush) would keep long chats unsyncable forever.
+    """
+    plan = await client.post("/api/teams/sync/plan", json=thread_body(), headers=AUTH)
+    body = await plan.json()
+    assert body.get("capabilities", {}).get("conversation_scope") is True

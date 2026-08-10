@@ -61,6 +61,19 @@ class ThreadRef:
     ``org`` is the company the conversation belongs to. It is a *label*, not part
     of the identity: two threads of the same team are the same team whatever the
     folder says, so relabelling never re-uploads anything.
+
+    ``identity_scope`` says which part of the pair the client considers
+    authoritative:
+
+    - ``"oldest-mid"`` (default) — the pair is the key. A real channel team holds
+      many threads, so both halves are needed to tell them apart.
+    - ``"conversation"`` — the team alone is the key, and ``root_mid`` is allowed
+      to move. Only a chat may claim this: it has no real team GUID, so the
+      client derives one from Teams' conversation id, which makes the team
+      already unique per conversation. This exists so a client can upload the
+      newest part of a very long chat before it has scrolled to the beginning —
+      under the strict key a partial scan reports a different root and the server
+      opens a second folder for the same conversation.
     """
 
     team: str
@@ -68,10 +81,15 @@ class ThreadRef:
     title: str
     url: str = ""
     org: str = ""
+    identity_scope: str = "oldest-mid"
 
     @property
     def key(self) -> str:
         return f"{self.team}/{self.root_mid}"
+
+    @property
+    def conversation_scoped(self) -> bool:
+        return self.identity_scope == "conversation"
 
 
 @dataclass(frozen=True)
@@ -150,7 +168,16 @@ def parse_thread_ref(raw: object) -> ThreadRef:
     title = _clean_line(raw.get("title"), limit=300) or f"thread-{root_mid}"
     url = _clean_line(raw.get("url"), limit=2000)
     org = _clean_line(raw.get("org"), limit=200)
-    return ThreadRef(team=team, root_mid=root_mid, title=title, url=url, org=org)
+    # Anything this version does not recognise falls back to the strict key.
+    # Widening the match on an unknown value would merge conversations that a
+    # newer client meant to keep apart, and a merge cannot be undone by syncing
+    # again — the messages are already interleaved in one folder.
+    scope = str(raw.get("identity_scope") or "").strip().lower()
+    if scope != "conversation":
+        scope = "oldest-mid"
+    return ThreadRef(
+        team=team, root_mid=root_mid, title=title, url=url, org=org, identity_scope=scope
+    )
 
 
 def parse_messages(raw: object, *, require_body: bool) -> list[IncomingMessage]:

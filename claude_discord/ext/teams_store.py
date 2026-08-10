@@ -164,15 +164,21 @@ class TeamsVaultStore:
         re-created empty and the entire history uploads again, silently, because
         every message looks new. There is deliberately no index file: an index
         would be a second ledger that can drift from the directory it describes.
+
+        A conversation-scoped ref matches on the team alone (see
+        ``ThreadRef.identity_scope``). That is only safe because such a team is
+        derived from one Teams conversation id and therefore never holds a second
+        thread — matching a real channel GUID this way would pull every thread of
+        that team into one folder. The scope is the client's claim, so the check
+        stays on the ref rather than on the shape of the GUID.
         """
         for entry in self._thread_dir_candidates():
             meta = self._read_json(entry / "thread.json")
             if not meta:
                 continue
-            if (
-                str(meta.get("team", "")).lower() == ref.team
-                and str(meta.get("root_mid", "")) == ref.root_mid
-            ):
+            if str(meta.get("team", "")).lower() != ref.team:
+                continue
+            if ref.conversation_scoped or str(meta.get("root_mid", "")) == ref.root_mid:
                 return entry
         return None
 
@@ -430,6 +436,25 @@ class TeamsVaultStore:
         with path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    @staticmethod
+    def _root_mid_for(ref: ThreadRef, previous: dict) -> str:
+        """The root a conversation-scoped chat keeps as chunks arrive out of order.
+
+        A client working backwards through a long chat reports a different
+        "oldest mid I have seen" on every flush, and a later chunk covering only
+        recent messages reports a *newer* one. Taking the last value would make
+        the root walk forward and backward with the scroll position; keeping the
+        oldest ever seen means it converges on the real beginning of the chat and
+        stays there. The folder name is left alone either way — renaming it would
+        break every wikilink pointing into the vault.
+        """
+        if not ref.conversation_scoped:
+            return ref.root_mid
+        stored = str(previous.get("root_mid") or "").strip()
+        if not stored.isdigit():
+            return ref.root_mid
+        return stored if int(stored) <= int(ref.root_mid) else ref.root_mid
+
     def write_meta(
         self,
         thread_dir: Path,
@@ -448,7 +473,7 @@ class TeamsVaultStore:
         meta = {
             "team": ref.team,
             "org": self.org_for(ref) or previous.get("org", ""),
-            "root_mid": ref.root_mid,
+            "root_mid": self._root_mid_for(ref, previous),
             "title": ref.title,
             "url": ref.url or previous.get("url", ""),
             "participants": sorted({a for a in authors if a}),
