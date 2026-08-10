@@ -21,7 +21,7 @@ images = ["pillow>=12.3.0"]
 # The Teams frontend needs an inbound HTTPS listener and asymmetric JWT
 # verification. Discord deployments never call either, so they are not made to
 # carry them.
-teams = ["aiohttp>=3.14.3", "pyjwt[crypto]>=2.9,<3.0", "defusedxml>=0.7,<1.0"]
+teams = ["aiohttp>=3.14.3", "pyjwt[crypto]>=2.13.0,<3.0", "defusedxml>=0.7,<1.0"]
 
 [project.scripts]
 ccdb = "claude_discord.cli:main"
@@ -38,7 +38,7 @@ dev = [
     "aiohttp>=3.14.3",
     "pyright>=1.1.411",
     "pillow>=12.3.0",
-    "pyjwt[crypto]>=2.9,<3.0",
+    "pyjwt[crypto]>=2.13.0,<3.0",
     "defusedxml>=0.7,<1.0",
 ]
 
