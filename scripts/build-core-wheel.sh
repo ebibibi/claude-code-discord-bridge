@@ -35,7 +35,7 @@ name = "claude-code-core"
 version = "$VERSION"
 description = "Frontend-agnostic core library for Claude Code CLI integration"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "aiosqlite>=0.20,<1.0",
 ]

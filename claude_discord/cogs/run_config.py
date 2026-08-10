@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from claude_code_core.backend import SessionBackend
+from claude_code_core.frontend import ConversationSurface
 
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
@@ -38,11 +39,13 @@ class RunConfig:
     """All parameters needed for a single Claude Code execution.
 
     Required fields:
-        thread: Discord thread (or text channel for inline-reply mode) to post results to.
         runner: A fresh (cloned) ClaudeRunner instance.
         prompt: The user's message or skill invocation.
 
     Optional fields:
+        surface: Frontend-neutral destination. New callers should provide this.
+        thread: Compatibility input for Discord callers; it is wrapped in a
+                DiscordSurface when surface is omitted.
         session_id: Session ID to resume. None for new sessions.
         repo: Session repository for persisting thread-session mappings.
               Pass None for automated workflows without session persistence.
@@ -59,9 +62,13 @@ class RunConfig:
                           (if clean) after the session ends.
     """
 
-    thread: discord.Thread | discord.TextChannel
     runner: SessionBackend
     prompt: str
+    # Canonical frontend-neutral destination. During the migration, existing
+    # callers may still pass ``thread``; __post_init__ wraps it in a
+    # DiscordSurface without making every call site change in the same PR.
+    surface: ConversationSurface = None  # type: ignore[assignment]
+    thread: discord.Thread | discord.TextChannel = None  # type: ignore[assignment]
     session_id: str | None = None
     repo: SessionRepository | None = None
     status: StatusManager | None = None
@@ -88,6 +95,9 @@ class RunConfig:
     # When True, a compact guardrail was already injected into --append-system-prompt
     # for this run. Prevents infinite interrupt→rerun loops if compact fires again.
     post_compact_rerun: bool = False
+    # True only for the single automatic rerun created by the owner-PR
+    # completion gate. Prevents a genuinely blocked PR from causing a loop.
+    pr_completion_gate_rerun: bool = False
     # When True, only text responses are shown to Discord. Tool embeds, thinking
     # blocks, session start/complete embeds, and other technical details are hidden.
     # Useful for public channels where non-technical users are watching.
@@ -115,6 +125,29 @@ class RunConfig:
     def __post_init__(self) -> None:
         if not self.prompt and not self.images:
             raise ValueError("RunConfig.prompt must not be empty")
+        if self.surface is None:
+            if self.thread is None:
+                raise ValueError("RunConfig requires surface or thread")
+            # Local import avoids a module cycle: DiscordSurface itself uses
+            # RunConfig-adjacent UI components.
+            from ..surface import DiscordSurface
+
+            self.surface = DiscordSurface(
+                self.thread,
+                status_manager=self.status,
+                working_dir=getattr(self.runner, "working_dir", None),
+                interrupt_view=self.stop_view,
+            )
+        elif self.thread is None:
+            # The reverse direction. A caller that passes only a surface still
+            # reaches code that is genuinely Discord-only (AskUserQuestion's
+            # restorable views, a thread's parent channel), and leaving this
+            # None made those blow up on the first scheduled run rather than at
+            # construction. On a non-Discord surface it stays None, which is
+            # correct: there is no Discord object to hand out.
+            native = getattr(self.surface, "native_thread", None)
+            if native is not None:
+                self.thread = native
 
     def with_prompt(self, prompt: str) -> RunConfig:
         """Return a new RunConfig with a different prompt (immutable copy)."""

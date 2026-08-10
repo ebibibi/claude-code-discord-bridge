@@ -288,6 +288,7 @@ class CodexRunner:
         self.append_system_prompt = append_system_prompt
         self.images = images
         self._process: asyncio.subprocess.Process | None = None
+        self._interrupt_requested = False
 
     async def run(
         self,
@@ -300,6 +301,7 @@ class CodexRunner:
         retried_without_resume = False
 
         while True:
+            self._interrupt_requested = False
             args = self._build_args(attempt_prompt, attempt_session_id)
             env = self._build_env()
             cwd = self.working_dir or os.getcwd()
@@ -409,6 +411,7 @@ class CodexRunner:
     async def interrupt(self) -> None:
         """Interrupt the subprocess with SIGINT."""
         if self._process and self._process.returncode is None:
+            self._interrupt_requested = True
             if os.name == "nt":
                 self._process.terminate()
             else:
@@ -555,6 +558,12 @@ class CodexRunner:
             await asyncio.wait_for(self._process.wait(), timeout=10)
 
         if self._process.returncode is not None and self._process.returncode > 0:
+            if self._interrupt_requested:
+                logger.info(
+                    "Codex CLI exited with code %d after an intentional interrupt",
+                    self._process.returncode,
+                )
+                return
             stderr_data = b""
             if self._process.stderr:
                 stderr_data = await self._process.stderr.read()

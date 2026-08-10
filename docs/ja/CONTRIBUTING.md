@@ -27,7 +27,7 @@ main（常にリリース可能）
    ```
 3. **変更を加える** — コードを書き、テストを追加
 4. ブランチを **Push** して `main` に対して **PR を開く**
-5. **CI が自動実行** — Python 3.10/3.11/3.12 でテスト + lint、CodeQL セキュリティスキャン
+5. **CI が自動実行** — Python 3.12/3.13 でテスト + lint、CodeQL セキュリティスキャン
 6. CI が通過しレビューされたら、`main` に**マージ**
 
 ### ブランチ命名
@@ -64,7 +64,7 @@ PR を提出する前にすべてのテストが通過している必要があ�
 - **フォーマッター**: `ruff format`
 - **リンター**: `ruff check`
 - **型ヒント**: すべての関数シグネチャに必須
-- **Python**: 3.10+（モダンな構文のために `from __future__ import annotations` を使用）
+- **Python**: 3.12+（モダンな構文のために `from __future__ import annotations` を使用）
 
 ```bash
 uv run ruff check claude_discord/

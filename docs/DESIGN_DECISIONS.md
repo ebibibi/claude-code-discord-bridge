@@ -2,6 +2,11 @@
 
 This document captures the "why" behind key architectural choices. Each decision includes the alternatives considered and the reasoning for the chosen approach.
 
+Repository-level product and architecture decisions that need an immutable history live
+in the [Architecture Decision Records](adr/_index.md). The first record adopts
+**Ebi Agent Chat Relay** as the product name and links its compatibility-first
+[phased rename plan](RENAME_PLAN.md).
+
 ## 1. CLI Subprocess, Not Direct API
 
 **Decision:** Invoke `claude -p --output-format stream-json` as a subprocess rather than calling the Anthropic API directly.

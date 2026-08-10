@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 
 from claude_code_core.models import init_db
 from claude_code_core.parser import parse_line
 from claude_code_core.session_repo import SessionRepository
 from claude_discord.backend_settings import session_is_resumable
+from claude_discord.cogs.claude_chat import ClaudeChatCog
+from claude_discord.database.repository import SessionRecord
 
 
 class TestSessionIsResumable:
@@ -92,3 +96,95 @@ class TestErrorDuringExecutionIsSurfaced:
         assert event is not None
         assert event.error is None
         assert event.text == "done"
+
+
+class TestCrossBackendHandoffPreparation:
+    @staticmethod
+    def _record(*, backend: str = "claude") -> SessionRecord:
+        return SessionRecord(
+            thread_id=42,
+            session_id="aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb",
+            working_dir="/work",
+            model=None,
+            origin="discord",
+            summary=None,
+            created_at="",
+            last_used_at="",
+            backend=backend,
+        )
+
+    @staticmethod
+    def _thread() -> MagicMock:
+        thread = MagicMock(spec=discord.Thread)
+        thread.id = 42
+        thread.send = AsyncMock()
+        return thread
+
+    @staticmethod
+    def _cog(record: SessionRecord, *, current_backend: str, transcript: str) -> ClaudeChatCog:
+        bot = MagicMock()
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=record)
+        settings = MagicMock()
+        settings.current_backend = AsyncMock(return_value=current_backend)
+        history = MagicMock()
+        history.read.return_value = transcript
+        runner = MagicMock()
+        return ClaudeChatCog(
+            bot=bot,
+            repo=repo,
+            runner=runner,
+            backend_settings=settings,
+            conversation_history=history,
+        )
+
+    async def test_mismatch_injects_file_transcript_and_starts_new_native_session(self) -> None:
+        cog = self._cog(
+            self._record(backend="claude"),
+            current_backend="codex",
+            transcript="User:\nold\n\nAssistant:\ndone",
+        )
+
+        session_id, prompt = await cog._prepare_cross_backend_handoff(
+            self._thread(),
+            "continue please",
+            None,
+        )
+
+        assert session_id is None
+        assert "Claude → Codex" in prompt
+        assert "Assistant:\ndone" in prompt
+        assert prompt.endswith("Current user message:\ncontinue please")
+        cog._conversation_history.read.assert_called_once_with(
+            "claude", "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"
+        )
+
+    async def test_missing_file_degrades_to_fresh_session_with_original_prompt(self) -> None:
+        cog = self._cog(
+            self._record(backend="codex"),
+            current_backend="claude",
+            transcript="",
+        )
+
+        session_id, prompt = await cog._prepare_cross_backend_handoff(
+            self._thread(),
+            "current",
+            None,
+        )
+
+        assert session_id is None
+        assert prompt == "current"
+
+    async def test_same_backend_keeps_native_resume_without_reading_file(self) -> None:
+        record = self._record(backend="claude")
+        cog = self._cog(record, current_backend="claude", transcript="unused")
+
+        session_id, prompt = await cog._prepare_cross_backend_handoff(
+            self._thread(),
+            "current",
+            record.session_id,
+        )
+
+        assert session_id == record.session_id
+        assert prompt == "current"
+        cog._conversation_history.read.assert_not_called()

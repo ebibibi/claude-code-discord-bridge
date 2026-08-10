@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **スマホの Discord から Claude Code _または_ OpenAI Codex をガンガン使おう。複数スレッドを同時に回して、本格開発もOK。**
@@ -128,7 +128,7 @@ curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
 curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
 ```
 
-`/api/sessions` は 3 つの情報源をマージします: `sessions` テーブル（created_at、作業ディレクトリ、バックエンド）、インメモリレジストリ（各ライブセッションが*今まさに*何をしているか）、そして各スレッドの最新のラウンジメモです。ターンの実行中のセッションは `"state": "running"` として現れます — ラウンジに一度も投稿していないセッションも含まれ、まさにそういうときこそこの機能が効きます。セッション自身は Discord トークンを持たないため、読み取りは Bot が代行し、エンドポイントは localhost のコントロールプレーン上に留まります。
+`/api/sessions` は 3 つの情報源をマージします: `sessions` テーブル（created_at、作業ディレクトリ、バックエンド）、インメモリレジストリ（各ライブセッションが*今まさに*何をしているか）、そして各スレッドの最新のラウンジメモです。ターンの実行中のセッションは `"state": "running"` として現れます — ラウンジに一度も投稿していないセッションも含まれ、まさにそういうときこそこの機能が効きます。実行中のターンがない保存済み会話は `"state": "history"` として現れます。これは再開可能な履歴であり、AIが作業やユーザー入力を待っているという意味ではありません。セッション自身は Discord トークンを持たないため、読み取りは Bot が代行し、エンドポイントは localhost のコントロールプレーン上に留まります。
 
 ### リソースクレーム
 
@@ -223,7 +223,7 @@ Claude のサブプロセスには `DISCORD_THREAD_ID` 環境変数が渡され�
 
 ### 認証済み外部インジェストと結果取得 (`/api/ingest`)
 
-`POST /api/ingest` は、信頼できない外部クライアント（ブラウザ拡張機能、モバイルショートカット、webhook）向けの**認証済み、添付ファイル対応スポーン**です。`/api/spawn`（信頼済み、localhost）とは異なり、専用の `ingest_token`（`CCDB_INGEST_TOKEN` で設定。`api_secret` とは独立）が必要で、base64 ファイル添付をディスクに書き込み、スポーンされたセッションが読み取れるようにします。実際の Discord スレッドを作成するため、すべてのやり取りが観察可能です。
+`POST /api/ingest` は、信頼できない外部クライアント（ブラウザ拡張機能、モバイルショートカット、webhook）向けの**認証済み、添付ファイル対応スポーン**です。`/api/spawn`（信頼済み、localhost）とは異なり、専用の `ingest_token`（`CCDB_INGEST_TOKEN` で設定。`api_secret` とは独立）が必要で、base64 ファイル添付を `{working_dir}/ingest/{thread_id}/` に書き込み、スポーンされたセッションが読み取れるようにします。実際の Discord スレッドを作成するため、すべてのやり取りが観察可能です。
 
 セッションは**インタラクティブ**（返信し続けられる本物の Discord スレッド）ですが、最終回答をプログラム的に取得することもできます。結果取得が設定されている場合（`setup_bridge()` 経由で自動接続）、レスポンスに `result_id` が含まれ、`GET /api/ingest/{result_id}` でセッションの最終返信をポーリングできます。同じ最終回答は Discord スレッドにも `ccdb-answer.md` として添付されるため、外部連携は添付ファイルを回答本文の正本として扱えます。これがラウンドトリップパターンです: スレッド + 添付ファイルを投稿 → 待機 → 回答ファイルまたはポーリング結果を読む → 自分のシステム（Teams スレッドなど）に書き戻す。一方で Discord が履歴を保持します。
 
@@ -242,6 +242,12 @@ curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_T
 ```
 
 このエンドポイントはオプトイン方式です。`ingest_token` が設定されていない場合、`POST` は `503` を返します。結果取得が利用できない場合、`POST` は `result_id` を省略し、`GET /api/ingest/{id}` は `503` を返します — スポーン動作は変わりません。リクエスト本文と添付ファイルは結果ストアに保存されません（状態、最終テキスト、スレッド ID のみ）。結果は最大 200 件です。
+
+#### ZIP バンドルは到着時に展開される
+
+クライアントはスレッド 1 本分のファイルを 1 つの `.zip` にまとめることで、20 添付 / 50 MB のリクエスト上限を回避できます。ccdb はそれを隣接する `<name>_files/` ディレクトリへ展開し、アーカイブそのものではなくメンバーのパスをセッションに渡します。プロンプトはパスだけで済み、セッションは必要なものだけを読みます。展開には上限があり（メンバー 5000 件、展開後 200 MB）、展開先ディレクトリの外に出るメンバーはスキップされます。
+
+アーカイブが置き換えられるのは、**展開が実際にファイルを生成したときだけ**です。`zipfile.is_zipfile()` はファイル*末尾*付近の end-of-central-directory レコードに一致するだけで、ファイルの*先頭*がアーカイブである必要はありません。そのため大きな不透明バイナリ（Windows の `.evtx` ログ、メモリダンプ、パケットキャプチャなど）が偶然「空のアーカイブ」と判定されることがあります。そうしたファイルや、本当に空の zip は、「何もない状態に展開されて削除される」のではなく、届いたそのままの形で保持されます。拒否された、あるいは壊れたアーカイブも同様に手を触れずに残されます。取り込み時に失われるものはありません。
 
 #### 添付ファイル到達の検証 (`attachments_manifest`)
 
@@ -281,6 +287,31 @@ ccdb は各 `embedded` エントリを、届いたファイルに対して **sha
 3. セッションは自身の `result_id` と新しい `summary` を添えて `POST /api/ingest/summary`（内部コントロールプレーン、localhost — `/api/tasks` と同じ信頼モデル）を呼びます。ccdb はキーを解決し、`marker` を**インジェスト行から**前進させます。そのため読み取り位置は、サマリーが実際に保存されたときだけ前進します（失敗したセッションは同じ差分を再エクスポートし、メッセージをスキップしません）。
 
 `DELETE /api/ingest/summary?key=…` は完全な再サマリーを強制します。`marker` は ccdb にとって不透明で、セッションが触ることは決してないため、ずれることがありません。完全に後方互換かつ Zero-Config: `summary_key` を省略すればインジェストは従来どおり動作します。外部リスナーは `GET`（読み取り）ルートのみを公開します — サマリーの書き込みは localhost 限定の操作です。`ingest_results` に `summary_key`/`pending_marker` カラムが追加されます（既存 DB では自動マイグレーション）。
+
+#### 上流スレッドを生ファイルとしてミラーリング (`/api/teams/sync`)
+
+上記の継続サマリーが保持するのは、上流スレッドの*蒸留された要約*です。代わりに**生の会話そのもの**をディスク上に置きたいとき — セッションが実際に何と言われたかを読めるようにし、回答をその内容と突き合わせて検証できるようにしたいとき — この sync のペアを使います。メッセージ 1 件につき 1 ファイルを保存し、クライアント側には**同期状態を一切持たせません**:
+
+1. `POST /api/teams/sync/plan` — クライアントは見えているすべてのメッセージの ID + コンテンツハッシュを送ります（本文は送らないため、返信 1000 件のスレッドでも数十 KB で済みます）。ccdb は `want_messages` / `want_attachments` を返します: 未取得のもの、またはハッシュが異なるものだけの部分集合に加え、クライアントが早めにスクロールを打ち切れるよう `newest_have_mid` も返します。
+2. `POST /api/teams/sync/push` — クライアントはその部分集合だけをアップロードします。添付ファイルのバイト列は base64 で送ります。
+
+ハッシュが*変わった*ことと ID を*一度も見たことがない*ことは同じ問いなので、上流の**編集**への追従は別機能ではありません — 同じ比較から自然に導かれるものであり、置き換えられた旧版は上書きされずに `_history/` 配下に保存されます。
+
+```
+{title}--{root_mid}/
+  thread.json      識別情報、カバレッジ、未解決の添付ファイル欠落
+  chain.jsonl      追記専用の順序 + 改訂ジャーナル
+  README.md        セッションがこのフォルダをどう読むべきか
+  messages/{mid}.md          メッセージ 1 件。YAML frontmatter 付き（author, timestamp, prev, hash, edited, deleted）
+  messages/{mid}/…           そのメッセージの添付ファイル
+  _history/{mid}.{hash}.md   置き換えられた旧版
+```
+
+`next` は**意図的に**保存しません: 保存すると、新しい返信が来るたびに既存ファイルを書き換えることになるからです。順序は `chain.jsonl` が持ち、識別子が上流の Unix ミリ秒メッセージ ID であるため、ファイル名はそれ自体で時系列順にソートされます。
+
+このディレクトリが唯一の真実です — `plan` はディレクトリを読んで答えます。メッセージファイルを削除すれば次回の sync で再取得され、中断された push は次回の sync で完了し、ボタンを 2 回押しても何も起きません（冪等）。保存できなかった添付ファイルが成功として報告されることは**決してありません**: `thread.json`、フォルダの `README.md`、push のレスポンスに記載され、実際にバイト列が届くまで `want_attachments` に現れ続けます。
+
+スレッドはデフォルトで `{working_dir}/teams` 配下（`ingest/` の隣）に置かれます — エディタで普段読んでいるノート vault など別の場所に置きたい場合は `CCDB_TEAMS_VAULT_ROOT`（または `teams_vault_root=`）を設定してください。両ルートとも `/api/ingest` と同じ ingest bearer トークンで保護され、外部リスナーからも利用でき、セッションのスポーンは一切行いません。
 
 ### スタートアップリジューム
 
@@ -440,7 +471,7 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 
 **前提条件:**
 
-- Python 3.10+
+- Python 3.12+
 - 以下のうち少なくとも 1 つ:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — インストールと認証（`claude login`）。Anthropic Pro/Max サブスクライバーに推奨。
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` の後 `codex login`。既存の ChatGPT Plus/Pro/Business サブスクリプションを使用。
@@ -793,6 +824,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `CLAUDE_WORKING_DIR` | Claude の作業ディレクトリ（旧名 — `CCDB_WORKING_DIR` を推奨） | カレントディレクトリ |
 | `MAX_CONCURRENT_SESSIONS` | 最大並行 Claude CLI セッション数（チャット・スキル・スケジューラ・Webhook の全パスに適用） | `3` |
 | `SESSION_TIMEOUT_SECONDS` | セッション非アクティブタイムアウト | `300` |
+| `CCDB_PR_COMPLETION_OWNER` | 指定したGitHub所有者の非Draft `session/<thread_id>` PRが残っている場合、同じAIを1回だけ自動継続して完了または具体的なブロッカー報告まで進める。認証済み`gh`が必要。 | （オプション） |
 | `DISCORD_OWNER_ID` | Claude が入力待ちのとき @mention する Discord ユーザー ID | （オプション） |
 | `COORDINATION_CHANNEL_ID` | AI Lounge チャンネルのデフォルトフォールバック用チャンネル ID | （オプション） |
 | `CCDB_MENTION_ANYWHERE` | true のとき、ギルド内のどのチャンネル・スレッドでも @メンションで Claude を呼び出せる。`false` にすると設定されたチャンネルのみを監視 | `true` |
@@ -813,6 +845,7 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 | `API_PORT` | REST API ポート（設定すると REST API が有効になる） | （オプション） |
 | `CCDB_INGEST_TOKEN` | `POST /api/ingest` 用の Bearer トークン（`api_secret` とは独立）。未設定ならこのエンドポイントは `503` を返す | （オプション） |
 | `CCDB_INGEST_REQUIRE_COMPLETE` | `1` を設定すると、`attachments_manifest` によって添付ファイルの欠落が判明したインジェストを、部分的な証拠でセッションを開始せずに `409` で拒否する | `0` |
+| `CCDB_TEAMS_VAULT_ROOT` | `POST /api/teams/sync` が上流スレッドをミラーリングする先のディレクトリ（メッセージ 1 件につき 1 ファイル）。`CCDB_INGEST_TOKEN` で保護される | `{working_dir}/teams` |
 
 ### パーミッションモード — `-p` モードで動作するもの
 
@@ -1045,6 +1078,8 @@ uv add "claude-code-discord-bridge[api]"
 | GET | `/api/ingest/summary` | 長時間続くインジェストスレッドの継続サマリー + `marker` を `key` で読み取り（ingest-token 認証）。クライアントは差分だけをエクスポートできる |
 | POST | `/api/ingest/summary` | セッションから更新版の継続サマリー（`result_id` + `summary`）を保存 — localhost コントロールプレーン。ccdb が `marker` をインジェスト行から前進させる |
 | DELETE | `/api/ingest/summary` | `key` の保存済みサマリーをクリアし、次回インジェストで完全な再サマリーを強制 |
+| POST | `/api/teams/sync/plan` | 上流スレッドのミラーに何が足りないかを問い合わせる — ID + ハッシュを送ると `want_messages`/`want_attachments`/`newest_have_mid` が返る（ingest-token 認証） |
+| POST | `/api/teams/sync/push` | plan が要求したメッセージを Vault 配下に 1 件 1 ファイルで保存。添付ファイルと追記専用の `chain.jsonl` を伴う |
 | POST | `/api/mark-resume` | 次回 Bot 起動時のスレッド自動リジュームを登録 |
 | GET | `/api/lounge` | AI Lounge の最近のメッセージを取得 |
 | POST | `/api/lounge` | AI Lounge にメッセージを投稿（`label` オプション） |
@@ -1114,6 +1149,8 @@ claude_discord/
   cog_loader.py            # 動的カスタム Cog ローダー（CUSTOM_COGS_DIR）
   bot.py                   # Discord Bot クラス
   protocols.py             # 共有プロトコル（DrainAware）
+  frontend.py              # DiscordFrontend — resolve/create a conversation by key
+  stores.py                # build_session_stores() — every repo, no frontend
   concurrency.py           # Worktree 指示 + アクティブセッションレジストリ
   collision.py             # ファイル書き込み追跡 + 衝突判定ルール（純粋関数・時刻注入）
   lounge.py                # AI Lounge プロンプトビルダー
@@ -1148,12 +1185,14 @@ claude_discord/
     claims_repo.py         # アドバイザリなリソースクレーム CRUD（TTL 付き）
     resume_repo.py         # スタートアップリジューム CRUD（Bot 再起動をまたいだ保留リジューム）
     settings_repo.py       # ギルドごとの設定
+    frontend_thread_repo.py  # ThreadKey → 会話の実際の場所
     inbox_repo.py          # スレッドインボックス CRUD（THREAD_INBOX_ENABLED）
   discord_ui/
     status.py              # 絵文字リアクションステータスマネージャー（デバウンス付き）
     chunker.py             # フェンス・テーブル対応メッセージ分割
     embeds.py              # Discord embed ビルダー
     views.py               # 停止ボタンと共有 UI コンポーネント
+    prompt_views.py        # ChoiceView / FormModal — renders the protocol's prompts
     mentions.py            # user_mention_kwargs() — Claude が入力待ちのときリクエスターに通知
     ask_bus.py             # AskUserQuestion 通信用イベントバス
     ask_view.py            # AskUserQuestion 用 Discord ボタン / Select Menu
@@ -1161,15 +1200,14 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — デバウンス付きインプレース編集
     tool_timer.py          # LiveToolTimer — 長時間ツール実行の経過時間カウンター
     thread_dashboard.py    # スレッドのセッション状態を表示する live ピン embed
-    plan_view.py           # Plan Mode 承認ボタン（Approve/Cancel）
-    permission_view.py     # ツール実行許可ボタン（Allow/Deny）
-    elicitation_view.py    # MCP Elicitation 用 Discord UI（Modal フォームまたは URL ボタン）
     file_sender.py         # .ccdb-attachments 経由のファイル配信
     inbox_classifier.py    # classify() — セッションにラベルを付ける軽量 claude -p 呼び出し
     thread_renamer.py      # suggest_title() — スレッド自動リネーム用バックグラウンド claude -p 呼び出し
   ext/
     api_server.py          # REST API サーバー（オプション、aiohttp が必要）
     ingest_manifest.py     # attachments_manifest と実際に届いたファイルの突合
+    teams_sync.py          # /api/teams/sync（plan + push）の have/want ネゴシエーション
+    teams_store.py         # TeamsVaultStore — 1 メッセージ 1 ファイル、chain.jsonl、_history/
   utils/
     logger.py              # ロギング設定
 examples/

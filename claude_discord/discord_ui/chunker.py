@@ -1,196 +1,74 @@
-"""Fence-aware message chunker for Discord's 2000-character limit.
+"""Discord's bindings for the shared message chunker.
 
-Inspired by OpenClaw: never split inside a code block. If forced to split,
-properly close and reopen the fence markers.
+The chunking and table-rendering logic moved to
+:mod:`claude_code_core.rendering` so every frontend gets it. What stays here
+is the part that is genuinely about Discord: its 2,000-character message
+limit, and the width its code-block font can show without wrapping.
 
-GFM pipe-tables are rendered with Unicode box-drawing characters (Claude Code
-style) and wrapped in triple-backtick fences before chunking.  This gives
-consistent monospace rendering in Discord for any table size: small tables
-that fit in one message and large tables that must be split across messages
-both appear with correct column alignment.
+Existing imports keep working — this module re-exports the same names with the
+same behaviour, so callers that only ever talk to Discord need no change.
 """
 
 from __future__ import annotations
 
-from claude_discord.discord_ui.table_renderer import parse_gfm_table, render_table
+from claude_code_core.frontend import SurfaceCapabilities
+from claude_code_core.rendering.chunker import FENCE_REOPEN_RESERVE, wrap_tables_in_fences
+from claude_code_core.rendering.chunker import chunk_message as _chunk_message
 
 DISCORD_MAX_CHARS = 2000
 # Leave room for fence reopening overhead
-EFFECTIVE_MAX = DISCORD_MAX_CHARS - 50
+EFFECTIVE_MAX = DISCORD_MAX_CHARS - FENCE_REOPEN_RESERVE
+
+#: Width a Discord code block shows without wrapping on a typical client.
+DISCORD_MONOSPACE_WIDTH = 55
+
+DISCORD_CAPABILITIES = SurfaceCapabilities(
+    max_message_chars=DISCORD_MAX_CHARS,
+    supports_headings=True,
+    supports_inline_images=True,
+    supports_message_edit=True,
+    supports_message_delete=True,
+    supports_reactions=True,
+    supports_slash_commands=True,
+    supports_pinned_dashboard=True,
+    supports_thread_rename=True,
+    # Discord does not rate-limit edits by the hour the way Teams does; the
+    # 1.5s streaming pace is the real constraint.
+    live_update_budget_per_hour=1_000_000,
+    stream_min_interval=1.5,
+    max_files_per_message=10,
+    max_file_bytes=8 * 1024 * 1024,
+    file_delivery="inline",
+    monospace_width=DISCORD_MONOSPACE_WIDTH,
+    # Discord's code-block font does not render CJK at exactly 2x ASCII, so
+    # box-drawn CJK tables would be visibly crooked. Fall back to vertical.
+    monospace_cjk_is_double_width=False,
+)
 
 
 def chunk_message(text: str, max_chars: int = EFFECTIVE_MAX) -> list[str]:
-    """Split a message into Discord-safe chunks.
-
-    Rules:
-    1. Wrap GFM pipe-tables in code fences for consistent monospace rendering
-    2. Prefer splitting at paragraph boundaries (blank lines)
-    3. Never split inside a code fence if possible
-    4. If forced to split inside a fence, close it and reopen in next chunk
-    5. Respect max_chars limit per chunk
-    """
-    if not text:
-        return []
-
-    text = _wrap_tables_in_fences(text)
-
-    if len(text) <= max_chars:
-        return [text]
-
-    chunks: list[str] = []
-    remaining = text
-
-    while remaining:
-        if len(remaining) <= max_chars:
-            chunks.append(remaining)
-            break
-
-        # Find a good split point
-        split_at = _find_split_point(remaining, max_chars)
-        chunk = remaining[:split_at].rstrip()
-        remaining = remaining[split_at:].lstrip("\n")
-
-        # Handle fence state
-        chunk, fence_lang = _close_open_fence(chunk)
-        chunks.append(chunk)
-
-        # Reopen fence in next chunk if needed
-        if fence_lang is not None:
-            remaining = f"```{fence_lang}\n{remaining}"
-
-    return [c for c in chunks if c.strip()]
+    """Split a message into Discord-safe chunks."""
+    return _chunk_message(
+        text,
+        max_chars,
+        monospace_width=DISCORD_MONOSPACE_WIDTH,
+        cjk_is_double_width=False,
+    )
 
 
 def _wrap_tables_in_fences(text: str) -> str:
-    """Render GFM pipe-tables as box-drawing tables and wrap in code fences.
-
-    Collects consecutive pipe-table lines, renders them with Unicode
-    box-drawing characters via ``render_table``, and wraps the result in a
-    triple-backtick code fence.  If the renderer cannot parse the lines
-    (e.g. missing separator row), the raw pipe-table lines are fenced as-is.
-
-    Tables already inside a code fence are left untouched.
-    """
-    lines = text.splitlines(keepends=True)
-    result: list[str] = []
-    in_fence = False
-    table_lines: list[str] = []
-
-    for line in lines:
-        stripped = line.rstrip("\n\r")
-
-        # Track outer code fences — don't double-wrap already-fenced content
-        if stripped.strip().startswith("```"):
-            if table_lines:
-                _flush_table(table_lines, result)
-                table_lines = []
-            in_fence = not in_fence
-            result.append(line)
-            continue
-
-        if in_fence:
-            result.append(line)
-            continue
-
-        is_table = _is_table_line(stripped)
-
-        if is_table:
-            table_lines.append(stripped)
-        else:
-            if table_lines:
-                _flush_table(table_lines, result)
-                table_lines = []
-            result.append(line)
-
-    if table_lines:
-        _flush_table(table_lines, result)
-
-    return "".join(result)
+    """Render GFM pipe-tables for Discord and wrap them in code fences."""
+    return wrap_tables_in_fences(
+        text,
+        max_width=DISCORD_MONOSPACE_WIDTH,
+        cjk_is_double_width=False,
+    )
 
 
-def _flush_table(table_lines: list[str], result: list[str]) -> None:
-    """Render collected table lines and append fenced output to *result*."""
-    parsed = parse_gfm_table(table_lines)
-    rendered = render_table(parsed) if parsed else None
-
-    _ensure_newline(result)
-    result.append("```\n")
-    if rendered:
-        result.append(rendered)
-        result.append("\n")
-    else:
-        # Fallback: raw pipe-table lines
-        for tl in table_lines:
-            result.append(tl)
-            result.append("\n")
-    result.append("```\n")
-
-
-def _ensure_newline(parts: list[str]) -> None:
-    """Append a newline to *parts* if the last part does not end with one.
-
-    Used by ``_wrap_tables_in_fences`` to guarantee that a closing fence
-    marker always starts on its own line, even when the last table row
-    was not terminated with a newline.
-    """
-    if parts and not parts[-1].endswith("\n"):
-        parts.append("\n")
-
-
-def _find_split_point(text: str, max_chars: int) -> int:
-    """Find the best position to split the text.
-
-    Preference order:
-    1. Paragraph break (blank line) before max_chars
-    2. Line break before max_chars
-    3. Hard split at max_chars
-    """
-    search_region = text[:max_chars]
-
-    # Search backward from max_chars for a blank line
-    last_paragraph = search_region.rfind("\n\n")
-    if last_paragraph > max_chars // 3:
-        return last_paragraph + 1
-
-    # Search backward for any newline
-    last_newline = search_region.rfind("\n")
-    return last_newline + 1 if last_newline > max_chars // 3 else max_chars
-
-
-def _is_table_line(line: str) -> bool:
-    """Return True if *line* looks like a markdown table row.
-
-    A table row must start **and** end with a pipe character (after stripping
-    whitespace) and contain at least one character between the pipes.
-    """
-    stripped = line.strip()
-    return len(stripped) >= 3 and stripped.startswith("|") and stripped.endswith("|")
-
-
-def _close_open_fence(chunk: str) -> tuple[str, str | None]:
-    """If the chunk has an unclosed code fence, close it.
-
-    Returns:
-        Tuple of (possibly modified chunk, fence language or None).
-        fence language is None if no fence was open, "" if no language specified.
-    """
-    fence_count = 0
-    fence_lang = ""
-    lines = chunk.split("\n")
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            if fence_count % 2 == 0:
-                # Opening fence
-                fence_lang = stripped[3:].strip()
-                fence_count += 1
-            else:
-                # Closing fence
-                fence_count += 1
-
-    # If odd number of fences, the last one is unclosed
-    if fence_count % 2 == 1:
-        return chunk + "\n```", fence_lang
-
-    return chunk, None
+__all__ = [
+    "DISCORD_CAPABILITIES",
+    "DISCORD_MAX_CHARS",
+    "DISCORD_MONOSPACE_WIDTH",
+    "EFFECTIVE_MAX",
+    "chunk_message",
+]

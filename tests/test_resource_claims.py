@@ -169,11 +169,11 @@ async def test_post_claim_returns_201_then_409(api_client: TestClient, bot: Magi
     assert body["claim"]["holder_state"] == "running"
 
 
-async def test_post_claim_reports_idle_holder(api_client: TestClient) -> None:
+async def test_post_claim_reports_history_holder(api_client: TestClient) -> None:
     await api_client.post("/api/claims", json={"resource": RESOURCE, "thread_id": 111})
     resp = await api_client.post("/api/claims", json={"resource": RESOURCE, "thread_id": 222})
 
-    assert (await resp.json())["claim"]["holder_state"] == "idle"
+    assert (await resp.json())["claim"]["holder_state"] == "history"
 
 
 async def test_post_claim_matches_regardless_of_case_and_spacing(

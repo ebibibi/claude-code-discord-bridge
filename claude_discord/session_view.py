@@ -20,10 +20,11 @@ if TYPE_CHECKING:
 
     from .concurrency import ActiveSession
 
-# A session is "running" while a Claude turn is in flight; the SessionRegistry
-# holds an entry only between turn start and turn end (see cogs/_run_helper.py).
+# A session is "running" while a Claude turn is in flight. Persisted records
+# without an in-flight turn are history, not agents waiting for work or input.
+# The SessionRegistry holds an entry only between turn start and turn end.
 STATE_RUNNING = "running"
-STATE_IDLE = "idle"
+STATE_HISTORY = "history"
 
 
 def latest_lounge_by_thread(messages: list[LoungeMessage]) -> dict[int, LoungeMessage]:
@@ -59,7 +60,7 @@ def build_session_views(
         thread_names: Optional thread_id → Discord thread title.
 
     Returns:
-        One dict per thread, running sessions first, then most recently used.
+        One dict per thread, running sessions first, then recent history.
         A thread present only in the registry (no DB row yet — its session ID
         is minted after the first turn completes) still appears, because that
         is exactly the session most likely to collide with the caller.
@@ -107,7 +108,7 @@ def build_session_views(
         view.setdefault("current_task", None)
         view.setdefault("working_dir", None)
         view["thread_name"] = names.get(thread_id)
-        view["state"] = STATE_RUNNING if thread_id in running_thread_ids else STATE_IDLE
+        view["state"] = STATE_RUNNING if thread_id in running_thread_ids else STATE_HISTORY
         msg = latest_lounge.get(thread_id)
         view["latest_lounge"] = (
             None
@@ -119,5 +120,5 @@ def build_session_views(
     # order matches chronological order; a missing timestamp sorts last.
     newest_first = sorted(views.values(), key=lambda v: v["last_used_at"] or "", reverse=True)
     running = [v for v in newest_first if v["state"] == STATE_RUNNING]
-    idle = [v for v in newest_first if v["state"] != STATE_RUNNING]
-    return running + idle
+    history = [v for v in newest_first if v["state"] != STATE_RUNNING]
+    return running + history

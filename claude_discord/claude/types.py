@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+
+from claude_code_core.frontend import ActivityHandle
 
 # Re-export everything from core
 from claude_code_core.types import (
@@ -28,9 +29,6 @@ from claude_code_core.types import (
     ToolCategory,
     ToolUseEvent,
 )
-
-if TYPE_CHECKING:
-    import discord
 
 __all__ = [
     # Re-exported from core
@@ -56,11 +54,8 @@ __all__ = [
 class SessionState:
     """Tracks the state of a Claude Code session during a single run.
 
-    active_tools maps tool_use_id -> Discord Message, enabling live embed
-    updates when tool results arrive.
-
-    active_timers maps tool_use_id -> asyncio.Task that periodically edits
-    the in-progress embed to show elapsed execution time. Cancelled on result.
+    active_tools maps tool_use_id -> frontend-neutral ActivityHandle, enabling
+    the originating surface to render and finish work in its native UI.
     """
 
     session_id: str | None = None
@@ -69,9 +64,11 @@ class SessionState:
     partial_text: str = ""
     # jump_url of the last directly-posted assistant text message (inbox linking)
     last_assistant_url: str | None = None
-    active_tools: dict[str, discord.Message] = field(default_factory=dict)
+    active_tools: dict[str, ActivityHandle] = field(default_factory=dict)
+    # Kept for one compatibility release; timers now belong inside a surface's
+    # ActivityHandle rather than in the frontend-neutral processor.
     active_timers: dict[str, asyncio.Task[None]] = field(default_factory=dict)
-    # TodoWrite: reference to the live todo embed message (edited in-place on each update)
-    todo_message: discord.Message | None = None
+    # TodoWrite: frontend-owned live activity.
+    todo_message: ActivityHandle | None = None
     # Number of tool calls dispatched this session (used to detect significant work)
     tool_use_count: int = 0

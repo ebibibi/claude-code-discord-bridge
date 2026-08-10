@@ -1,6 +1,6 @@
 # claude-code-discord-bridge — Copilot Instructions
 
-Discord frontend for Claude Code CLI. Python 3.10+ with discord.py v2.
+Discord frontend for Claude Code CLI. Python 3.12+ with discord.py v2.
 
 ## Key Rules
 

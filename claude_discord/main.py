@@ -20,6 +20,7 @@ from claude_code_core.backend import create_backend
 
 from .bot import ClaudeDiscordBot
 from .cog_loader import load_custom_cogs
+from .deployment import DataLayout
 from .setup import setup_bridge
 from .utils.logger import setup_logging
 
@@ -153,7 +154,10 @@ async def main() -> None:
         from .database.notification_repo import NotificationRepository
         from .ext.api_server import ApiServer
 
-        notification_repo = NotificationRepository("data/notifications.db")
+        # Everything else derives its path from the deployment root; this one
+        # used to be hardcoded, which meant two deployments sharing a working
+        # directory would silently share their scheduled notifications.
+        notification_repo = NotificationRepository(DataLayout.from_env().notifications_db)
         await notification_repo.init_db()
         api_server = ApiServer(
             repo=notification_repo,
@@ -184,6 +188,7 @@ async def main() -> None:
             allowed_user_ids=allowed_user_ids,
             claude_channel_id=channel_id,
             claude_channel_ids=claude_channel_ids,
+            data_root=os.getenv("CCDB_DATA_ROOT") or None,
             cli_sessions_path=config["cli_sessions_path"] or None,
             enable_thread_inbox=config["thread_inbox_enabled"].lower() == "true",
             monitor_all_channels=config["monitor_all_channels"].lower() in ("true", "1", "yes"),

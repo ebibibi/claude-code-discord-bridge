@@ -23,12 +23,12 @@ check-setup:
 
 # Auto-format all Python source files.
 format:
-	uv run ruff format claude_discord/ tests/
+	uv run ruff format claude_discord/ claude_teams/ tests/
 
 # Lint check (no auto-fix) — same as CI.
 check:
-	uv run ruff format --check claude_discord/ tests/
-	uv run ruff check claude_discord/ tests/
+	uv run ruff format --check claude_discord/ claude_teams/ tests/
+	uv run ruff check claude_discord/ claude_teams/ tests/
 
 # Run the full test suite.
 test:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,7 +24,7 @@ def _msg(
     m.author = MagicMock()
     m.author.bot = bot
     m.author.display_name = author
-    m.created_at = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    m.created_at = datetime.now(UTC) - timedelta(minutes=minutes_ago)
     return m
 
 
@@ -126,7 +126,7 @@ class TestBuildThreadTranscript:
 
         after = captured["after"]
         assert isinstance(after, datetime)
-        delta = datetime.now(timezone.utc) - after
+        delta = datetime.now(UTC) - after
         assert timedelta(days=6, hours=23) < delta < timedelta(days=7, minutes=1)
         assert captured["oldest_first"] is True
 
