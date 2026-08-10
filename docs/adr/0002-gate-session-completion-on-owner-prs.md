@@ -100,5 +100,5 @@ forever.
 
 ## Related
 
-- [Issue #577](https://github.com/ebibibi/claude-code-discord-bridge/issues/577)
+- [Issue #577](https://github.com/ebibibi/ebi-agent-chat-relay/issues/577)
 - [Ebi Workspace PR #9](https://github.com/ebibibi/ebi-workspace/pull/9)

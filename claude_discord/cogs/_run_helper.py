@@ -387,7 +387,7 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
     # When system_context is present a fresh clone is created above, making the
     # original config.runner a "dead" runner with no process.  Without this
     # update the Stop button would send SIGINT to that dead runner and have no
-    # effect.  See: https://github.com/ebibibi/claude-code-discord-bridge/issues/174
+    # effect.  See: https://github.com/ebibibi/ebi-agent-chat-relay/issues/174
     if runner is not config.runner:
         if config.stop_view is not None:
             config.stop_view.update_runner(runner)
@@ -396,7 +396,7 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
         # calls interrupt() on the runner that actually owns the subprocess.
         # Without this, compact_boundary and AskUserQuestion interrupt the
         # original (process-less) runner — a no-op that leaves Claude running
-        # invisibly.  See: https://github.com/ebibibi/claude-code-discord-bridge/issues/306
+        # invisibly.  See: https://github.com/ebibibi/ebi-agent-chat-relay/issues/306
         config = replace(config, runner=runner)
 
     processor = EventProcessor(config)

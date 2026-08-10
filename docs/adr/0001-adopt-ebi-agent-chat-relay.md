@@ -113,4 +113,4 @@ This ADR does not:
 
 - [Phased rename plan](../RENAME_PLAN.md)
 - [Design decisions](../DESIGN_DECISIONS.md)
-- [Issue #571](https://github.com/ebibibi/claude-code-discord-bridge/issues/571)
+- [Issue #571](https://github.com/ebibibi/ebi-agent-chat-relay/issues/571)

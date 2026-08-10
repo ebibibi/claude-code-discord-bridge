@@ -57,8 +57,8 @@ Alternative considered: Claude embeds `<!-- ccdb:schedule {...} -->` in response
 ### Setup
 
 ```bash
-git clone https://github.com/ebibibi/claude-code-discord-bridge.git
-cd claude-code-discord-bridge
+git clone https://github.com/ebibibi/ebi-agent-chat-relay.git
+cd ebi-agent-chat-relay
 uv sync --dev
 ```
 

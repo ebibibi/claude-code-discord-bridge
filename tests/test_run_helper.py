@@ -728,7 +728,7 @@ class TestStopViewRunnerSync:
     subprocess.  Without this, Stop sends SIGINT to the original runner whose
     _process is None and has no effect.
 
-    See: https://github.com/ebibibi/claude-code-discord-bridge/issues/174
+    See: https://github.com/ebibibi/ebi-agent-chat-relay/issues/174
     """
 
     @pytest.fixture
