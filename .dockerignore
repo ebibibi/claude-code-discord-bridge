@@ -1,0 +1,7 @@
+.git
+.venv
+tests
+docs
+examples
+scripts
+*.md

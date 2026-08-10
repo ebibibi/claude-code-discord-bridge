@@ -91,6 +91,68 @@ The queue SAS URL is a credential in a URL: it never appears in a log line, an
 exception, or a `repr`. The failures raised here name the operation and the
 status code and nothing else.
 
+## Measured, on a real deployment
+
+Azure Container Apps in `japaneast`, 0.25 vCPU / 0.5 GiB, receiver only. Times
+are from the Teams transcript — user message to bot reply, end to end through
+Teams, the Bot Connector, the receiver, the queue, the poller at home, and back
+out to the Bot Connector.
+
+| | latency |
+|---|---|
+| home endpoint behind a Cloudflare tunnel (no relay) | 1.8 s |
+| **through the relay**, first message (outbound token not yet cached) | 2.1 s |
+| **through the relay**, steady state | **0.8 s / 1.1 s** |
+
+The relay is *faster* than the tunnel it replaced. The queue hop costs less
+than the tunnel did, and the receiver sits in the same region as the tenant.
+
+The receiver's own share, measured from the internet: **68 ms median** to
+verify and answer (8 samples, warm).
+
+### Cold start, and why `min-replicas` is 1
+
+Scale-to-zero is the wrong default here, and not for cost reasons. Measured on
+this deployment, after the app had scaled to zero:
+
+| | latency |
+|---|---|
+| first request after scale-to-zero | **20.9 s** |
+| the very next request | **0.069 s** |
+
+20.9 s is not a slow reply. Teams gives the messaging endpoint a short budget,
+and a **card press is answered from the HTTP response body within seconds** —
+so the first press after an idle period shows the user an error even though
+everything downstream worked perfectly. The failure mode is not "slow", it is
+"the first person to press a button after lunch sees an error, and nobody can
+reproduce it".
+
+Running one replica always-on removes the variable, and the bill says it is not
+the expensive part of this deployment.
+
+### What it costs to leave one replica running
+
+Container Apps bills a replica that is *running but not serving a request* at an
+idle rate — for vCPU that is **1/8** of the active rate. At the `japaneast`
+retail price (2026-08), 0.25 vCPU and 0.5 GiB for a 730-hour month:
+
+| | monthly |
+|---|---|
+| Container App, `min-replicas=1`, idle | **$4.3 – $5.9** |
+| Container Registry, Basic — one image | **$5.1** |
+| Storage queue, Bot Service (F0), Container Apps environment | ~$0 |
+
+The range on the first line is whether the monthly free grant (180,000 vCPU-s,
+360,000 GiB-s) is credited against idle usage; the honest answer is "assume it
+is not".
+
+Note what that table says: **holding the image costs about as much as running
+it.** A registry is billed per day for existing, and the compute is billed at
+the idle rate for a container that spends its life asleep. If this bill needs to
+come down, the receiver is the wrong place to look — publish the image to a free
+public registry instead. Nothing in it is secret; that is the point of the
+Dockerfile.
+
 ## Why not the Azure SDK
 
 Four HTTP calls — put, get, delete, and a `visibilitytimeout` that does the
