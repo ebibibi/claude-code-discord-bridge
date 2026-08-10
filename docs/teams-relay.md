@@ -153,6 +153,21 @@ come down, the receiver is the wrong place to look — publish the image to a fr
 public registry instead. Nothing in it is secret; that is the point of the
 Dockerfile.
 
+The measured deployment was subsequently moved from Azure Container Registry
+to `ghcr.io/ebibibi/ccdb-teams-relay:v2`, and the dedicated Basic registry was
+deleted. The image digest remained identical across registries. A fresh
+Container Apps replica was then pulled and started after the Azure registry and
+its credentials were gone; three health checks completed in 65 ms. This removes
+the $5.1/month registry line from the table above.
+
+GitHub Container Registry makes command-line-published packages private by
+default, and changing package visibility is a web-settings operation rather
+than a Packages REST API operation. A private image costs the same ($0) but
+requires a registry credential in Container Apps. Use a dedicated token without
+`repo` or `delete:packages`; if the package is later made public, remove that
+credential and restart the revision once to prove anonymous pull works before
+discarding it.
+
 ## Why not the Azure SDK
 
 Four HTTP calls — put, get, delete, and a `visibilitytimeout` that does the
