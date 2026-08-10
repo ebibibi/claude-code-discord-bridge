@@ -2,7 +2,7 @@
 
 # One-time setup after cloning: install uv (if needed) and register the committed git hooks.
 setup:
-	@if ! command -v uv &>/dev/null; then \
+	@if ! command -v uv >/dev/null 2>&1; then \
 		echo "❌ 'uv' is not installed. Install: https://docs.astral.sh/uv/getting-started/installation/"; \
 		exit 1; \
 	fi
@@ -11,7 +11,7 @@ setup:
 
 # Verify that one-time setup has been completed (hooks configured + uv present).
 check-setup:
-	@if ! command -v uv &>/dev/null; then \
+	@if ! command -v uv >/dev/null 2>&1; then \
 		echo "❌ 'uv' is not installed. Run: make setup"; \
 		exit 1; \
 	fi
