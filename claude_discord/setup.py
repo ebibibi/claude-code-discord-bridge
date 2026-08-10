@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from discord.ext.commands import Bot
 
     from claude_code_core.backend import SessionBackend
+    from claude_code_core.frontend import SessionFrontend
 
     from .backend_factory import BackendFactory
     from .backend_settings import BackendSettings
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
     from .database.summary_repo import ThreadSummaryRepository
     from .database.task_repo import TaskRepository
     from .ext.api_server import ApiServer
+
+from .deployment import DEFAULT_DATA_ROOT, DataLayout
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,10 @@ class BridgeComponents:
     summary_repo: ThreadSummaryRepository | None = None
     backend_factory: BackendFactory | None = None
     backend_settings: BackendSettings | None = None
+    #: How this deployment reaches a conversation without knowing the platform.
+    #: Discord's is built here; a custom Cog can read it instead of calling
+    #: ``bot.get_channel`` and hard-coding Discord into its own logic.
+    frontend: SessionFrontend | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -84,7 +91,8 @@ async def setup_bridge(
     runner: SessionBackend,
     *,
     api_server: ApiServer | None = None,
-    session_db_path: str = "data/sessions.db",
+    data_root: str | None = None,
+    session_db_path: str | None = None,
     allowed_user_ids: set[int] | None = None,
     claude_channel_id: int | None = None,
     claude_channel_ids: set[int] | None = None,
@@ -93,7 +101,7 @@ async def setup_bridge(
     chat_only_channel_ids: set[int] | None = None,
     cli_sessions_path: str | None = None,
     enable_scheduler: bool = True,
-    task_db_path: str = "data/tasks.db",
+    task_db_path: str | None = None,
     lounge_channel_id: int | None = None,
     max_concurrent: int | None = None,
     worktree_base_dir: str | None = None,
@@ -121,7 +129,14 @@ async def setup_bridge(
         runner: SessionBackend (ClaudeRunner, CodexRunner, etc.).
         api_server: Optional ApiServer to auto-wire repos into.  Also sets
                     runner.api_port so CCDB_API_URL is available to Claude.
-        session_db_path: Path for session SQLite DB.
+        data_root: Directory this deployment owns. Every database, worktree
+            and log defaults to living under it, so isolating a second
+            deployment on the same host is one setting rather than several.
+            Defaults to ``CCDB_DATA_ROOT``, then to ``data`` — the historical
+            location, so an upgrade never moves a live database.
+        session_db_path: Path for session SQLite DB. Overrides *data_root* for
+            this one file; the override is logged at startup because it is the
+            only remaining way two deployments can end up sharing state.
         allowed_user_ids: Set of Discord user IDs allowed to use Claude.
         claude_channel_id: Primary channel ID for Claude chat.  Kept for
                            backward compatibility.  Also used as the fallback
@@ -155,7 +170,7 @@ async def setup_bridge(
                                env var (comma-separated).
         cli_sessions_path: Path to ~/.claude/projects for session sync.
         enable_scheduler: Whether to enable SchedulerCog.
-        task_db_path: Path for scheduled tasks SQLite DB.
+        task_db_path: Path for scheduled tasks SQLite DB. Overrides *data_root*.
         lounge_channel_id: Discord channel ID for AI Lounge messages.
                            Defaults to COORDINATION_CHANNEL_ID env var.
         worktree_base_dir: Base directory to scan for session worktrees
@@ -181,16 +196,8 @@ async def setup_bridge(
     from .cogs.scheduler import SchedulerCog
     from .cogs.session_manage import SessionManageCog
     from .cogs.skill_command import SkillCommandCog
-    from .database.ask_repo import PendingAskRepository
-    from .database.claims_repo import ClaimRepository
+    from .cross_backend_handoff import ConversationHistoryReader
     from .database.inbox_repo import ThreadInboxRepository
-    from .database.ingest_repo import IngestResultRepository
-    from .database.lounge_repo import LoungeRepository
-    from .database.models import init_db
-    from .database.repository import SessionRepository, UsageStatsRepository
-    from .database.resume_repo import PendingResumeRepository
-    from .database.settings_repo import SettingsRepository
-    from .database.summary_repo import ThreadSummaryRepository
     from .database.task_repo import TaskRepository
     from .discord_ui.thread_context import DEFAULT_DAYS
     from .worktree import WorktreeManager
@@ -274,9 +281,13 @@ async def setup_bridge(
     if max_concurrent != 3:
         logger.info("Max concurrent sessions: %d", max_concurrent)
 
-    from .cogs._run_helper import configure_session_limit
+    from .cogs._run_helper import configure_pr_completion_gate, configure_session_limit
 
     configure_session_limit(max_concurrent)
+    pr_completion_owner = os.getenv("CCDB_PR_COMPLETION_OWNER", "").strip()
+    configure_pr_completion_gate(pr_completion_owner or None)
+    if pr_completion_owner:
+        logger.info("Owner PR completion gate enabled for %s", pr_completion_owner)
 
     # WorktreeManager — attach to bot so cogs can access it via bot.worktree_manager
     if worktree_base_dir is None:
@@ -286,21 +297,48 @@ async def setup_bridge(
             bot.worktree_manager = WorktreeManager(base_dir=worktree_base_dir)  # type: ignore[attr-defined]
         logger.info("WorktreeManager enabled (base_dir=%s)", worktree_base_dir)
 
+    # --- Deployment layout -------------------------------------------------
+    # One root per deployment. Ten repositories share session_db_path, so this
+    # single file is where cross-customer leakage would happen if two
+    # deployments ever pointed at the same place.
+    layout = DataLayout.for_root(
+        data_root if data_root is not None else os.getenv("CCDB_DATA_ROOT") or DEFAULT_DATA_ROOT,
+        sessions_db=session_db_path,
+        tasks_db=task_db_path,
+        worktrees_dir=worktree_base_dir,
+    )
+    session_db_path = layout.sessions_db
+    task_db_path = layout.tasks_db
+    escaped = layout.paths_outside_root()
+    if escaped:
+        logger.warning(
+            "Deployment root is %s but these paths live outside it: %s — "
+            "two deployments sharing any of them would share state",
+            layout.root,
+            ", ".join(f"{k}={v}" for k, v in sorted(escaped.items())),
+        )
+
     # --- Session DB (also hosts lounge_messages and pending_resumes tables) ---
-    os.makedirs(os.path.dirname(session_db_path) or ".", exist_ok=True)
-    await init_db(session_db_path)
-    session_repo = SessionRepository(session_db_path)
-    settings_repo = SettingsRepository(session_db_path)
-    ask_repo = PendingAskRepository(session_db_path)
-    lounge_repo = LoungeRepository(session_db_path)
-    claims_repo = ClaimRepository(session_db_path)
-    resume_repo = PendingResumeRepository(session_db_path)
-    usage_repo = UsageStatsRepository(session_db_path)
-    ingest_repo = IngestResultRepository(session_db_path)
-    await ingest_repo.init_db()
-    summary_repo = ThreadSummaryRepository(session_db_path)
-    await summary_repo.init_db()
-    logger.info("Session DB initialized: %s", session_db_path)
+    # Everything below this line is frontend-neutral, so it lives in its own
+    # module: a Teams deployment needs the same stores and none of the Discord
+    # wiring that follows.
+    from .frontend import DiscordFrontend
+    from .stores import build_session_stores
+
+    stores = await build_session_stores(session_db_path)
+
+    # The frontend seam. Built once and handed to everything that needs to
+    # reach a conversation, so a Cog never has to call bot.get_channel itself.
+    frontend = DiscordFrontend(bot, ledger=stores.frontend_threads)
+    session_repo = stores.sessions
+    settings_repo = stores.settings
+    ask_repo = stores.asks
+    lounge_repo = stores.lounge
+    claims_repo = stores.claims
+    resume_repo = stores.resumes
+    usage_repo = stores.usage
+    ingest_repo = stores.ingest
+    summary_repo = stores.summaries
 
     # Attach repos to bot so generic cogs (e.g. AutoUpgradeCog) can discover them
     # without a hard import dependency on ccdb internals.
@@ -334,6 +372,9 @@ async def setup_bridge(
         runner=runner,
         factory=backend_factory,
         backend_settings=backend_settings,
+        conversation_history=ConversationHistoryReader(
+            claude_sessions_root=cli_sessions_path,
+        ),
         max_concurrent=max_concurrent,
         allowed_user_ids=allowed_user_ids,
         ask_repo=ask_repo,
@@ -406,6 +447,7 @@ async def setup_bridge(
             session_repo=session_repo,
             backend_factory=backend_factory,
             backend_settings=backend_settings,
+            frontend=frontend,
         )
         await bot.add_cog(scheduler_cog)
         logger.info("Registered SchedulerCog")
@@ -446,6 +488,7 @@ async def setup_bridge(
         summary_repo=summary_repo,
         backend_factory=backend_factory,
         backend_settings=backend_settings,
+        frontend=frontend,
     )
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided

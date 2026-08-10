@@ -16,7 +16,7 @@ the turns being replied to always survive).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -77,7 +77,7 @@ async def build_recent_transcript(
     if days <= 0:
         return None
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = datetime.now(UTC) - timedelta(days=days)
     lines: list[str] = []
     try:
         async for message in channel.history(limit=limit, after=cutoff, oldest_first=True):

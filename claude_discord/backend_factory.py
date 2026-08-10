@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # ``--model`` entirely so the Codex CLI uses its own default (the ``model``
 # key in ~/.codex/config.toml, currently gpt-5.6-sol). Hard-coding a version
 # here only goes stale as the Codex console default moves.
-DEFAULT_MODEL: dict[str, str | None] = {"claude": "sonnet", "codex": None}
-DEFAULT_COMMAND = {"claude": "claude", "codex": "codex"}
+DEFAULT_MODEL: dict[str, str | None] = {"claude": "sonnet", "codex": None, "local": None}
+DEFAULT_COMMAND = {"claude": "claude", "codex": "codex", "local": "codex"}
 
 
 class BackendFactory:
@@ -63,7 +63,9 @@ class BackendFactory:
     def command_for(self, backend: str) -> str:
         if backend == "claude":
             return self.claude_command
-        if backend == "codex":
+        if backend in ("codex", "local"):
+            # The local backend is the same CLI, pointed at a ccdb-owned
+            # CODEX_HOME that pins it to a model on your own hardware.
             return self.codex_command
         raise ValueError(f"Unknown backend: {backend!r}")
 

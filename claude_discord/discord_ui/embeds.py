@@ -23,10 +23,12 @@ AUTOCOMPACT_THRESHOLD = 83.5
 _BACKEND_TITLE: dict[str, str] = {
     "claude": "\U0001f916 Claude Code",  # robot face 🤖
     "codex": "\U0001f300 OpenAI Codex",  # cyclone 🌀
+    "local": "\U0001f3e0 Local model",  # house 🏠
 }
 _BACKEND_COLOR_START: dict[str, int] = {
     "claude": COLOR_INFO,  # Discord blurple
     "codex": 0x10A37F,  # OpenAI teal-green
+    "local": 0x6B8E23,  # olive — "stays on your hardware"
 }
 
 
@@ -327,63 +329,4 @@ def todo_embed(todos: list[TodoItem]) -> discord.Embed:
         title=title,
         description=description[:4096],
         color=COLOR_TODO,
-    )
-
-
-def plan_embed(plan_text: str) -> discord.Embed:
-    """Create an embed showing Claude's plan with Approve/Cancel buttons pending.
-
-    Posted when ExitPlanMode is detected: Claude has finished planning and is
-    waiting for the user to approve or cancel before executing.
-    """
-    max_text = 4096 - 8 - len("\n... (truncated)")
-    truncated = plan_text[:max_text]
-    if len(plan_text) > max_text:
-        truncated += "\n... (truncated)"
-    return discord.Embed(
-        title="\U0001f4cb Plan ready — approve to execute",
-        description=f"```\n{truncated}\n```" if truncated else "*(no plan text)*",
-        color=0x2ECC71,  # Emerald green — action required
-    )
-
-
-def permission_embed(request) -> discord.Embed:
-    """Create an embed for a tool permission request.
-
-    Displays the tool name and its input arguments so the user can make an
-    informed Allow/Deny decision.
-    """
-    import json
-
-    tool_name = request.tool_name
-    tool_input = request.tool_input
-
-    # Format tool input as readable JSON (compact but not one-liner for long inputs).
-    try:
-        input_str = json.dumps(tool_input, ensure_ascii=False, indent=2)
-    except Exception:
-        input_str = str(tool_input)
-
-    max_input = 4096 - 8 - len(f"**Tool:** `{tool_name}`\n\n**Input:**\n```json\n\n```")
-    if len(input_str) > max_input:
-        input_str = input_str[:max_input] + "\n... (truncated)"
-
-    description = f"**Tool:** `{tool_name}`\n\n**Input:**\n```json\n{input_str}\n```"
-    return discord.Embed(
-        title="\U0001f510 Permission required",
-        description=description[:4096],
-        color=0xE74C3C,  # Alizarin red — requires attention
-    )
-
-
-def elicitation_embed(request) -> discord.Embed:
-    """Create an embed for an MCP elicitation request."""
-    mode_label = "Form" if request.mode == "form-mode" else "URL"
-    title = f"\U0001f50c MCP input required ({mode_label}) — {request.server_name}"
-
-    description = request.message or "An MCP server needs your input to continue."
-    return discord.Embed(
-        title=title[:256],
-        description=description[:4096],
-        color=0x9B59B6,  # Purple — MCP / external
     )

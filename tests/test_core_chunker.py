@@ -1,11 +1,13 @@
-"""Tests for fence-aware message chunker."""
+"""Tests for the frontend-agnostic fence-aware message chunker.
 
-from claude_discord.discord_ui.chunker import (
-    _close_open_fence,
-    _is_table_line,
-    _wrap_tables_in_fences,
-    chunk_message,
-)
+The logic moved to ``claude_code_core.rendering.chunker``; these tests moved
+with it. ``chunk_message`` is still imported through the Discord shim so the
+existing cases keep exercising Discord's own defaults (2,000 chars, 55-column
+code blocks) — the behaviour consumers actually depend on.
+"""
+
+from claude_code_core.rendering.chunker import _close_open_fence, _is_table_line
+from claude_discord.discord_ui.chunker import _wrap_tables_in_fences, chunk_message
 
 TABLE_3ROW = "| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |"
 # After box-drawing rendering, the table is no longer raw pipes

@@ -21,7 +21,7 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 
 ## Architecture
 
-- **Python 3.10+** with discord.py v2
+- **Python 3.12+** with discord.py v2
 - **Cog pattern** for modular features
 - **Repository pattern** for data access (SQLite via aiosqlite)
 - **asyncio.subprocess** for Claude Code CLI invocation (never shell=True)
@@ -31,7 +31,7 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 1. **CLI spawn, not API**: We invoke `claude -p --output-format stream-json` as a subprocess, not the Anthropic API directly. This gives us all Claude Code features (CLAUDE.md, skills, tools, memory) for free.
 2. **Thread = Session**: Each Discord thread maps 1:1 to a Claude Code session ID. Replies in a thread continue the same session via `--resume`.
 3. **Emoji reactions for status**: Non-intrusive progress indication on the user's message. Debounced to avoid Discord rate limits.
-4. **Fence-aware chunking**: Never split Discord messages inside a code block.
+4. **Fence-aware chunking**: Never split messages inside a code block. The logic lives in `claude_code_core/rendering/` and is driven by `SurfaceCapabilities`, not by Discord's numbers — a surface with a 100 KB limit sends the same answer as one message instead of inheriting Discord's 2,000-character fragmentation.
 5. **Installable package**: `claude_discord` is a proper Python package. Consumers install via `uv add git+...` or `pip install git+...`, not by copying files.
 6. **Shared run helper**: `cogs/_run_helper.py` centralizes Claude CLI execution logic used by both ClaudeChatCog and SkillCommandCog.
 7. **REST API as the control plane**: Claude Code subprocesses communicate back to ccdb via REST API (`CCDB_API_URL` env var), not via stdout markers or special output formats. This makes the interface explicit, testable, and usable by external systems (GitHub Actions, etc.). See `ext/api_server.py`.
@@ -39,6 +39,10 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 9. **Claude handles "what", ccdb handles "when"**: For scheduled tasks, ccdb only manages the schedule. All domain logic (what to check, how to deduplicate, what to post) lives in the Claude prompt. No GitHub/AzureDevOps-specific code in ccdb itself.
 10. **CLI env overlay** (`CCDB_CLI_ENV_FILE`): Optional `KEY=VALUE` file read on every CLI spawn to inject env vars into the subprocess. Enables live configuration changes (e.g., switching to Azure Foundry) without restarting the bot. The file is read by `_build_env()` in `runner.py`.
 11. **Model suggestions are discovered, not hardcoded** (`model_catalog.py`): the `/model` autocomplete asks `GET /v1/models` (reusing the CLI's own credentials) instead of shipping a constant that goes stale on every model launch. This is the *only* sanctioned direct Anthropic API call, and it is strictly non-essential: no credentials, no network, a 3P provider, or `CCDB_MODEL_DISCOVERY=0` all degrade to the static `SUGGESTED_MODELS` fallback. Never let it raise into a command path, and never log the token.
+
+12. **Anonymization replaces by rule, inspects by model** (`claude_code_core/privacy/`): an optional gateway wraps any `SessionBackend` and swaps organisation-identifying terms for stable aliases before the prompt reaches the CLI, restoring them in the answer. The substitution is a rule table — never a model — because a model produces a different alias every run and an alias that changes cannot be restored. The local LLM's only job is to *report* proper nouns the rules missed. Reversing those two roles breaks the feature. Off until a rules file exists; a malformed rules file raises rather than silently degrading to "send the real names". See `docs/anonymization.md`.
+
+13. **A local backend is a measured claim, not a configured one** (`claude_code_core/local_backend.py`): `/backend local` runs the Codex CLI against a model on the user's own hardware. Pointing the CLI at a local endpoint is not sufficient — measured on codex-cli 0.145.0, a fully local, logged-out run still contacts `chatgpt.com` for the startup update check and analytics. ccdb therefore generates and owns a separate `CODEX_HOME` with both disabled, re-verifies those settings on every spawn, and refuses to start rather than run a "local" thread that phones home. The check is structural (works on Windows too), not an OS egress rule; re-measure after a CLI upgrade. See `docs/local-backend.md`.
 
 ### Why REST API over stdout markers for Claude→ccdb communication
 
@@ -64,7 +68,7 @@ uv sync --dev
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-All tests must pass before submitting a PR. CI runs on Python 3.10, 3.11, and 3.12.
+All tests must pass before submitting a PR. CI runs on Python 3.12 and 3.13.
 
 ### Linting & Formatting
 
@@ -143,7 +147,7 @@ mainブランチで変更なしの場合、`pre-start.sh` が `git pull` して�
 
 - **Formatter/Linter**: ruff (config in `pyproject.toml`)
 - **Type hints**: Required on all function signatures
-- **Python**: 3.10+ — use `from __future__ import annotations` in every file
+- **Python**: 3.12+ — use `from __future__ import annotations` in every file
 - **Line length**: 100 characters max
 - **Imports**: Sorted by ruff (`I` rule). Use `TYPE_CHECKING` for type-only imports
 
@@ -204,6 +208,8 @@ claude_discord/          # Installable Python package
   cog_loader.py          # Dynamic custom Cog loader (CUSTOM_COGS_DIR / --cogs-dir)
   bot.py                 # Discord Bot class
   protocols.py           # Shared protocols (DrainAware)
+  frontend.py            # DiscordFrontend — resolve/create a conversation by key
+  stores.py              # build_session_stores() — every repo, no frontend
   concurrency.py         # Worktree instructions + active session registry
   lounge.py              # AI Lounge prompt builder
   session_sync.py        # CLI session discovery and import
@@ -235,20 +241,19 @@ claude_discord/          # Installable Python package
     lounge_repo.py       # AI Lounge message CRUD
     resume_repo.py       # Startup resume CRUD (pending resumes)
     settings_repo.py     # Per-guild settings
+    frontend_thread_repo.py # ThreadKey → where the conversation lives
   discord_ui/
     status.py            # Emoji reaction status manager (debounced)
-    chunker.py           # Fence- and table-aware message splitting
+    chunker.py           # Discord's limits + shim over claude_code_core.rendering
     embeds.py            # Discord embed builders
     views.py             # Stop button, ToolSelectView, and shared UI components
+    prompt_views.py      # ChoiceView / FormModal — renders the protocol's prompts
     ask_bus.py           # Event bus for AskUserQuestion communication
     ask_view.py          # Buttons/Select Menus for AskUserQuestion
     ask_handler.py       # collect_ask_answers() — AskUserQuestion UI + DB lifecycle
     streaming_manager.py # StreamingMessageManager — debounced message edits
     tool_timer.py        # LiveToolTimer — elapsed time counter
     thread_dashboard.py  # Live pinned embed showing session states
-    plan_view.py         # Approve/Cancel buttons for Plan Mode
-    permission_view.py   # Allow/Deny buttons for tool permission requests
-    elicitation_view.py  # Discord UI for MCP elicitation
     file_sender.py       # File delivery via .ccdb-attachments-{thread_id}
     thread_renamer.py    # suggest_title() — background claude -p call for auto thread renaming
   ext/
@@ -256,6 +261,33 @@ claude_discord/          # Installable Python package
     ingest_manifest.py   # Reconciles attachments_manifest against delivered files
   utils/
     logger.py            # Logging setup
+claude_teams/            # Microsoft Teams frontend (optional extra: [teams])
+  capabilities.py        # The Teams column of SurfaceCapabilities — the shipped one, imported by the conformance tests
+  config.py              # TeamsConfig — validates the identity/addressing whose mistakes Teams reports as silence
+  manifest.py            # App package generator (RSC + SSO declared); icons.py writes placeholder PNGs with no dependency
+  auth.py                # Inbound token verification — algorithms pinned; the claim is `serviceurl`, lower case (measured)
+  serve.py               # `python -m claude_teams serve` — echo-only endpoint for first-contact verification
+  jwks.py                # Signing keys: refresh on unknown kid, rate-limited because that trigger is public
+  token.py               # Outbound client-credentials token, cached and refreshed before it expires
+  activity.py            # InboundActivity — the fields a reply needs, parsed once
+  conversation.py        # ConversationRef — the Bot Connector host + conversation a message belongs to
+  connector.py           # Posting and editing activities on the serviceUrl the conversation named
+  surface.py             # TeamsSurface — the ConversationSurface. One card, not a column of embeds
+  frontend.py            # TeamsFrontend — resolve/create a conversation by key. Passes check_frontend
+  cards.py               # The session card and the prompt cards, bounded to the 28 KB payload Teams accepts
+  interactions.py        # Who may answer a prompt and with what — every field of an inbound action is untrusted
+  files.py               # The consent handshake, and the host allowlist the file's bytes are checked against
+  commands.py            # The text command router — Teams has no slash commands, so this is the whole surface
+  mentions.py            # Who was addressed (by id, not name), and taking the <at> markup out of the prompt
+  pacer.py               # Coalescing per target, one update per interval — the 1,800/hour budget
+  endpoint.py            # The aiohttp route. Nothing is done before the token check; 5xx is never the answer after acceptance
+  http.py                # The only file that knows about aiohttp — everything else takes its transport as a callable
+  relay/                 # Inbound for Teams without inbound on the session host — see docs/teams-relay.md
+    receiver.py          # Public side: verify, enqueue, answer. No client secret, no route to the host
+    puller.py            # Private side: poll outbound, ack only when done, filter duplicates, drop poison
+    envelope.py          # What crosses the queue — carries the token's serviceurl, not the body's
+    queue.py             # push/pull/ack. A separate ack is what makes it at-least-once
+    storage_queue.py     # Azure Queue Storage over REST, defusedxml, pop receipts fully URL-encoded
 tests/                   # pytest test suite
 examples/
   ebibot/                # Real-world example: personal bot with custom Cogs
@@ -263,6 +295,20 @@ examples/
 pyproject.toml           # Package metadata + dependencies
 uv.lock                  # Dependency lock file
 CONTRIBUTING.md          # Contribution guidelines
+```
+
+`claude_code_core/privacy/` — the anonymization gateway (surface-agnostic, so a
+Teams or CLI frontend gets it for free):
+
+```
+  rules.py               # Rule table loader (literals, regexes, builtin detectors)
+  mapping.py             # 対応表 — persistent, local, bidirectional alias store
+  engine.py              # Deterministic replace + restore. Calls no model, ever
+  inspector.py           # Local Ollama-compatible leftover check. Reports only
+  config.py              # Env-driven config; absent rules file = feature off
+  audit.py               # JSONL trail of what actually left the machine
+  gateway.py             # Policy (block/warn/off) + process-wide accessor
+  backend.py             # AnonymizingBackend — SessionBackend decorator
 ```
 
 ### Adding a New Cog
@@ -304,7 +350,7 @@ Rules:
 ## Git & PR Workflow
 
 - **Branch from `main`**: `feature/description`, `fix/description`, `docs/description`
-- **CI must pass**: All 3 Python versions x (ruff check + ruff format + pytest)
+- **CI must pass**: Both Python versions x (ruff check + ruff format + pytest)
 - **No direct push to main**: Always create a PR
 - **Squash merge preferred**: Keeps main history clean
 - **Commit style**: `<type>: <description>` — types: feat, fix, refactor, docs, test, chore, security

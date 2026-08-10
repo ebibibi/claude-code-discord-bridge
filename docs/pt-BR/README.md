@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Use Claude Code _ou_ OpenAI Codex no seu celular. Múltiplas threads. Tudo ao mesmo tempo. Desenvolvimento real incluído.**
@@ -121,7 +121,7 @@ curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
 curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
 ```
 
-`/api/sessions` mescla três fontes: a tabela `sessions` (created_at, diretório de trabalho, backend), o registro em memória (o que cada sessão viva está fazendo *agora*) e a nota de lounge mais recente de cada thread. Uma sessão aparece com `"state": "running"` enquanto um turno está em andamento — incluindo sessões que nunca publicaram no lounge, que é exatamente quando isso importa. As sessões não têm token do Discord próprio, então o bot realiza a leitura e os endpoints permanecem no plano de controle localhost.
+`/api/sessions` mescla três fontes: a tabela `sessions` (created_at, diretório de trabalho, backend), o registro em memória (o que cada sessão viva está fazendo *agora*) e a nota de lounge mais recente de cada thread. Uma sessão aparece com `"state": "running"` enquanto um turno está em andamento — incluindo sessões que nunca publicaram no lounge, que é exatamente quando isso importa. Uma conversa salva sem um turno em andamento aparece com `"state": "history"`: ela pode ser retomada, mas isso não significa que um agente esteja aguardando trabalho ou entrada do usuário. As sessões não têm token do Discord próprio, então o bot realiza a leitura e os endpoints permanecem no plano de controle localhost.
 
 ### Reivindicações de Recursos
 
@@ -422,7 +422,7 @@ Nos bastidores:
 
 **Pré-requisitos:**
 
-- Python 3.10+
+- Python 3.12+
 - Pelo menos um dos seguintes:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — instalado e autenticado (`claude login`). Recomendado para assinantes Anthropic Pro/Max.
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` e depois `codex login`. Usa sua assinatura ChatGPT Plus/Pro/Business existente.
@@ -1065,6 +1065,8 @@ claude_discord/
   cog_loader.py            # Dynamic custom Cog loader (CUSTOM_COGS_DIR)
   bot.py                   # Discord Bot class
   protocols.py             # Shared protocols (DrainAware)
+  frontend.py              # DiscordFrontend — resolve/create a conversation by key
+  stores.py                # build_session_stores() — every repo, no frontend
   concurrency.py           # Worktree instructions + active session registry
   collision.py             # File-write tracking + collision rules (pure, clock-injected)
   lounge.py                # AI Lounge prompt builder
@@ -1099,12 +1101,14 @@ claude_discord/
     claims_repo.py         # Advisory resource claim CRUD (TTL-bound)
     resume_repo.py         # Startup resume CRUD (pending resumes across bot restarts)
     settings_repo.py       # Per-guild settings
+    frontend_thread_repo.py  # ThreadKey → where the conversation lives
     inbox_repo.py          # Thread inbox CRUD (THREAD_INBOX_ENABLED)
   discord_ui/
     status.py              # Emoji reaction manager (debounced)
     chunker.py             # Fence- and table-aware message splitting
     embeds.py              # Discord embed builders
     views.py               # Stop button and shared UI components
+    prompt_views.py        # ChoiceView / FormModal — renders the protocol's prompts
     mentions.py            # user_mention_kwargs() — notify requester when Claude pauses for input
     ask_bus.py             # Event bus for AskUserQuestion communication
     ask_view.py            # Buttons/Select Menus for AskUserQuestion
@@ -1112,9 +1116,6 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — debounced in-place message edits
     tool_timer.py          # LiveToolTimer — elapsed time counter for long-running tools
     thread_dashboard.py    # Live pinned embed showing session states
-    plan_view.py           # Approve/Cancel buttons for Plan Mode (ExitPlanMode)
-    permission_view.py     # Allow/Deny buttons for tool permission requests
-    elicitation_view.py    # Discord UI for MCP elicitation (Modal form or URL button)
     file_sender.py         # File delivery via .ccdb-attachments
     inbox_classifier.py    # classify() — lightweight claude -p call to label sessions
     thread_renamer.py      # suggest_title() — background claude -p call for auto thread naming

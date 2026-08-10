@@ -38,8 +38,10 @@ from .discord_ui.status import StatusManager
 from .protocols import DrainAware
 from .session_sync import CliSession, SessionMessage, extract_recent_messages, scan_cli_sessions
 from .setup import BridgeComponents, setup_bridge
+from .surface import DiscordSurface
 
 __all__ = [
+    "DiscordSurface",
     # Core
     "ClaudeRunner",
     "ClaudeChatCog",

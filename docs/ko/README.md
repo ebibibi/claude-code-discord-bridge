@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **스마트폰에서 Claude Code _또는_ OpenAI Codex를 사용하세요. 멀티 스레드, 동시 진행, 실전 개발까지 모두 가능합니다.**
@@ -121,7 +121,7 @@ curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
 curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
 ```
 
-`/api/sessions`는 세 가지 소스를 병합합니다: `sessions` 테이블(created_at, 작업 디렉토리, 백엔드), 인메모리 레지스트리(각 라이브 세션이 *지금 당장* 무엇을 하고 있는지), 그리고 각 스레드의 최신 라운지 메모. 세션은 턴이 진행 중인 동안 `"state": "running"`으로 나타납니다 — 라운지에 전혀 게시하지 않은 세션도 포함되며, 바로 그런 경우가 이것이 중요한 순간입니다. 세션은 자체 Discord 토큰이 없으므로 봇이 읽기를 수행하고, 엔드포인트는 localhost 제어 평면에 머무릅니다.
+`/api/sessions`는 세 가지 소스를 병합합니다: `sessions` 테이블(created_at, 작업 디렉토리, 백엔드), 인메모리 레지스트리(각 라이브 세션이 *지금 당장* 무엇을 하고 있는지), 그리고 각 스레드의 최신 라운지 메모. 세션은 턴이 진행 중인 동안 `"state": "running"`으로 나타납니다 — 라운지에 전혀 게시하지 않은 세션도 포함되며, 바로 그런 경우가 이것이 중요한 순간입니다. 실행 중인 턴이 없는 저장된 대화는 `"state": "history"`로 나타납니다. 이는 재개 가능한 기록이라는 뜻이며 에이전트가 작업이나 사용자 입력을 기다린다는 뜻이 아닙니다. 세션은 자체 Discord 토큰이 없으므로 봇이 읽기를 수행하고, 엔드포인트는 localhost 제어 평면에 머무릅니다.
 
 ### 리소스 클레임
 
@@ -422,7 +422,7 @@ ccdb가 백엔드 소유권을 추적하기 전에 작성된 레코드에는 저
 
 **전제 조건:**
 
-- Python 3.10+
+- Python 3.12+
 - 다음 중 최소 하나:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — 설치 및 인증됨(`claude login`). Anthropic Pro/Max 구독자에게 권장.
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` 후 `codex login`. 기존 ChatGPT Plus/Pro/Business 구독을 사용.
@@ -1065,6 +1065,8 @@ claude_discord/
   cog_loader.py            # Dynamic custom Cog loader (CUSTOM_COGS_DIR)
   bot.py                   # Discord Bot class
   protocols.py             # Shared protocols (DrainAware)
+  frontend.py              # DiscordFrontend — resolve/create a conversation by key
+  stores.py                # build_session_stores() — every repo, no frontend
   concurrency.py           # Worktree instructions + active session registry
   collision.py             # File-write tracking + collision rules (pure, clock-injected)
   lounge.py                # AI Lounge prompt builder
@@ -1099,12 +1101,14 @@ claude_discord/
     claims_repo.py         # Advisory resource claim CRUD (TTL-bound)
     resume_repo.py         # Startup resume CRUD (pending resumes across bot restarts)
     settings_repo.py       # Per-guild settings
+    frontend_thread_repo.py  # ThreadKey → where the conversation lives
     inbox_repo.py          # Thread inbox CRUD (THREAD_INBOX_ENABLED)
   discord_ui/
     status.py              # Emoji reaction manager (debounced)
     chunker.py             # Fence- and table-aware message splitting
     embeds.py              # Discord embed builders
     views.py               # Stop button and shared UI components
+    prompt_views.py        # ChoiceView / FormModal — renders the protocol's prompts
     mentions.py            # user_mention_kwargs() — notify requester when Claude pauses for input
     ask_bus.py             # Event bus for AskUserQuestion communication
     ask_view.py            # Buttons/Select Menus for AskUserQuestion
@@ -1112,9 +1116,6 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — debounced in-place message edits
     tool_timer.py          # LiveToolTimer — elapsed time counter for long-running tools
     thread_dashboard.py    # Live pinned embed showing session states
-    plan_view.py           # Approve/Cancel buttons for Plan Mode (ExitPlanMode)
-    permission_view.py     # Allow/Deny buttons for tool permission requests
-    elicitation_view.py    # Discord UI for MCP elicitation (Modal form or URL button)
     file_sender.py         # File delivery via .ccdb-attachments
     inbox_classifier.py    # classify() — lightweight claude -p call to label sessions
     thread_renamer.py      # suggest_title() — background claude -p call for auto thread naming

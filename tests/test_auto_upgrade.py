@@ -580,11 +580,13 @@ class TestRestartApproval:
         self,
         bot: MagicMock,
     ) -> None:
-        """asyncio.TimeoutError (Python 3.10) is handled the same as builtins.TimeoutError.
+        """A raised ``asyncio.TimeoutError`` still triggers the reminder path.
 
-        Regression test for: on Python 3.10, asyncio.wait_for() raises
-        asyncio.TimeoutError which is NOT a subclass of builtins.TimeoutError,
-        so a bare ``except TimeoutError`` silently drops the exception.
+        Since Python 3.11 ``asyncio.TimeoutError`` is an alias of the builtin
+        ``TimeoutError``, so the handler catches the builtin alone. This test
+        pins that equivalence: if a future Python (or a third-party shim) ever
+        reintroduces a distinct asyncio timeout type, the bare
+        ``except TimeoutError`` would silently drop it and this test fails.
         """
         cog = self._make_cog_with_approval(bot)
         thread = MagicMock(spec=discord.Thread)

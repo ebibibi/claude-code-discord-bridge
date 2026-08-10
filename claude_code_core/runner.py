@@ -154,7 +154,7 @@ class ClaudeRunner:
         try:
             async for event in self._read_stream():
                 yield event
-        except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
+        except TimeoutError:
             logger.warning("Claude CLI timed out after %ds", self.timeout_seconds)
             yield StreamEvent(
                 raw={},
@@ -259,7 +259,7 @@ class ClaudeRunner:
                 self._process.send_signal(signal.SIGINT)
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=10)
-            except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
+            except TimeoutError:
                 await self.kill()
 
     async def kill(self) -> None:
@@ -268,7 +268,7 @@ class ClaudeRunner:
             self._process.terminate()
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5)
-            except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
+            except TimeoutError:
                 self._process.kill()
                 await self._process.wait()
 

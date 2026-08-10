@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Valid backend names. Keep in sync with claude_code_core.backend.create_backend().
-ALL_BACKENDS = ("claude", "codex")
+ALL_BACKENDS = ("claude", "codex", "local")
 
 # Settings keys
 BACKEND_GLOBAL = "backend.global"
@@ -70,6 +70,9 @@ class BackendSettings:
         self._env_model = {
             "claude": env_model_for_claude or "",
             "codex": env_model_for_codex or "",
+            # The local model is chosen by CCDB_LOCAL_MODEL, read by
+            # LocalModelConfig at spawn time; no separate env knob here.
+            "local": "",
         }
 
     # ── Resolution ──────────────────────────────────────────

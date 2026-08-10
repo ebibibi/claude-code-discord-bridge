@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -51,6 +52,32 @@ class _FakeProcess:
 
     def kill(self) -> None:
         self.returncode = -9
+
+
+class _InterruptibleStream:
+    def __init__(self, interrupted: asyncio.Event) -> None:
+        self._interrupted = interrupted
+
+    async def readline(self) -> bytes:
+        await self._interrupted.wait()
+        return b""
+
+
+class _InterruptibleProcess(_FakeProcess):
+    def __init__(self) -> None:
+        super().__init__(returncode=0)
+        self.returncode = None
+        self.interrupted = asyncio.Event()
+        self.stdout = _InterruptibleStream(self.interrupted)
+
+    async def wait(self) -> int:
+        await self.interrupted.wait()
+        assert self.returncode is not None
+        return self.returncode
+
+    def send_signal(self, _signum: int) -> None:
+        self.returncode = 1
+        self.interrupted.set()
 
 
 class TestCodexRunnerIsBackend:
@@ -237,6 +264,34 @@ class TestCodexRunnerClone:
 
 
 class TestCodexRunnerRun:
+    @pytest.mark.asyncio
+    async def test_intentional_interrupt_is_not_reported_as_cli_error(
+        self, monkeypatch, caplog
+    ) -> None:
+        process = _InterruptibleProcess()
+        process_started = asyncio.Event()
+
+        async def fake_create_subprocess_exec(*args, **kwargs):
+            process_started.set()
+            return process
+
+        monkeypatch.setattr(
+            "claude_code_core.codex_runner.asyncio.create_subprocess_exec",
+            fake_create_subprocess_exec,
+        )
+        runner = CodexRunner(command="codex")
+
+        async def collect_events() -> list:
+            return [event async for event in runner.run("hello")]
+
+        run_task = asyncio.create_task(collect_events())
+        await process_started.wait()
+        await runner.interrupt()
+        events = await run_task
+
+        assert events == []
+        assert "Codex CLI exited with code 1" not in caplog.text
+
     @pytest.mark.asyncio
     async def test_resume_missing_rollout_falls_back_to_new_session(self, monkeypatch) -> None:
         stale_session = "13f2eb43-93cf-4df6-86d0-a20c035cc26e"

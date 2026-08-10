@@ -18,15 +18,18 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-import discord
 from discord.ext import commands, tasks
 
+from claude_code_core.frontend import ConversationSurface, Notice, NoticeLevel
+
+from ..frontend import DiscordFrontend
 from ._run_helper import run_claude_with_config
 from .headless_backend import build_headless_runner
 from .run_config import RunConfig
 
 if TYPE_CHECKING:
     from claude_code_core.backend import SessionBackend
+    from claude_code_core.frontend import SessionFrontend
 
     from ..backend_factory import BackendFactory
     from ..backend_settings import BackendSettings
@@ -57,6 +60,7 @@ class SchedulerCog(commands.Cog):
         session_repo: SessionRepository | None = None,
         backend_factory: BackendFactory | None = None,
         backend_settings: BackendSettings | None = None,
+        frontend: SessionFrontend | None = None,
     ) -> None:
         self.bot = bot
         self.runner = runner
@@ -64,6 +68,10 @@ class SchedulerCog(commands.Cog):
         self.session_repo = session_repo
         self.backend_factory = backend_factory
         self.backend_settings = backend_settings
+        # Where scheduled runs are posted. Defaults to Discord so an existing
+        # deployment needs no wiring; a Teams deployment passes its own and
+        # this Cog does not change.
+        self.frontend: SessionFrontend = frontend or DiscordFrontend(bot)
         # Track in-flight tasks to avoid double-running the same task_id.
         self._running: set[int] = set()
 
@@ -118,23 +126,23 @@ class SchedulerCog(commands.Cog):
         try:
             thread_id = task.get("thread_id")
             session_id: str | None = None
+            surface: ConversationSurface | None = None
 
             if thread_id:
-                # Follow-up mode: post into an existing thread
-                thread = self.bot.get_channel(thread_id)
-                if thread is None or not isinstance(thread, discord.Thread):
+                # Follow-up mode: post into the existing conversation.
+                surface = await self.frontend.resolve_surface(thread_id)
+                if surface is None:
                     logger.warning(
-                        "SchedulerCog: thread %d not found for task %d (%s) — falling back",
+                        "SchedulerCog: conversation %d not found for task %d (%s) — falling back",
                         thread_id,
                         task_id,
                         task["name"],
                     )
-                    thread = await self._create_new_thread(task)
-                    if thread is None:
-                        return
                 else:
-                    await thread.send(f"🔄 **[Follow-up]** `{task['name']}`")
-                    # Try to resume the previous session in this thread
+                    await surface.send_notice(
+                        Notice(level=NoticeLevel.INFO, body=f"🔄 **[Follow-up]** `{task['name']}`")
+                    )
+                    # Try to resume the previous session in this conversation
                     if self.session_repo is not None:
                         record = await self.session_repo.get(thread_id)
                         if record is not None:
@@ -144,24 +152,24 @@ class SchedulerCog(commands.Cog):
                                 session_id,
                                 thread_id,
                             )
-            else:
-                # Original behavior: create a new thread
-                thread = await self._create_new_thread(task)
-                if thread is None:
+
+            if surface is None:
+                surface = await self._open_new_conversation(task)
+                if surface is None:
                     return
 
             cloned = await build_headless_runner(
                 self.runner,
                 factory=self.backend_factory,
                 settings=self.backend_settings,
-                thread_id=thread.id,
+                thread_id=surface.thread_key,
                 working_dir=task.get("working_dir"),
             )
 
             registry = getattr(self.bot, "session_registry", None)
             await run_claude_with_config(
                 RunConfig(
-                    thread=thread,
+                    surface=surface,
                     runner=cloned,
                     repo=self.session_repo,
                     prompt=task["prompt"],
@@ -181,20 +189,23 @@ class SchedulerCog(commands.Cog):
         finally:
             self._running.discard(task_id)
 
-    async def _create_new_thread(self, task: dict) -> discord.Thread | None:
-        """Create a new thread in the parent channel for a scheduled task."""
-        channel = self.bot.get_channel(task["channel_id"])
-        if channel is None:
+    async def _open_new_conversation(self, task: dict) -> ConversationSurface | None:
+        """Start a fresh conversation under the task's parent channel.
+
+        A missing or unusable parent is a configuration problem, not a
+        transient one, so it is logged and the task is skipped — the master
+        loop must survive one badly configured task.
+        """
+        try:
+            return await self.frontend.create_surface(
+                parent_id=str(task["channel_id"]),
+                title=f"🔄 [Scheduled] {task['name']}",
+            )
+        except LookupError:
             logger.warning(
-                "SchedulerCog: channel %d not found for task %d (%s)",
+                "SchedulerCog: cannot open a conversation under %s for task %d (%s)",
                 task["channel_id"],
                 task["id"],
                 task["name"],
             )
             return None
-        if not isinstance(channel, discord.TextChannel):
-            logger.warning("SchedulerCog: channel %d is not a TextChannel", task["channel_id"])
-            return None
-
-        starter = await channel.send(f"🔄 **[Scheduled]** `{task['name']}`")
-        return await starter.create_thread(name=f"[Scheduled] {task['name']}")

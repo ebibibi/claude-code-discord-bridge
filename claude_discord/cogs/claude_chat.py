@@ -29,6 +29,7 @@ from ..backend_settings import BackendSettings, session_is_resumable
 from ..claude.rewind import find_session_jsonl, parse_user_turns
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
+from ..cross_backend_handoff import ConversationHistoryReader, build_handoff_prompt
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
 from ..database.repository import SessionRecord, SessionRepository
@@ -118,6 +119,7 @@ class ClaudeChatCog(commands.Cog):
         thread_context_days: int = DEFAULT_DAYS,
         factory: BackendFactory | None = None,
         backend_settings: BackendSettings | None = None,
+        conversation_history: ConversationHistoryReader | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -127,6 +129,7 @@ class ClaudeChatCog(commands.Cog):
         # When either is None, we fall back to self.runner.clone() (legacy).
         self._factory = factory
         self._backend_settings = backend_settings
+        self._conversation_history = conversation_history or ConversationHistoryReader()
         self._max_concurrent = max_concurrent
         self._allowed_user_ids = allowed_user_ids
         # When True, skip channel-ID filtering and accept all guild channels.
@@ -1151,9 +1154,55 @@ class ClaudeChatCog(commands.Cog):
             await thread.send(
                 f"-# 🔀 Backend changed (`{record.backend}` → `{current}`). "
                 f"`{current}` cannot resume a `{record.backend}` session, "
-                "so this thread starts a fresh one."
+                "so its file-backed conversation history will be carried into a fresh session."
             )
         return None
+
+    async def _prepare_cross_backend_handoff(
+        self,
+        thread: discord.Thread | discord.TextChannel,
+        prompt: str,
+        session_id: str | None,
+    ) -> tuple[str | None, str]:
+        """Replace an incompatible native resume with a text transcript handoff."""
+        if self._backend_settings is None:
+            return session_id, prompt
+
+        record = await self.repo.get(thread.id)
+        if record is None or not record.backend or not record.session_id:
+            return session_id, prompt
+        current = await self._backend_settings.current_backend(thread.id)
+        if session_is_resumable(record.backend, current):
+            return session_id, prompt
+
+        transcript = await asyncio.to_thread(
+            self._conversation_history.read,
+            record.backend,
+            record.session_id,
+        )
+        if not transcript:
+            logger.warning(
+                "No file-backed transcript found for cross-backend handoff: "
+                "thread=%d backend=%s session=%s",
+                thread.id,
+                record.backend,
+                record.session_id,
+            )
+            return None, prompt
+
+        logger.info(
+            "Injecting cross-backend transcript: thread=%d %s->%s chars=%d",
+            thread.id,
+            record.backend,
+            current,
+            len(transcript),
+        )
+        return None, build_handoff_prompt(
+            source_backend=record.backend,
+            target_backend=current,
+            transcript=transcript,
+            current_prompt=prompt,
+        )
 
     async def _build_prompt_and_images(
         self, message: discord.Message
@@ -1260,6 +1309,11 @@ class ClaudeChatCog(commands.Cog):
         thread. The subprocess itself runs *outside* the lock so a later message
         can still interrupt this run.
         """
+        session_id, prompt = await self._prepare_cross_backend_handoff(
+            thread,
+            prompt,
+            session_id,
+        )
         dashboard = self._get_dashboard()
         description = prompt[:100].replace("\n", " ")
 

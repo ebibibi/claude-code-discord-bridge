@@ -144,9 +144,10 @@ class TestSchedulerCogMasterLoop:
         thread_name = mock_starter_msg.create_thread.call_args[1]["name"]
         assert "my-task" in thread_name
 
-        # Claude ran inside the thread — call_args[0][0] is the RunConfig
+        # Claude ran inside that thread. The RunConfig now carries a surface
+        # rather than a raw thread, so identity is checked by key.
         mock_run.assert_called_once()
-        assert mock_run.call_args[0][0].thread is mock_thread
+        assert mock_run.call_args[0][0].surface.thread_key == mock_thread.id
 
     async def test_run_task_passes_session_repo_to_run_config(
         self, repo: TaskRepository, tmp_path
@@ -314,7 +315,7 @@ class TestSchedulerCogFollowUp:
         # Should use the existing thread, not create a new one
         mock_run.assert_called_once()
         run_config = mock_run.call_args[0][0]
-        assert run_config.thread is mock_thread
+        assert run_config.surface.thread_key == mock_thread.id
 
         # Should have sent a starter message in the thread
         mock_thread.send.assert_called_once()

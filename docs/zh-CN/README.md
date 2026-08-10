@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **在手机上使用 Claude Code _或_ OpenAI Codex。多线程并行。全速真实开发。**
@@ -121,7 +121,7 @@ curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
 curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
 ```
 
-`/api/sessions` 合并三个来源：`sessions` 表（created_at、工作目录、后端）、内存注册表（每个活跃会话*此刻*正在做什么），以及每个线程最新的休息室笔记。当某个会话有一个回合正在进行时，它会以 `"state": "running"` 出现——包括那些根本没有向休息室发过任何消息的会话，而这恰恰是最需要它的时刻。会话本身没有 Discord token，因此由 Bot 执行读取，端点则保持在 localhost 控制平面上。
+`/api/sessions` 合并三个来源：`sessions` 表（created_at、工作目录、后端）、内存注册表（每个活跃会话*此刻*正在做什么），以及每个线程最新的休息室笔记。当某个会话有一个回合正在进行时，它会以 `"state": "running"` 出现——包括那些根本没有向休息室发过任何消息的会话，而这恰恰是最需要它的时刻。没有正在执行回合的已保存对话会显示为 `"state": "history"`；这表示它是可恢复的历史记录，并不表示代理正在等待工作或用户输入。会话本身没有 Discord token，因此由 Bot 执行读取，端点则保持在 localhost 控制平面上。
 
 ### 资源占用（Resource Claims）
 
@@ -422,7 +422,7 @@ ccdb 3.0 引入了三个斜杠命令，用来改变下一个会话由哪个 AI �
 
 **前提条件：**
 
-- Python 3.10+
+- Python 3.12+
 - 以下至少一项：
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — 已安装并认证（`claude login`）。推荐 Anthropic Pro/Max 订阅用户使用。
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` 然后 `codex login`。使用你现有的 ChatGPT Plus/Pro/Business 订阅。
@@ -1065,6 +1065,8 @@ claude_discord/
   cog_loader.py            # 动态自定义 Cog 加载器（CUSTOM_COGS_DIR）
   bot.py                   # Discord Bot 类
   protocols.py             # 共享协议（DrainAware）
+  frontend.py              # DiscordFrontend — resolve/create a conversation by key
+  stores.py                # build_session_stores() — every repo, no frontend
   concurrency.py           # Worktree 指令 + 活跃会话注册表
   collision.py             # 文件写入跟踪 + 碰撞规则（纯函数，注入时钟）
   lounge.py                # AI 休息室提示构建器
@@ -1099,12 +1101,14 @@ claude_discord/
     claims_repo.py         # 建议性资源占用 CRUD（受 TTL 约束）
     resume_repo.py         # 启动恢复 CRUD（跨 Bot 重启的待恢复项）
     settings_repo.py       # 每个 guild 的设置
+    frontend_thread_repo.py  # ThreadKey → 会话所在位置
     inbox_repo.py          # 线程收件箱 CRUD（THREAD_INBOX_ENABLED）
   discord_ui/
     status.py              # 表情反应管理器（防抖）
     chunker.py             # fence 与表格感知的消息拆分
     embeds.py              # Discord embed 构建器
     views.py               # 停止按钮和共享 UI 组件
+    prompt_views.py        # ChoiceView / FormModal — renders the protocol's prompts
     mentions.py            # user_mention_kwargs() — Claude 因输入暂停时通知请求者
     ask_bus.py             # AskUserQuestion 通信的事件总线
     ask_view.py            # AskUserQuestion 的按钮/下拉菜单
@@ -1112,9 +1116,6 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — 防抖的原地消息编辑
     tool_timer.py          # LiveToolTimer — 长时间运行工具的已用时间计数器
     thread_dashboard.py    # 显示会话状态的实时固定 embed
-    plan_view.py           # 计划模式（ExitPlanMode）的批准/取消按钮
-    permission_view.py     # 工具权限请求的允许/拒绝按钮
-    elicitation_view.py    # MCP elicitation 的 Discord UI（Modal 表单或 URL 按钮）
     file_sender.py         # 通过 .ccdb-attachments 发送文件
     inbox_classifier.py    # classify() — 轻量的 claude -p 调用给会话打标签
     thread_renamer.py      # suggest_title() — 用于自动线程命名的后台 claude -p 调用
