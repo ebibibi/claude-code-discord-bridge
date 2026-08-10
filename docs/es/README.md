@@ -7,8 +7,8 @@
 
 *Nombre del paquete: `claude-code-discord-bridge` (kebab-case)*
 
-[![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
+[![CI](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/codeql.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -444,11 +444,11 @@ Sin necesidad de clonar ni editar `.env` — el asistente lo hace por ti:
 
 ```bash
 # With uvx (no install needed):
-uvx --from "git+https://github.com/ebibibi/claude-code-discord-bridge.git" ccdb setup
+uvx --from "git+https://github.com/ebibibi/ebi-agent-chat-relay.git" ccdb setup
 
 # Or after cloning:
-git clone https://github.com/ebibibi/claude-code-discord-bridge.git
-cd claude-code-discord-bridge
+git clone https://github.com/ebibibi/ebi-agent-chat-relay.git
+cd ebi-agent-chat-relay
 uv run ccdb setup
 ```
 
@@ -592,7 +592,7 @@ Ver [`examples/ebibot/`](examples/ebibot/) para un ejemplo completo del mundo re
 Si ya tienes un bot de discord.py, añade ccdb como paquete en su lugar:
 
 ```bash
-uv add git+https://github.com/ebibibi/claude-code-discord-bridge.git
+uv add git+https://github.com/ebibibi/ebi-agent-chat-relay.git
 ```
 
 Crea un `bot.py`:

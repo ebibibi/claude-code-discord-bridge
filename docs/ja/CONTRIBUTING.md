@@ -40,8 +40,8 @@ main（常にリリース可能）
 ## 開発環境のセットアップ
 
 ```bash
-git clone https://github.com/ebibibi/claude-code-discord-bridge.git
-cd claude-code-discord-bridge
+git clone https://github.com/ebibibi/ebi-agent-chat-relay.git
+cd ebi-agent-chat-relay
 uv sync --dev
 make setup   # git hooks を登録（クローン後に一度だけ実行）
 ```

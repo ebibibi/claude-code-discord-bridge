@@ -7,8 +7,8 @@
 
 *패키지명: `claude-code-discord-bridge` (케밥 케이스)*
 
-[![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
+[![CI](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/codeql.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -444,11 +444,11 @@ ccdb가 백엔드 소유권을 추적하기 전에 작성된 레코드에는 저
 
 ```bash
 # With uvx (no install needed):
-uvx --from "git+https://github.com/ebibibi/claude-code-discord-bridge.git" ccdb setup
+uvx --from "git+https://github.com/ebibibi/ebi-agent-chat-relay.git" ccdb setup
 
 # Or after cloning:
-git clone https://github.com/ebibibi/claude-code-discord-bridge.git
-cd claude-code-discord-bridge
+git clone https://github.com/ebibibi/ebi-agent-chat-relay.git
+cd ebi-agent-chat-relay
 uv run ccdb setup
 ```
 
@@ -592,7 +592,7 @@ async def setup(bot, runner, components):
 이미 discord.py 봇이 있다면, 대신 ccdb를 패키지로 추가하세요:
 
 ```bash
-uv add git+https://github.com/ebibibi/claude-code-discord-bridge.git
+uv add git+https://github.com/ebibibi/ebi-agent-chat-relay.git
 ```
 
 `bot.py` 생성:

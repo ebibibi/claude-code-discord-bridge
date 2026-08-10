@@ -1,6 +1,6 @@
 """Tests for the ThreadStatusDashboard — live session status embed.
 
-Issue: https://github.com/ebibibi/claude-code-discord-bridge/issues/67
+Issue: https://github.com/ebibibi/ebi-agent-chat-relay/issues/67
 """
 
 from __future__ import annotations

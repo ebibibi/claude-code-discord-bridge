@@ -4,7 +4,7 @@ Layer 1: Every session receives a generic concurrency warning in its prompt.
 Layer 2: An in-memory registry tracks active sessions so each one knows
          what others are doing and can avoid conflicts.
 
-See: https://github.com/ebibibi/claude-code-discord-bridge/issues/52
+See: https://github.com/ebibibi/ebi-agent-chat-relay/issues/52
 """
 
 from __future__ import annotations

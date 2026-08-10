@@ -35,8 +35,8 @@ main (always releasable)
 ## Development Setup
 
 ```bash
-git clone https://github.com/ebibibi/claude-code-discord-bridge.git
-cd claude-code-discord-bridge
+git clone https://github.com/ebibibi/ebi-agent-chat-relay.git
+cd ebi-agent-chat-relay
 uv sync --dev
 make setup   # register git hooks (one-time per clone)
 ```
