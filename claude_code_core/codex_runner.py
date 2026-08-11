@@ -514,6 +514,10 @@ class CodexRunner:
             "DISCORD_BOT_TOKEN",
             "DISCORD_TOKEN",
             "API_SECRET_KEY",
+            "CCDB_AGUI_URL",
+            "CCDB_AGUI_TOKEN",
+            "CCDB_API_URL",
+            "CCDB_API_SECRET",
         }
     )
 

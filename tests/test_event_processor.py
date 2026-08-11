@@ -27,7 +27,7 @@ from claude_discord.claude.types import (
     ToolCategory,
     ToolUseEvent,
 )
-from claude_discord.cogs.event_processor import EventProcessor
+from claude_discord.cogs.event_processor import EventProcessor, _backend_name_from_runner
 from claude_discord.cogs.run_config import RunConfig
 from claude_discord.discord_ui.prompt_views import ChoiceView
 from claude_discord.surface import DiscordActivity, FormLauncher
@@ -91,6 +91,11 @@ def _make_result_event(**kwargs) -> StreamEvent:
         duration_ms=500,
         **kwargs,
     )
+
+
+def test_backend_name_does_not_unwrap_arbitrary_mock_attributes() -> None:
+    """Only real backend wrappers should have their ``inner`` traversed."""
+    assert _backend_name_from_runner(MagicMock()) == "claude"
 
 
 class TestEventProcessorProperties:

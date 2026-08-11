@@ -140,7 +140,7 @@ class BackendCommandCog(commands.Cog):
 
     @app_commands.command(
         name="backend",
-        description="Show or switch the AI backend (claude/codex)",
+        description="Show or switch the AI backend",
     )
     @app_commands.choices(
         name=[Choice(name=b, value=b) for b in ALL_BACKENDS],
@@ -150,7 +150,7 @@ class BackendCommandCog(commands.Cog):
         ],
     )
     @app_commands.describe(
-        name="claude or codex. Omit to show current setting.",
+        name="claude, codex, local, or agui. Omit to show current setting.",
         scope=(
             "thread: only this thread; global: server-wide default. "
             "Default: thread when invoked in a thread, otherwise global."
@@ -222,7 +222,9 @@ class BackendCommandCog(commands.Cog):
             if resolved_scope == SCOPE_THREAD and target_thread_id is not None
             else "**globally**"
         )
-        emoji = {"codex": "\U0001f300", "local": "\U0001f3e0"}.get(name, "\U0001f916")
+        emoji = {"codex": "\U0001f300", "local": "\U0001f3e0", "agui": "\U0001f50c"}.get(
+            name, "\U0001f916"
+        )
         await interaction.response.send_message(
             f"{emoji} Backend set to `{name}` {scope_label}. Next session will use it.",
             ephemeral=False,

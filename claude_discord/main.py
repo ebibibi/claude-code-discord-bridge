@@ -16,8 +16,6 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
-from claude_code_core.backend import create_backend
-
 from .bot import ClaudeDiscordBot
 from .cog_loader import load_custom_cogs
 from .deployment import DataLayout
@@ -49,7 +47,7 @@ def load_config() -> dict[str, str]:
     # Default model is backend-specific: Claude needs an explicit alias
     # ("sonnet"), but Codex defers to its own config.toml default when left
     # empty (so we never pin a stale Codex model version).
-    default_model = "" if backend == "codex" else "sonnet"
+    default_model = "sonnet" if backend == "claude" else ""
 
     return {
         "token": token,
@@ -60,6 +58,8 @@ def load_config() -> dict[str, str]:
         # the user switches backend at runtime via /backend.
         "claude_command": _env("CCDB_CLAUDE_COMMAND", "CLAUDE_COMMAND", ""),
         "codex_command": os.getenv("CCDB_CODEX_COMMAND", ""),
+        "agui_url": os.getenv("CCDB_AGUI_URL", ""),
+        "agui_token": os.getenv("CCDB_AGUI_TOKEN", ""),
         "model": _env("CCDB_MODEL", "CLAUDE_MODEL", default_model),
         "permission_mode": _env("CCDB_PERMISSION_MODE", "CLAUDE_PERMISSION_MODE", "acceptEdits"),
         "working_dir": _env("CCDB_WORKING_DIR", "CLAUDE_WORKING_DIR", ""),
@@ -105,8 +105,6 @@ async def main() -> None:
 
     # Create runner via backend factory (CCDB_BACKEND=claude|codex)
     backend_name = config["backend"]
-    default_command = "codex" if backend_name == "codex" else "claude"
-
     # BackendFactory is the runtime authority for building Claude/Codex
     # runners on demand (e.g. when the user switches via /backend).
     from .backend_factory import BackendFactory
@@ -126,21 +124,11 @@ async def main() -> None:
         allowed_tools=allowed_tools,
         append_system_prompt=config["append_system_prompt"] or None,
         effort=config["effort"] or None,
+        agui_url=config["agui_url"] or None,
+        agui_token=config["agui_token"] or None,
     )
 
-    runner = create_backend(
-        backend=backend_name,
-        command=config["command"] or default_command,
-        model=config["model"],
-        permission_mode=config["permission_mode"],
-        working_dir=config["working_dir"] or None,
-        timeout_seconds=int(config["timeout"]),
-        dangerously_skip_permissions=config["dangerously_skip_permissions"].lower()
-        in ("true", "1", "yes"),
-        allowed_tools=allowed_tools,
-        append_system_prompt=config["append_system_prompt"] or None,
-        effort=config["effort"] or None,
-    )
+    runner = factory.build(backend=backend_name, model=config["model"] or None)
 
     owner_id = int(config["owner_id"]) if config["owner_id"] else None
     bot = ClaudeDiscordBot(
