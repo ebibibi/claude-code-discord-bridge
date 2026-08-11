@@ -73,6 +73,44 @@ class TestLoadConfig:
         assert config["max_concurrent"] == "3"
         assert config["timeout"] == "300"
         assert config["custom_cogs_dir"] == ""
+        assert config["frontends"] == "discord"
+
+    def test_discord_and_teams_frontends_are_loaded(self) -> None:
+        from claude_discord.main import load_config
+
+        with (
+            patch("claude_discord.main.load_dotenv"),
+            patch.dict(
+                "os.environ",
+                {
+                    "DISCORD_BOT_TOKEN": "tok",
+                    "DISCORD_CHANNEL_ID": "111",
+                    "CCDB_FRONTENDS": "discord,teams",
+                },
+                clear=True,
+            ),
+        ):
+            config = load_config()
+
+        assert config["frontends"] == "discord,teams"
+
+    def test_invalid_frontend_selection_fails_before_startup(self) -> None:
+        from claude_discord.main import load_config
+
+        with (
+            patch("claude_discord.main.load_dotenv"),
+            patch.dict(
+                "os.environ",
+                {
+                    "DISCORD_BOT_TOKEN": "tok",
+                    "DISCORD_CHANNEL_ID": "111",
+                    "CCDB_FRONTENDS": "discord,email",
+                },
+                clear=True,
+            ),
+            pytest.raises(ValueError, match="CCDB_FRONTENDS"),
+        ):
+            load_config()
 
     def test_all_optional_env_vars(self) -> None:
         """Optional env vars are correctly read."""

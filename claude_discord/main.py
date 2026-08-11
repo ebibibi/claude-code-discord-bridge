@@ -20,6 +20,7 @@ from .bot import ClaudeDiscordBot
 from .cog_loader import load_custom_cogs
 from .deployment import DataLayout
 from .setup import setup_bridge
+from .teams_integration import FrontendRouter, build_teams_runtime, parse_frontends
 from .utils.logger import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ def load_config() -> dict[str, str]:
         return os.getenv(new) or os.getenv(old, default)
 
     backend = os.getenv("CCDB_BACKEND", "claude")
+    frontends = parse_frontends(os.getenv("CCDB_FRONTENDS", ""))
     # Default model is backend-specific: Claude needs an explicit alias
     # ("sonnet"), but Codex defers to its own config.toml default when left
     # empty (so we never pin a stale Codex model version).
@@ -53,6 +55,7 @@ def load_config() -> dict[str, str]:
         "token": token,
         "channel_id": channel_id,
         "backend": backend,
+        "frontends": ",".join(frontends),
         "command": _env("CCDB_COMMAND", "CLAUDE_COMMAND", ""),
         # Per-backend explicit command paths. Used by BackendFactory when
         # the user switches backend at runtime via /backend.
@@ -88,6 +91,7 @@ async def main() -> None:
     """Start the bot."""
     setup_logging()
     config = load_config()
+    enabled_frontends = parse_frontends(config["frontends"])
 
     channel_id = int(config["channel_id"])
 
@@ -196,13 +200,37 @@ async def main() -> None:
         if api_server is not None:
             await api_server.start()
 
-        # Handle signals (add_signal_handler is not supported on Windows)
-        if sys.platform != "win32":
-            loop = asyncio.get_running_loop()
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, lambda: asyncio.create_task(bot.close()))
+        teams_runtime = None
+        try:
+            if "teams" in enabled_frontends:
+                if (
+                    components.backend_settings is None
+                    or components.frontend_threads is None
+                    or not isinstance(components.frontend, FrontendRouter)
+                ):
+                    raise RuntimeError("Teams requires the normal backend and session-store wiring")
+                teams_runtime = await build_teams_runtime(
+                    os.environ,
+                    components=components,
+                    backend_factory=factory,
+                    registry=getattr(bot, "session_registry", None),
+                    worktree_manager=getattr(bot, "worktree_manager", None),
+                )
+                components.frontend.add(teams_runtime.frontend)
+                await teams_runtime.start()
+                logger.info("Teams activity puller started beside Discord")
 
-        await bot.start(config["token"])
+            # Handle signals (add_signal_handler is not supported on Windows)
+            if sys.platform != "win32":
+                loop = asyncio.get_running_loop()
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    loop.add_signal_handler(sig, lambda: asyncio.create_task(bot.close()))
+
+            await bot.start(config["token"])
+        finally:
+            if teams_runtime is not None:
+                await teams_runtime.close()
+                logger.info("Teams activity puller stopped")
 
 
 if __name__ == "__main__":

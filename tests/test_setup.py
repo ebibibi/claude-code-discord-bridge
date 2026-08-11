@@ -138,6 +138,11 @@ async def test_setup_bridge_returns_components(tmp_path: object) -> None:
     assert isinstance(result, BridgeComponents)
     assert result.session_repo is not None
     assert result.session_repo.db_path == str(tmp_path / "sessions.db")  # type: ignore[operator]
+    assert result.frontend_threads is not None
+    assert result.ask_repo is not None
+    assert result.usage_repo is not None
+    assert result.frontend is not None
+    assert result.frontend.name == "multi"
 
 
 @pytest.mark.asyncio

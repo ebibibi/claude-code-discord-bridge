@@ -154,8 +154,26 @@ class TestOnSystem:
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
 
         repo.save.assert_called_once_with(
-            thread.id, "s1", working_dir=runner.working_dir, summary="test prompt", backend="claude"
+            thread.id,
+            "s1",
+            working_dir=runner.working_dir,
+            origin="discord",
+            summary="test prompt",
+            backend="claude",
         )
+
+    @pytest.mark.asyncio
+    async def test_saves_the_frontend_origin_for_a_teams_session(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        repo = MagicMock()
+        repo.save = AsyncMock()
+        config = _make_config(thread, runner, repo=repo, session_origin="teams")
+        p = EventProcessor(config)
+
+        await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
+
+        assert repo.save.call_args.kwargs["origin"] == "teams"
 
     @pytest.mark.asyncio
     async def test_saves_to_repo_without_summary_for_resumed_session(
@@ -170,7 +188,11 @@ class TestOnSystem:
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="existing-sess"))
 
         repo.save.assert_called_once_with(
-            thread.id, "existing-sess", working_dir=runner.working_dir, backend="claude"
+            thread.id,
+            "existing-sess",
+            working_dir=runner.working_dir,
+            origin="discord",
+            backend="claude",
         )
 
     @pytest.mark.asyncio
@@ -187,7 +209,12 @@ class TestOnSystem:
         await p.process(StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"))
 
         repo.save.assert_called_once_with(
-            thread.id, "s1", working_dir=runner.working_dir, summary="x" * 100, backend="claude"
+            thread.id,
+            "s1",
+            working_dir=runner.working_dir,
+            origin="discord",
+            summary="x" * 100,
+            backend="claude",
         )
 
     @pytest.mark.asyncio

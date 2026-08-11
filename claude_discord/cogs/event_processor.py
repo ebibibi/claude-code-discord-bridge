@@ -413,6 +413,7 @@ class EventProcessor:
                     self._config.surface.thread_key,
                     self._state.session_id,
                     working_dir=wd,
+                    origin=self._config.session_origin,
                     backend=backend,
                 )
             else:
@@ -421,6 +422,7 @@ class EventProcessor:
                     self._config.surface.thread_key,
                     self._state.session_id,
                     working_dir=wd,
+                    origin=self._config.session_origin,
                     summary=summary,
                     backend=backend,
                 )
@@ -656,6 +658,7 @@ class EventProcessor:
                 await self._config.repo.save(
                     self._config.surface.thread_key,
                     event.session_id,
+                    origin=self._config.session_origin,
                     backend=_backend_name_from_runner(self._config.runner),
                 )
             self._state.session_id = event.session_id
