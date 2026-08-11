@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-08-11
+
+### Added
+
+- **Microsoft Teams as a production frontend** — the normal launcher can run Discord and Teams in
+  one process with `CCDB_FRONTENDS=discord,teams`. A public receiver verifies Bot Framework
+  activities and enqueues them without holding the bot client secret; a private `ActivityPuller`
+  polls outbound, invokes the same real session runner Discord uses, and posts results back to Teams.
+- **A complete Teams operator guide** — documents Entra registration, Azure Bot, separate queue
+  credentials, public receiver deployment, private host configuration, generated app packaging,
+  tenant consent, staged validation, security boundaries, and troubleshooting.
+- **A unified backend guide** — explains Claude Code, OpenAI Codex, guarded local, and AG-UI choices
+  independently from Discord or Teams.
+- **Curated v4 release notes** — make the product boundary and 3.x compatibility position explicit.
+
+### Changed
+
+- **The public product contract is frontend × backend** — any supported chat frontend can select any
+  supported backend per conversation while sharing persistence and coordination.
+- **Release version is 4.0.0** — the major version communicates the combined multi-frontend product
+  and Teams deployment boundary. Existing package names, commands, settings, data, APIs, default
+  backend, and Discord-only startup remain compatible.
+
 ## [3.4.0] - 2026-08-11
 
 ### Fixed

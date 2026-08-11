@@ -9,13 +9,47 @@ command is `ccdb`, and `ccdb` remains the short name used throughout this docume
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Use Claude Code _or_ OpenAI Codex on your phone. Multiple threads. All at once. Real development included.**
+**Run coding agents from Discord or Microsoft Teams. Choose Claude Code, OpenAI Codex,
+a local model, or any compatible AG-UI agent behind the same conversation.**
 
-Open Claude Code or OpenAI Codex from your smartphone's Discord app, spin up multiple threads, and run parallel development sessions — all without touching a keyboard. Each Discord thread becomes a fully isolated AI session. Work on a feature in one thread, review a PR in another, and run a background task in a third — simultaneously, even mixing backends per thread. The relay handles all the coordination so sessions never clobber each other.
+Ebi Agent Chat Relay turns each Discord thread or Teams conversation into an isolated,
+persistent agent session. Work on a feature in one conversation, review a PR in another, and run
+a background task in a third — simultaneously. Discord can mix backends per thread; Teams uses the
+configured/global backend in v4. The relay handles coordination so sessions do not clobber each
+other.
 
-**Why the name changed.** This started as a bridge between one AI and one chat app, and the old name said exactly that. It is now a relay: several agent backends (Claude Code, OpenAI Codex) reachable from a chat surface, with the surface itself becoming pluggable — Discord today, Microsoft Teams next. Three of the four words in the old name had stopped being true. See [ADR-0001](docs/adr/0001-adopt-ebi-agent-chat-relay.md) for the decision and [the rename plan](docs/RENAME_PLAN.md) for how the change is being made without breaking a single existing install.
+**Why the name changed.** This started as a bridge between one AI and one chat app. It is now a
+relay with two production frontends and four backend choices. Three of the four words in the old
+name had stopped being true. See [ADR-0001](docs/adr/0001-adopt-ebi-agent-chat-relay.md) for the
+decision and [the rename plan](docs/RENAME_PLAN.md) for the compatibility-preserving transition.
 
-**Use your existing subscriptions. No API key wrangling.** ccdb runs on top of the official CLIs — Claude Code (included with your [Claude Pro/Max subscription](https://claude.ai/pricing)) and OpenAI Codex (included with [ChatGPT Plus/Pro/Business](https://chatgpt.com)). Switch backends with `/backend` or set a per-thread override — your team gets both AIs through Discord at predictable cost.
+**Use your existing subscriptions, your own infrastructure, or a remote agent.** ccdb can run the
+official Claude Code and Codex CLIs, a Codex-compatible local endpoint, or an AG-UI HTTP/SSE
+agent. Discord exposes runtime `/backend` switching; Teams uses the configured backend through the
+same factory in v4.
+
+## What's new in v4
+
+Version 4 makes two independent choices explicit: **where people talk** and **which agent does the
+work**. Any supported frontend can use any supported backend.
+
+### Frontend × backend
+
+| | Claude Code | OpenAI Codex | Local | AG-UI |
+|---|---:|---:|---:|---:|
+| Discord | ✅ | ✅ | ✅ | ✅ |
+| Microsoft Teams | ✅ | ✅ | ✅ | ✅ |
+
+- **Discord** remains the zero-migration default. Existing deployments start exactly as before.
+- **Microsoft Teams** is production-ready through a small public receiver and an outbound-only
+  `ActivityPuller` on the private session host. Discord and Teams can run together in one process
+  with `CCDB_FRONTENDS=discord,teams`.
+- **AG-UI** connects either chat surface to an HTTP/SSE agent implementing the Agent–User
+  Interaction Protocol. Claude Code, Codex, and the guarded local backend remain available.
+
+Start with the [backend guide](docs/backends.md). For Teams, follow the complete
+[Microsoft Teams setup guide](docs/teams-setup.md), then use the deeper
+[surface behavior](docs/teams.md) and [relay security model](docs/teams-relay.md) references.
 
 **[日本語](docs/ja/README.md)** | **[简体中文](docs/zh-CN/README.md)** | **[한국어](docs/ko/README.md)** | **[Español](docs/es/README.md)** | **[Português](docs/pt-BR/README.md)** | **[Français](docs/fr/README.md)**
 
@@ -1068,7 +1102,7 @@ Session marking is fully opt-in — it only activates when `setup_bridge()` has 
 Optional REST API for notifications and task management. Requires aiohttp:
 
 ```bash
-uv add "claude-code-discord-bridge[api]"
+uv sync --extra api
 ```
 
 ### Endpoints
@@ -1139,23 +1173,24 @@ curl -X POST http://localhost:8080/api/tasks \
 
 ---
 
-## Microsoft Teams (in progress)
+## Microsoft Teams
 
-Teams is being added as a **sibling** frontend, not a port. `claude_discord` and
+Teams is a production **sibling** frontend, not a port. `claude_discord` and
 `claude_teams` each implement the vocabulary in `claude_code_core.frontend`,
 neither imports the other, and the same conformance contract runs against both —
 which is what stops "the Teams side is missing something" from being found by a
 user months later.
 
 ```bash
-uv add "claude-code-discord-bridge[teams]"
+uv sync --extra teams
 python -m claude_teams manifest --out dist/teams-app.zip
 ```
 
-What exists today: configuration and validation, the app package generator
-(resource-specific consent and SSO included), inbound Bot Framework token
-verification, an endpoint, and `TeamsSurface` — the output side, which the
-shared conformance contract is run against.
+The normal launcher runs Discord and Teams concurrently with
+`CCDB_FRONTENDS=discord,teams`. The public receiver verifies Bot Framework tokens and enqueues
+activities; the private `ActivityPuller` consumes them outbound, sends each prompt through the same
+session runner Discord uses, and posts the result back to Teams. The session host does not need an
+inbound Teams listener.
 
 The Teams experience is not a port of the Discord one. An answer that Discord
 fragments into fifteen messages arrives as **one**, and the column of embeds
@@ -1169,15 +1204,19 @@ unanswered permission request denies, and so does one whose card could not be
 posted — a prompt nobody could see must not be safer to ignore than one nobody
 answered.
 
-Files reach a personal chat through a consent card and a one-time upload URL —
-whose host is checked against Microsoft's own domains before a byte moves. A
-channel is told plainly that it cannot receive files yet. The conformance
-contract runs twice because of that: a personal chat passes all 18 checks, a
-channel fails exactly one, and the test asserts which.
+The Teams surface supports personal-chat file consent through a one-time upload URL — whose host is
+checked against Microsoft's own domains before a byte moves. Channel file delivery is not
+supported, and the private queue relay does not yet bridge the file-consent invoke. The conformance
+contract runs twice because of the surface-level channel gap: a personal chat passes all 18 checks,
+a channel fails exactly one, and the test asserts which.
 
-Unlike Discord, Teams needs a **public HTTPS endpoint**, and coding-agent
-sessions sit behind it. See [docs/teams.md](docs/teams.md) for the setup and for
-what that endpoint refuses to do.
+Unlike Discord, Teams needs a **public HTTPS endpoint**, an Entra application, an Azure Bot,
+an installable Teams app package, and a queue between the public and private sides. The values are
+tenant-specific, so no one-size-fits-all checked-in manifest can be safe or correct.
+
+Follow the [end-to-end Teams setup guide](docs/teams-setup.md) from registration through the first
+Teams → agent → Teams round trip. See [Teams surface behavior](docs/teams.md) for capability details
+and [the relay security model](docs/teams-relay.md) for the trust boundary and measured operation.
 
 ---
 

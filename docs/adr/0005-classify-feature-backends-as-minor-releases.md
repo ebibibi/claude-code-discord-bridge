@@ -3,12 +3,12 @@ type: adr
 id: ADR-0005
 title: Classify new optional backends as minor releases
 decision: Release a new backward-compatible SessionBackend as a SemVer minor version, even when the default merge automation initially creates a patch bump.
-status: accepted
+status: superseded
 date: 2026-08-11
 deciders: [Masahiko Ebi, Codex]
 scope: repository
 supersedes:
-superseded_by:
+superseded_by: ADR-0006
 ---
 
 # ADR-0005: Classify new optional backends as minor releases
