@@ -28,16 +28,53 @@ logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
-_APPROVAL_MODE_MAP: dict[str, str] = {
-    "acceptEdits": "except-edit",
-    "full": "always",
-    "none": "never",
-}
-
 # Reasoning-effort levels accepted by the Codex CLI / GPT-5.x models. Used to
 # validate the value before it is injected into a `-c model_reasoning_effort=`
 # config override (defence-in-depth against config injection).
 VALID_CODEX_EFFORTS: frozenset[str] = frozenset({"minimal", "low", "medium", "high", "xhigh"})
+
+# `codex exec`'s own sandbox policy values (see `codex exec --help`). Codex
+# picks one of these itself by default (config.toml-driven); ccdb never
+# overrides that choice unless an operator explicitly opts in — see
+# _resolve_codex_sandbox_override().
+VALID_CODEX_SANDBOX_MODES: frozenset[str] = frozenset(
+    {"read-only", "workspace-write", "danger-full-access"}
+)
+
+_CODEX_SANDBOX_OVERRIDE_ENV = "CCDB_CODEX_SANDBOX_OVERRIDE"
+
+
+def _resolve_codex_sandbox_override() -> str | None:
+    """Return the operator-configured `--sandbox` override, if any.
+
+    Deployment-scoped and env-only by design: this must never become a
+    per-thread/`/backend`-settable value, or any Discord user could disable
+    Codex's own OS-level sandbox for their own session. Codex's built-in
+    sandbox is host-portable and stays the default for every deployment; the
+    override exists only for hosts whose OS-level namespace restrictions
+    (e.g. AppArmor's ``apparmor_restrict_unprivileged_userns``) make Codex's
+    bundled bwrap-style sandbox helper fail before it can execute anything —
+    surfacing as ``bwrap: loopback: Failed RTM_NEWADDR: Operation not
+    permitted`` for every command, regardless of --sandbox mode (read-only
+    and workspace-write hit the same namespace setup as danger-full-access
+    skips). An operator on such a host sets this to ``danger-full-access`` to
+    defer entirely to ccdb's own outer boundary (systemd unit + per-session
+    worktree) instead — the same boundary Claude Code relies on, since it has
+    no OS-level sandbox of its own.
+    """
+    raw = os.environ.get(_CODEX_SANDBOX_OVERRIDE_ENV)
+    if not raw:
+        return None
+    value = raw.strip()
+    if value not in VALID_CODEX_SANDBOX_MODES:
+        logger.warning(
+            "%s=%r is not a valid Codex sandbox mode (%s); ignoring, Codex uses its own default.",
+            _CODEX_SANDBOX_OVERRIDE_ENV,
+            raw,
+            ", ".join(sorted(VALID_CODEX_SANDBOX_MODES)),
+        )
+        return None
+    return value
 
 
 def parse_codex_line(line: str) -> StreamEvent | None:
@@ -469,6 +506,15 @@ class CodexRunner:
         """
         # Always under the `exec` subcommand. `resume` is its sub-subcommand.
         args = [self.command, "exec"]
+
+        if not self.dangerously_skip_permissions:
+            sandbox_override = _resolve_codex_sandbox_override()
+            if sandbox_override:
+                # `--sandbox` is a parent `exec` option; `exec resume` rejects
+                # it when it appears after `resume` (exit code 2), so it must
+                # be inserted before the `resume` subcommand below.
+                args.extend(["--sandbox", sandbox_override])
+
         if session_id:
             if not re.match(r"^[a-f0-9\-]+$", session_id):
                 raise ValueError(f"Invalid session_id format: {session_id!r}")
@@ -495,8 +541,13 @@ class CodexRunner:
 
         if self.dangerously_skip_permissions:
             args.append("--dangerously-bypass-approvals-and-sandbox")
-        elif self.permission_mode in _APPROVAL_MODE_MAP:
-            args.extend(["--ask-for-approval", _APPROVAL_MODE_MAP[self.permission_mode]])
+        # `codex exec` has no interactive approval loop (no human present, and
+        # ccdb cannot inject responses over stdin for Codex — see
+        # inject_tool_result), and current codex-cli (0.145.0) rejects
+        # `--ask-for-approval` on `exec` outright ("unexpected argument").
+        # `permission_mode` therefore has no CLI lever for Codex beyond the
+        # bypass flag above; Codex's own --sandbox default (or the operator
+        # override resolved above) is what actually governs execution.
 
         # --cd is only accepted by `codex exec`, not by `codex exec resume`.
         if self.working_dir and not session_id:
