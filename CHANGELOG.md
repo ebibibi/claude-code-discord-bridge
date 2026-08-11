@@ -1,6 +1,6 @@
 # Changelog
 
-Last updated: 2026-07-27
+Last updated: 2026-08-11
 
 All notable changes to this project will be documented in this file.
 
@@ -9,11 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-08-11
+
 ### Fixed
 
 - **Teams rejected every genuine inbound request — the token claim is `serviceurl`, not `serviceUrl`** — found by pointing a real Teams tenant at the endpoint for the first time. The signature, issuer, audience and expiry all verified; the request then died on the last check with "token has no serviceUrl claim". Measured on a live Bot Framework token, the claim set is exactly `['aud', 'exp', 'iss', 'nbf', 'serviceurl']` — the camelCase spelling that appears throughout the activity *body* does not exist in the token. **The whole suite was green the entire time**, because the fixtures were built with the same wrong name the implementation read: a test that constructs its own input cannot catch a wrong assumption about that input. Both spellings are accepted now, and `TestTheClaimNameIsLowerCase` pins the real one along with the reason it went unseen.
 
 ### Added
+
+- **AG-UI agents as an optional backend** — `AgUiBackend` sends standard `RunAgentInput` requests to a configured HTTP(S) endpoint and maps JSON SSE lifecycle, text, reasoning, and tool events into the relay's existing `StreamEvent` contract. Select it with `/backend agui` or `CCDB_BACKEND=agui`; Discord thread identity is preserved as the AG-UI `threadId`, and images are sent as inline base64 input. The transport is isolated behind the `agui` optional dependency and treats the endpoint as a security boundary: URL credentials and redirects are rejected, bearer tokens are stripped from child CLI environments, response details are bounded, and oversized SSE frames fail closed. Durable HITL resume, state/activity rendering, protobuf, and client tools remain explicit follow-ups. (#605, #607)
 
 - **Teams can run without putting the session host on the internet — `claude_teams.relay`** — Discord was safe in a way that had nothing to do with the code: the transport was outbound only, so the machine running coding-agent sessions never appeared on the internet's attack surface. Teams requires inbound HTTPS, but *where* that inbound lands is a choice. A disposable receiver takes the request, verifies the token, and puts the activity on a queue; the session host **polls that queue outbound** and replies straight to the Bot Connector, also outbound. The host opens no listening port — the Discord shape, restored on a platform that does not offer it. The receiver holds the bot's *public* application id and a write credential for one queue, and **no client secret**, because it never replies: owning it yields the traffic passing through from that moment on, not the ability to speak as the bot, read past conversations, or reach the host. It verifies rather than forwarding, because forwarding would make the queue the trust boundary and put the Bot Connector's keys on the private machine; the envelope records what was checked, so the host's trust is auditable rather than assumed, and carries the **token's** `serviceurl` rather than the body's copy — the distinction that stops a replayed token redirecting the host's authenticated calls, and one that moving machines must not quietly lose.
 - **The failure modes that come with a queue, handled rather than discovered** — acknowledgement is separate from delivery, so a host that dies mid-handler gets the message again instead of losing it (a user's message that vanishes because a process restarted is indistinguishable from a bot that ignored them). That makes duplicates possible, so the puller filters by activity id: running a session twice for one message is worse than the crash that caused the redelivery. A message that fails every time is dropped after a bounded number of deliveries, loudly and with its id, because the alternative blocks every message behind it. An unreadable one is dropped immediately — unreadable now is unreadable next time. And a poll that returns nothing pauses, because a queue with no long poll would otherwise turn the loop into a spin against it.
