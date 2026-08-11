@@ -10,7 +10,7 @@ command is `ccdb`, and `ccdb` remains the short name used throughout this docume
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Run coding agents from Discord or Microsoft Teams. Choose Claude Code, OpenAI Codex,
-a local model, or any compatible AG-UI agent behind the same conversation.**
+Z.ai's GLM models, a local model, or any compatible AG-UI agent behind the same conversation.**
 
 Ebi Agent Chat Relay turns each Discord thread or Teams conversation into an isolated,
 persistent agent session. Work on a feature in one conversation, review a PR in another, and run
@@ -19,14 +19,14 @@ configured/global backend in v4. The relay handles coordination so sessions do n
 other.
 
 **Why the name changed.** This started as a bridge between one AI and one chat app. It is now a
-relay with two production frontends and four backend choices. Three of the four words in the old
+relay with two production frontends and five backend choices. Three of the four words in the old
 name had stopped being true. See [ADR-0001](docs/adr/0001-adopt-ebi-agent-chat-relay.md) for the
 decision and [the rename plan](docs/RENAME_PLAN.md) for the compatibility-preserving transition.
 
 **Use your existing subscriptions, your own infrastructure, or a remote agent.** ccdb can run the
-official Claude Code and Codex CLIs, a Codex-compatible local endpoint, or an AG-UI HTTP/SSE
-agent. Discord exposes runtime `/backend` switching; Teams uses the configured backend through the
-same factory in v4.
+official Claude Code and Codex CLIs, the same Claude Code CLI pointed at Z.ai's GLM models, a
+Codex-compatible local endpoint, or an AG-UI HTTP/SSE agent. Discord exposes runtime `/backend`
+switching; Teams uses the configured backend through the same factory in v4.
 
 ## What's new in v4
 
@@ -35,17 +35,20 @@ work**. Any supported frontend can use any supported backend.
 
 ### Frontend × backend
 
-| | Claude Code | OpenAI Codex | Local | AG-UI |
-|---|---:|---:|---:|---:|
-| Discord | ✅ | ✅ | ✅ | ✅ |
-| Microsoft Teams | ✅ | ✅ | ✅ | ✅ |
+| | Claude Code | OpenAI Codex | Z.ai | Local | AG-UI |
+|---|---:|---:|---:|---:|---:|
+| Discord | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Microsoft Teams | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 - **Discord** remains the zero-migration default. Existing deployments start exactly as before.
 - **Microsoft Teams** is production-ready through a small public receiver and an outbound-only
   `ActivityPuller` on the private session host. Discord and Teams can run together in one process
   with `CCDB_FRONTENDS=discord,teams`.
+- **Z.ai** runs the same Claude Code CLI against Z.ai's Anthropic-compatible GLM endpoint —
+  `/backend zai` or `CCDB_BACKEND=zai` — with its own credential file so a Z.ai thread never
+  inherits or falls back to direct Anthropic credentials.
 - **AG-UI** connects either chat surface to an HTTP/SSE agent implementing the Agent–User
-  Interaction Protocol. Claude Code, Codex, and the guarded local backend remain available.
+  Interaction Protocol. Claude Code, Codex, Z.ai, and the guarded local backend remain available.
 
 Start with the [backend guide](docs/backends.md). For Teams, follow the complete
 [Microsoft Teams setup guide](docs/teams-setup.md), then use the deeper
@@ -362,7 +365,7 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 
 ccdb 3.0 introduces three slash commands that change which AI handles the next session, with no bot restart:
 
-- `/backend [name] [scope]` — show or switch backend. `name` is `claude`, `codex`, `local`, or `agui`. `scope` is `thread` (this thread only) or `global` (server-wide default). When you omit `scope`, the command auto-resolves: in a thread it scopes to that thread, otherwise it sets the global default.
+- `/backend [name] [scope]` — show or switch backend. `name` is `claude`, `codex`, `zai`, `local`, or `agui`. `scope` is `thread` (this thread only) or `global` (server-wide default). When you omit `scope`, the command auto-resolves: in a thread it scopes to that thread, otherwise it sets the global default.
 - `/model [name] [scope]` — show or switch the model used by the **current** backend. Each backend remembers its own model preference, so flipping backend back and forth keeps your favoured models intact. Leave a backend's model unset to defer to that CLI's own default (e.g. Codex uses the `model` in `~/.codex/config.toml`, so ccdb tracks the console default instead of pinning a version).
   The `name` autocomplete is **discovered live**: ccdb asks the Anthropic models endpoint (using the credentials the Claude Code CLI already has) which models your account can see, so a model released this morning shows up in the dropdown without a ccdb upgrade. Aliases (`opus`, `sonnet`, …) are labelled with the model they currently resolve to. Offline, unauthenticated, or on Bedrock/Vertex/Foundry it silently falls back to a small static list; set `CCDB_MODEL_DISCOVERY=0` to always use that list. Codex suggestions stay static (the Codex CLI exposes no model listing) — any id you type still works.
 - `/effort [level] [scope]` — show or switch the **reasoning effort** used by the current backend. Valid levels are backend-specific: Claude accepts `low/medium/high/max`; Codex accepts `minimal/low/medium/high/xhigh` (mapped to the CLI's `model_reasoning_effort`). Leave it unset to defer to the CLI default.
@@ -391,6 +394,7 @@ Concrete example:
 /effort xhigh                          # global → codex reasons at xhigh effort
                                        # …open a thread, send a message…
 /backend claude scope:thread          # this thread only → switch back to claude
+/backend zai scope:thread             # this thread only → Z.ai (GLM models, isolated credentials)
 /backend agui scope:thread            # this thread only → configured remote AG-UI agent
 /model opus scope:thread              # this thread only → claude/opus
 /effort max scope:thread              # this thread only → claude reasons at max
@@ -505,6 +509,7 @@ Behind the scenes:
 - **Secret isolation** — Bot token stripped from subprocess environment
 - **User authorization** — `allowed_user_ids` restricts who can invoke Claude
 - **Log injection prevention** — User-provided API values are sanitized (newlines stripped) before writing to logs
+- **Z.ai backend** (optional) — `/backend zai` runs the same Claude Code CLI against Z.ai's Anthropic-compatible GLM endpoint via a dedicated `CCDB_ZAI_ENV_FILE` credential file; direct Anthropic credentials (`ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`) are popped from the subprocess environment first, so a Z.ai thread never inherits or falls back to them
 - **Local-model backend** (optional) — `/backend local` runs a thread against a model on your own hardware. ccdb owns a separate CLI home with the update check and analytics disabled, because a "local" run otherwise still contacts the vendor; it refuses to start if those settings are missing — see [docs/local-backend.md](docs/local-backend.md)
 - **Remote AG-UI backend** (optional) — `/backend agui` connects the existing Discord/Teams session machinery to any HTTP/SSE AG-UI agent while preserving ccdb's session ledger, rendering, cancellation, and operational controls — see [docs/agui-backend.md](docs/agui-backend.md)
 - **Anonymization gateway** (optional) — Replaces organisation-identifying terms with stable aliases before the prompt reaches Claude or Codex, and restores them in the answer. A local model checks the result for replacement misses and, by default, blocks the send when it finds one. Off until you write a rules file — see [docs/anonymization.md](docs/anonymization.md)
@@ -651,6 +656,7 @@ Each `.py` file in the directory must expose an `async def setup(bot, runner, co
 ```python
 from discord.ext import commands
 
+
 class GreeterCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -659,6 +665,7 @@ class GreeterCog(commands.Cog):
     async def on_member_join(self, member):
         channel = self.bot.get_channel(self.bot.channel_id)
         await channel.send(f"Welcome {member.mention}!")
+
 
 async def setup(bot, runner, components):
     await bot.add_cog(GreeterCog(bot))
@@ -710,6 +717,7 @@ runner = ClaudeRunner(
     working_dir="/path/to/your/project",
 )
 
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
@@ -719,6 +727,7 @@ async def on_ready():
         claude_channel_id=int(os.environ["DISCORD_CHANNEL_ID"]),
         allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
     )
+
 
 asyncio.run(bot.start(os.environ["DISCORD_BOT_TOKEN"]))
 ```
@@ -737,7 +746,9 @@ To deploy the bot across multiple Discord channels, pass `claude_channel_ids` in
 await setup_bridge(
     bot,
     runner,
-    claude_channel_id=int(os.environ["DISCORD_CHANNEL_ID"]),   # primary (fallback for thread creation)
+    claude_channel_id=int(
+        os.environ["DISCORD_CHANNEL_ID"]
+    ),  # primary (fallback for thread creation)
     claude_channel_ids={
         int(os.environ["DISCORD_CHANNEL_ID"]),
         int(os.environ["DISCORD_CHANNEL_ID_2"]),
@@ -758,7 +769,7 @@ So the configuration describes where ccdb speaks *freely*, not where it exists. 
 await setup_bridge(
     bot,
     runner,
-    claude_channel_ids={111},          # #111: no mention needed, every message runs Claude
+    claude_channel_ids={111},  # #111: no mention needed, every message runs Claude
     allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
 )
 # Anywhere else in the guild: "@YourBot what do you think?" starts a session; silence otherwise.
@@ -849,10 +860,12 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 |----------|-------------|---------|
 | `DISCORD_BOT_TOKEN` | Your Discord bot token | (required) |
 | `DISCORD_CHANNEL_ID` | Channel ID for Claude chat | (required) |
-| `CCDB_BACKEND` | Backend to use: `claude`, `codex`, `local`, or `agui` | `claude` |
+| `CCDB_BACKEND` | Backend to use: `claude`, `codex`, `zai`, `local`, or `agui` | `claude` |
 | `CCDB_COMMAND` | Path or name of the CLI binary (overrides `CLAUDE_COMMAND`). Used by the initial runner picked from `CCDB_BACKEND`; superseded by the two per-backend variables below when `/backend` switches at runtime. | _(auto: `claude` or `codex`)_ |
 | `CCDB_CLAUDE_COMMAND` | Explicit path to the Claude CLI binary. Used by `BackendFactory` whenever `/backend claude` is active, regardless of the initial `CCDB_BACKEND`. Falls back to `CLAUDE_COMMAND`, then `claude` (PATH). | (optional) |
 | `CCDB_CODEX_COMMAND` | Explicit path to the OpenAI Codex CLI binary. Required when running the bot under systemd (default service PATH does not include `~/.npm-global/bin`). Falls back to `codex` (PATH). | (optional) |
+| `CCDB_ZAI_ENV_FILE` | Path to a dedicated `KEY=VALUE` file with Z.ai credentials (`ANTHROPIC_AUTH_TOKEN`, optionally a regional `ANTHROPIC_BASE_URL`), applied only when `/backend zai` is active. | (required for `zai`) |
+| `CCDB_ZAI_MODEL` | Default GLM model id used when a Z.ai thread's `/model` is left unset. | (optional) |
 | `CCDB_AGUI_URL` | Exact HTTP(S) run endpoint for `/backend agui`. Redirects are rejected. | (required for `agui`) |
 | `CCDB_AGUI_TOKEN` | Optional bearer token for the AG-UI endpoint. Stripped from Claude/Codex subprocess environments. | (optional) |
 | `PATH` | Binary search path for the bot **and every CLI session it spawns** — sessions inherit the bot's environment. Set it in `.env` when running under systemd, which starts units with a minimal PATH and never reads `~/.bashrc` / `~/.profile`. See [Toolchain PATH](#toolchain-path--set-it-in-env). | (inherited from the parent process) |
@@ -990,12 +1003,14 @@ triggers = {
     ),
 }
 
-await bot.add_cog(WebhookTriggerCog(
-    bot=bot,
-    runner=runner,
-    triggers=triggers,
-    channel_ids={YOUR_CHANNEL_ID},
-))
+await bot.add_cog(
+    WebhookTriggerCog(
+        bot=bot,
+        runner=runner,
+        triggers=triggers,
+        channel_ids={YOUR_CHANNEL_ID},
+    )
+)
 ```
 
 **Security:** Prompts are defined server-side. Webhooks only select which trigger to fire — no arbitrary prompt injection.
@@ -1064,7 +1079,7 @@ config = UpgradeConfig(
     trigger_prefix="🔄 bot-upgrade",
     working_dir="/home/user/my-bot",
     restart_command=["sudo", "systemctl", "restart", "my-bot.service"],
-    restart_approval=True,       # React ✅ in thread, or click button in channel
+    restart_approval=True,  # React ✅ in thread, or click button in channel
     slash_command_enabled=True,  # Enable /upgrade slash command (opt-in, default False)
 )
 

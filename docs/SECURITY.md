@@ -116,12 +116,21 @@ Extraction never destroys the upload it came from. The original is deleted only 
 ### Stripped Environment Variables (runner.py)
 
 ```python
-_STRIPPED_ENV_KEYS = frozenset({
-    "CLAUDECODE",           # Nesting detection
-    "DISCORD_BOT_TOKEN",    # Bot authentication
-    "DISCORD_TOKEN",        # Alternative token var
-    "API_SECRET_KEY",       # API authentication
-})
+_STRIPPED_ENV_KEYS = frozenset(
+    {
+        "CLAUDECODE",  # Nesting detection
+        "DISCORD_BOT_TOKEN",  # Bot authentication
+        "DISCORD_TOKEN",  # Alternative token var
+        "API_SECRET_KEY",  # API authentication
+        "CCDB_AGUI_URL",  # AG-UI run endpoint
+        "CCDB_AGUI_TOKEN",  # AG-UI bearer token
+        "CCDB_TEAMS_APP_PASSWORD",  # Teams bot credential
+        "CCDB_TEAMS_QUEUE_URL",  # Teams relay queue connection string
+        "CCDB_API_URL",  # Re-added per session, scoped to this subprocess's own API port
+        "CCDB_API_SECRET",  # Re-added per session alongside CCDB_API_URL
+        "CCDB_ZAI_ENV_FILE",  # Path to the Z.ai credential file; consumed, never forwarded
+    }
+)
 ```
 
 These variables are removed from the subprocess environment before spawning Claude Code:
@@ -129,10 +138,24 @@ These variables are removed from the subprocess environment before spawning Clau
 1. **DISCORD_BOT_TOKEN / DISCORD_TOKEN**: Prevents Claude Code from reading the Discord token via its Bash tool
 2. **CLAUDECODE**: Claude Code uses this to detect nesting. Stripping it ensures the subprocess runs as a fresh top-level instance
 3. **API_SECRET_KEY**: If the host bot exposes a REST API, this key shouldn't leak to Claude
+4. **CCDB_AGUI_URL / CCDB_AGUI_TOKEN**: The remote AG-UI endpoint and its bearer token are ccdb's own routing config, not something a Claude/Codex session's Bash tool should be able to read or reuse
+5. **CCDB_TEAMS_APP_PASSWORD / CCDB_TEAMS_QUEUE_URL**: Same reasoning for the Teams frontend's bot credential and relay queue connection string
+6. **CCDB_API_URL / CCDB_API_SECRET**: Stripped from the inherited environment, then set explicitly per session scoped to that session's own local API port — a session never receives another session's API credential
+7. **CCDB_ZAI_ENV_FILE**: The *path* to the Z.ai credential file must not reach the CLI's Bash tool; `ZaiRunner` reads the file, merges its contents into the subprocess environment, then pops the path itself before spawning
+
+### Z.ai credential isolation (zai_runner.py)
+
+A Z.ai thread runs the same Claude Code CLI as the `claude` backend, so `ZaiRunner` cannot rely on
+a different binary to keep the two credential sets apart. Instead, before applying the Z.ai
+credential file it pops `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the subprocess
+environment — the two variables the direct-Anthropic backend passes through (see below) — so a
+Z.ai session can never inherit, or silently fall back to, direct Anthropic credentials. Losing the
+Z.ai credential file therefore fails as an auth error against Z.ai, not as a quiet switch to
+Anthropic billing.
 
 ### What's NOT Stripped
 
-General environment variables (PATH, HOME, ANTHROPIC_API_KEY, etc.) are passed through because Claude Code needs them to function. The `ANTHROPIC_API_KEY` is intentionally available — Claude Code uses it for API calls. If you need to restrict which API key Claude Code uses, configure it via Claude Code's own settings, not this bridge.
+General environment variables (PATH, HOME, ANTHROPIC_API_KEY, etc.) are passed through because Claude Code needs them to function. The `ANTHROPIC_API_KEY` is intentionally available — Claude Code uses it for API calls. If you need to restrict which API key Claude Code uses, configure it via Claude Code's own settings, not this bridge. The Z.ai backend is the one exception: it strips `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` for its own threads only (see above).
 
 ## Authorization Model
 
