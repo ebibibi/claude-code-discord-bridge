@@ -13,6 +13,19 @@ from claude_code_core.codex_runner import CodexRunner, parse_codex_line
 from claude_code_core.types import MessageType
 
 
+@pytest.fixture(autouse=True)
+def _clean_codex_sandbox_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate tests from CCDB_CODEX_SANDBOX_OVERRIDE in the ambient environment.
+
+    A developer's real shell/.env (e.g. a live deployment) may export this to
+    work around a host-specific sandbox issue — that must never leak into the
+    argv-structure assertions below. Tests that specifically exercise the
+    override still call monkeypatch.setenv() themselves, which layers on top
+    of (and is undone independently of) this fixture's delenv.
+    """
+    monkeypatch.delenv("CCDB_CODEX_SANDBOX_OVERRIDE", raising=False)
+
+
 class _FakeStream:
     def __init__(self, lines: list[bytes] | None = None, read_data: bytes = b"") -> None:
         self._lines = list(lines or [])
