@@ -19,11 +19,14 @@ if TYPE_CHECKING:
 
     from .backend_factory import BackendFactory
     from .backend_settings import BackendSettings
+    from .database.ask_repo import PendingAskRepository
     from .database.claims_repo import ClaimRepository
+    from .database.frontend_thread_repo import FrontendThreadRepository
     from .database.ingest_repo import IngestResultRepository
     from .database.lounge_repo import LoungeRepository
-    from .database.repository import SessionRepository
+    from .database.repository import SessionRepository, UsageStatsRepository
     from .database.resume_repo import PendingResumeRepository
+    from .database.settings_repo import SettingsRepository
     from .database.summary_repo import ThreadSummaryRepository
     from .database.task_repo import TaskRepository
     from .ext.api_server import ApiServer
@@ -61,6 +64,10 @@ class BridgeComponents:
     #: Discord's is built here; a custom Cog can read it instead of calling
     #: ``bot.get_channel`` and hard-coding Discord into its own logic.
     frontend: SessionFrontend | None = None
+    frontend_threads: FrontendThreadRepository | None = None
+    settings_repo: SettingsRepository | None = None
+    ask_repo: PendingAskRepository | None = None
+    usage_repo: UsageStatsRepository | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -324,12 +331,13 @@ async def setup_bridge(
     # wiring that follows.
     from .frontend import DiscordFrontend
     from .stores import build_session_stores
+    from .teams_integration import FrontendRouter
 
     stores = await build_session_stores(session_db_path)
 
     # The frontend seam. Built once and handed to everything that needs to
     # reach a conversation, so a Cog never has to call bot.get_channel itself.
-    frontend = DiscordFrontend(bot, ledger=stores.frontend_threads)
+    frontend = FrontendRouter(DiscordFrontend(bot, ledger=stores.frontend_threads))
     session_repo = stores.sessions
     settings_repo = stores.settings
     ask_repo = stores.asks
@@ -489,6 +497,10 @@ async def setup_bridge(
         backend_factory=backend_factory,
         backend_settings=backend_settings,
         frontend=frontend,
+        frontend_threads=stores.frontend_threads,
+        settings_repo=settings_repo,
+        ask_repo=ask_repo,
+        usage_repo=usage_repo,
     )
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided

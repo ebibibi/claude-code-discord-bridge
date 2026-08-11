@@ -516,6 +516,8 @@ class CodexRunner:
             "API_SECRET_KEY",
             "CCDB_AGUI_URL",
             "CCDB_AGUI_TOKEN",
+            "CCDB_TEAMS_APP_PASSWORD",
+            "CCDB_TEAMS_QUEUE_URL",
             "CCDB_API_URL",
             "CCDB_API_SECRET",
         }

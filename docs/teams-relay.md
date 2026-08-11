@@ -87,6 +87,25 @@ deployment has lost the property this document is about.
 The private side polls with `ActivityPuller` and replies with the ordinary
 `BotConnector`, which is where the client secret belongs.
 
+The normal bot launcher owns that private-side lifetime. To run Teams beside
+Discord in the same process, add these values to the deployment environment:
+
+```bash
+CCDB_FRONTENDS=discord,teams
+CCDB_TEAMS_QUEUE_URL='https://acct.queue.core.windows.net/relay?<SAS>'
+CCDB_TEAMS_APP_PASSWORD='...'
+```
+
+The remaining `CCDB_TEAMS_*` identity values are the same ones used to build
+the manifest. On startup the launcher creates one shared HTTP client, the
+`BotConnector`, `TeamsFrontend`, and `ActivityPuller`; on shutdown it stops the
+poller before closing the client. Discord's gateway connection remains active
+throughout. The private host still opens no Teams listener.
+
+`CCDB_FRONTENDS` defaults to `discord`, so upgrading an existing Discord-only
+deployment does not start a queue poller. Unknown and duplicate frontend names
+are rejected at startup.
+
 The queue SAS URL is a credential in a URL: it never appears in a log line, an
 exception, or a `repr`. The failures raised here name the operation and the
 status code and nothing else.

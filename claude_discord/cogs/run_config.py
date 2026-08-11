@@ -119,6 +119,9 @@ class RunConfig:
     backend_settings: BackendSettings | None = None
     # Command used to invoke Codex (for the Codex status probe in the footer).
     codex_command: str = "codex"
+    # Which frontend created this session mapping. Historical callers remain
+    # Discord by default; the Teams host sets this explicitly.
+    session_origin: str = "discord"
 
     # Prevent accidental field mutation — RunConfig is a value object.
     # Use dataclasses.replace() to create modified copies.

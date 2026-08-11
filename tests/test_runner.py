@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from claude_code_core.codex_runner import CodexRunner
 from claude_discord.claude.runner import ClaudeRunner, _resolve_windows_cmd
 from claude_discord.claude.types import ImageData
 
@@ -226,6 +227,18 @@ class TestBuildEnv:
             assert "DISCORD_TOKEN" not in env
         finally:
             del os.environ["DISCORD_TOKEN"]
+
+    @pytest.mark.parametrize(
+        "name",
+        ["CCDB_TEAMS_APP_PASSWORD", "CCDB_TEAMS_QUEUE_URL"],
+    )
+    def test_strips_teams_credentials(self, name: str) -> None:
+        os.environ[name] = "secret"
+        try:
+            for runner in (ClaudeRunner(), CodexRunner()):
+                assert name not in runner._build_env()
+        finally:
+            del os.environ[name]
 
     def test_preserves_path(self) -> None:
         runner = ClaudeRunner()
