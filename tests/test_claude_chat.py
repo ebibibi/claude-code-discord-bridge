@@ -1999,6 +1999,44 @@ class TestAutoRenameThreads:
         mock_thread.edit.assert_awaited_once_with(name="Refactor payment module")
 
     @pytest.mark.asyncio
+    async def test_background_rename_thread_uses_thread_backend_for_codex(self) -> None:
+        """When the thread's resolved backend is codex, suggest_title must receive
+        codex's own command/model/cwd — not the cog's default (Claude) runner's."""
+        from unittest.mock import patch
+
+        cog = self._make_cog(auto_rename=True)
+        cog._factory = MagicMock()
+        cog._backend_settings = MagicMock()
+        cog._backend_settings.current_backend = AsyncMock(return_value="codex")
+
+        codex_runner = MagicMock()
+        codex_runner.command = "/usr/local/bin/codex"
+        codex_runner.model = "gpt-5.6-sol"
+        codex_runner.working_dir = "/workspace"
+        codex_runner._build_env = MagicMock(return_value={"PATH": "/usr/bin"})
+        cog._build_runner_for_thread = AsyncMock(return_value=codex_runner)
+
+        mock_thread = MagicMock()
+        mock_thread.id = 999
+        mock_thread.edit = AsyncMock()
+
+        with patch(
+            "claude_discord.cogs.claude_chat.suggest_title",
+            new=AsyncMock(return_value="Refactor payment module"),
+        ) as mock_suggest:
+            await cog._background_rename_thread(mock_thread, "refactor payment module")
+
+        mock_suggest.assert_awaited_once_with(
+            "refactor payment module",
+            claude_command="/usr/local/bin/codex",
+            env={"PATH": "/usr/bin"},
+            backend="codex",
+            model="gpt-5.6-sol",
+            cwd="/workspace",
+        )
+        mock_thread.edit.assert_awaited_once_with(name="Refactor payment module")
+
+    @pytest.mark.asyncio
     async def test_background_rename_thread_no_edit_when_no_title(self) -> None:
         """When suggest_title returns None, thread.edit must NOT be called."""
         from unittest.mock import patch

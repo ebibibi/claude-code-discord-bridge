@@ -77,6 +77,51 @@ class TestSuggestTitleNormal:
         assert args[model_idx + 1] == "haiku"
 
     @pytest.mark.asyncio
+    async def test_codex_uses_exec_with_safe_one_shot_options(self):
+        proc = _make_proc(b"Codex title\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+            result = await suggest_title(
+                "some request",
+                claude_command="/usr/local/bin/codex",
+                backend="codex",
+                model="gpt-5.6-sol",
+                cwd="/workspace",
+            )
+
+        assert result == "Codex title"
+        args = mock_exec.call_args.args
+        assert args[:2] == ("/usr/local/bin/codex", "exec")
+        assert "-p" not in args
+        assert "--sandbox" in args
+        assert args[args.index("--sandbox") + 1] == "read-only"
+        assert "--skip-git-repo-check" in args
+        assert "--ephemeral" in args
+        assert "--ignore-rules" in args
+        assert args[args.index("--model") + 1] == "gpt-5.6-sol"
+        assert mock_exec.call_args.kwargs["cwd"] == "/workspace"
+
+    @pytest.mark.asyncio
+    async def test_codex_without_model_omits_model_flag(self):
+        proc = _make_proc(b"Codex title\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+            await suggest_title("some request", backend="codex")
+        args = mock_exec.call_args.args
+        assert "--model" not in args
+
+    @pytest.mark.asyncio
+    async def test_claude_backend_unaffected_by_model_kwarg(self):
+        """backend="claude" (the default) must keep the exact pre-existing argv —
+        model is a Codex-only lever, not a general override for Claude's
+        hardcoded `haiku` title model. cwd is still forwarded to the subprocess
+        call either way, same as any other backend."""
+        proc = _make_proc(b"Some Title\n")
+        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+            await suggest_title("some request", model="sonnet", cwd="/workspace")
+        args = mock_exec.call_args.args
+        assert args == ("claude", "-p", "--model", "haiku", args[-1])
+        assert mock_exec.call_args.kwargs["cwd"] == "/workspace"
+
+    @pytest.mark.asyncio
     async def test_prompt_contains_user_message(self):
         proc = _make_proc(b"Some Title\n")
         with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:

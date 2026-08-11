@@ -765,15 +765,38 @@ class ClaudeChatCog(commands.Cog):
         thread: discord.Thread,
         user_message: str,
     ) -> None:
-        """Rename *thread* to a Claude-generated title based on the first user message.
+        """Rename *thread* to an AI-generated title based on the first user message.
 
         Runs as a background asyncio task so it does not block the main session.
         Silently no-ops on any error so the thread name is never left in a bad state.
+
+        Uses whichever backend this thread will actually run on (honouring
+        per-thread/global ``/backend`` overrides) so, e.g., a Codex thread is
+        titled by a `codex exec` call rather than an unrelated `claude` one —
+        which would silently fail on a Codex-only deployment with no Claude
+        CLI configured at all.
         """
+        if self._factory is not None and self._backend_settings is not None:
+            backend = await self._backend_settings.current_backend(thread.id)
+        else:
+            backend = "claude"
+
+        renamer_runner = await self._build_runner_for_thread(
+            thread_id=thread.id,
+            model_override=None,
+            tools_override=None,
+            fork_session=False,
+            working_dir_override=None,
+            effort_override=None,
+        )
+
         title = await suggest_title(
             user_message,
-            claude_command=self.runner.command,
-            env=self.runner._build_env(),
+            claude_command=renamer_runner.command,
+            env=renamer_runner._build_env(),
+            backend=backend,
+            model=getattr(renamer_runner, "model", None),
+            cwd=getattr(renamer_runner, "working_dir", None),
         )
         if title:
             try:
