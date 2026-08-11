@@ -341,6 +341,97 @@ class TestAssistantUsage:
         assert event.cache_read_tokens == 10000
 
 
+class TestMessageDeltaUsage:
+    """Tests for final per-turn usage extraction from message_delta stream_events.
+
+    An ``assistant`` message's own ``usage`` field is a mid-generation
+    snapshot — for a still-streaming block it can report a tiny
+    ``output_tokens`` (e.g. 1) that is nowhere near the true final count for
+    that turn. The authoritative final usage for a completed message arrives
+    moments later in a ``stream_event`` whose nested ``event.type`` is
+    ``message_delta``, immediately before ``message_stop``. Captured live
+    against codex-cli 0.145.0-era claude CLI with --include-partial-messages:
+
+        {"type":"assistant","message":{"content":[{"type":"text","text":"..."}],
+         "usage":{"input_tokens":2,"output_tokens":1,...}}}
+        {"type":"stream_event","event":{"type":"content_block_stop", ...}}
+        {"type":"stream_event","event":{"type":"message_delta",
+         "usage":{"input_tokens":2,"output_tokens":3,...}}}
+        {"type":"stream_event","event":{"type":"message_stop"}}
+    """
+
+    def test_message_delta_extracts_final_usage(self):
+        line = json.dumps(
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn"},
+                    "usage": {
+                        "input_tokens": 2,
+                        "output_tokens": 3,
+                        "cache_read_input_tokens": 54432,
+                        "cache_creation_input_tokens": 2471,
+                    },
+                },
+            }
+        )
+        event = parse_line(line)
+        assert event is not None
+        assert event.message_type == MessageType.STREAM_EVENT
+        assert event.input_tokens == 2
+        assert event.output_tokens == 3
+        assert event.cache_read_tokens == 54432
+        assert event.cache_creation_tokens == 2471
+
+    def test_message_delta_final_usage_exceeds_assistant_snapshot(self):
+        """Regression guard for the exact bug: the assistant event's usage
+        under-reports output_tokens; message_delta's usage is the true total."""
+        assistant_line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "done"}],
+                    "usage": {"input_tokens": 2, "output_tokens": 1},
+                },
+            }
+        )
+        delta_line = json.dumps(
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "message_delta",
+                    "usage": {"input_tokens": 2, "output_tokens": 3},
+                },
+            }
+        )
+        assistant_event = parse_line(assistant_line)
+        delta_event = parse_line(delta_line)
+        assert assistant_event is not None
+        assert delta_event is not None
+        assert assistant_event.output_tokens == 1
+        assert delta_event.output_tokens == 3
+        assert delta_event.output_tokens > assistant_event.output_tokens
+
+    def test_other_stream_event_subtypes_do_not_populate_usage(self):
+        """Only message_delta carries usage; content_block_delta etc. must not
+        be mistaken for it and leave stale/wrong token fields behind."""
+        for event_type in ("message_start", "content_block_start", "content_block_delta"):
+            line = json.dumps({"type": "stream_event", "event": {"type": event_type}})
+            event = parse_line(line)
+            assert event is not None
+            assert event.message_type == MessageType.STREAM_EVENT
+            assert event.input_tokens is None
+            assert event.output_tokens is None
+
+    def test_message_delta_without_usage(self):
+        line = json.dumps({"type": "stream_event", "event": {"type": "message_delta"}})
+        event = parse_line(line)
+        assert event is not None
+        assert event.input_tokens is None
+        assert event.output_tokens is None
+
+
 class TestRedactedThinking:
     def test_redacted_thinking_sets_flag(self):
         line = (
