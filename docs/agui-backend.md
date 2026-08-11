@@ -9,7 +9,7 @@ conversation surfaces while replacing the local Claude/Codex CLI process with an
 Install the optional HTTP dependency:
 
 ```bash
-pip install 'claude-code-discord-bridge[agui]'
+uv sync --extra agui
 ```
 
 Configure the exact run endpoint and, when required, its bearer token:
@@ -21,6 +21,10 @@ CCDB_AGUI_TOKEN=replace-with-upstream-token
 
 Then select it globally with `CCDB_BACKEND=agui` or at runtime with `/backend agui`. A thread-scoped
 selection affects only that conversation.
+
+The selection works identically from Discord and Microsoft Teams. The chat platform remains the
+frontend — it renders streamed text, tool activity, and status — while AG-UI is the backend that
+generates those events. See [Choose an agent backend](backends.md) for the complete matrix.
 
 ## Wire behavior
 

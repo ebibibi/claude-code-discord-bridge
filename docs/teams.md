@@ -5,6 +5,11 @@
 > passes every check; a channel fails exactly one**, file delivery, and that is
 > pinned by name rather than skipped.
 
+> Deployment note: this document explains the Teams surface itself. The recommended private-host
+> queue relay supports messages, streaming, activity cards, prompts, and interruption, but does not
+> yet bridge the personal-file consent invoke or dispatch the text-command router. Follow the
+> [end-to-end setup guide](teams-setup.md) for the v4 deployment path and its exact limits.
+
 Discord and Teams are siblings, not a base and a port. `claude_discord` and
 `claude_teams` each implement the vocabulary in `claude_code_core.frontend`,
 and neither imports the other. The same conformance contract runs against both,
@@ -38,6 +43,10 @@ A caller never branches on the platform name; it asks the capabilities.
 
 ## Setting it up
 
+For a production deployment, use the complete [Microsoft Teams setup guide](teams-setup.md). The
+short sequence below describes the common identity and manifest inputs; it does not replace the
+public receiver, queue, private `ActivityPuller`, consent, and validation steps in that guide.
+
 ### 1. Create the Entra application and Azure Bot
 
 You need an application (client) id, its tenant, and a client secret. The Azure
@@ -60,7 +69,7 @@ produces an app that installs and then receives nothing.
 ### 3. Generate the app package
 
 ```bash
-pip install "claude-code-discord-bridge[teams]"
+uv sync --extra teams
 python -m claude_teams manifest --out dist/teams-app.zip
 ```
 
@@ -85,10 +94,10 @@ Two things in the generated manifest are worth knowing about:
 
 ### 4. Expose the endpoint
 
-Teams must reach `https://<host>/api/teams/messages`. A tunnel (Cloudflare
-Tunnel, ngrok) in front of the machine running ccdb is the usual arrangement;
-what matters is that the host in the manifest, the Azure Bot messaging
-endpoint, and what actually answers are the same thing.
+Teams must reach `https://<host>/api/teams/messages`. The recommended arrangement is the public
+receiver described in [teams-relay.md](teams-relay.md), with the session host polling outbound.
+A tunnel to the direct endpoint remains useful for isolated echo development. In either case, the
+host in the manifest, the Azure Bot messaging endpoint, and what actually answers must agree.
 
 ## What the surface does differently from Discord
 

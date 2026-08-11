@@ -1,234 +1,167 @@
 # Architecture
 
-## Overview
+Ebi Agent Chat Relay has two independent adapter axes around one session core:
 
-claude-code-discord-bridge is a thin UI layer that bridges Discord messages to the Claude Code CLI. It has no AI logic of its own — all intelligence comes from Claude Code's existing capabilities (CLAUDE.md, skills, tools, memory, MCP servers). The bridge's sole responsibility is: accept user input from Discord, spawn the CLI, parse its output, and render results back to Discord.
+- a **frontend** turns a Discord thread or Teams conversation into a `ConversationSurface`; and
+- a **backend** turns Claude Code, Codex, local, or AG-UI output into neutral `StreamEvent` values.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Discord (Gateway)                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐  │
-│  │ Channel   │  │ Threads  │  │ Reactions / Embeds   │  │
-│  └─────┬────┘  └────┬─────┘  └──────────┬───────────┘  │
-└────────┼────────────┼───────────────────┼───────────────┘
-         │            │                   ▲
-         ▼            ▼                   │
-┌─────────────────────────────────────────┼───────────────┐
-│              discord.py Bot (bot.py)    │               │
-│  ┌────────────────┐  ┌─────────────────┴──────┐        │
-│  │ ClaudeChatCog  │  │ SkillCommandCog        │        │
-│  │ (claude_chat)  │  │ (skill_command)        │        │
-│  └───────┬────────┘  └───────┬────────────────┘        │
-│          │                   │                          │
-│          └─────────┬─────────┘                          │
-│                    ▼                                    │
-│          ┌─────────────────┐                            │
-│          │ _run_helper.py  │  ← shared execution logic  │
-│          └────────┬────────┘                            │
-│                   │                                     │
-│     ┌─────────────┼──────────────┐                      │
-│     ▼             ▼              ▼                      │
-│  ┌────────┐  ┌──────────┐  ┌──────────┐                │
-│  │ runner │  │ status   │  │ chunker  │                │
-│  │  .py   │  │  .py     │  │  .py     │                │
-│  └───┬────┘  └──────────┘  └──────────┘                │
-│      │                                                  │
-│      ▼                                                  │
-│  ┌──────────┐  ┌──────────────┐                         │
-│  │ parser   │  │ repository   │                         │
-│  │  .py     │  │  .py (SQLite)│                         │
-│  └──────────┘  └──────────────┘                         │
-└─────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│              Claude Code CLI (subprocess)                │
-│  claude -p --output-format stream-json --model sonnet   │
-│                                                         │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │ CLAUDE.md, skills, tools, memory, MCP servers   │    │
-│  │ (all inherited from the host environment)       │    │
-│  └─────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────┘
+The core owns session persistence, approvals, streaming, concurrency, worktrees, AI Lounge,
+claims, and collision detection. It contains no model of its own.
+
+## v4 overview
+
+```text
+Discord Gateway                       Teams / Bot Framework
+      │                                       │ signed HTTPS
+      │                                       ▼
+      │                              public relay receiver
+      │                                       │ verified envelope
+      │                                       ▼
+      │                              Azure Storage Queue
+      │                                       ▲ outbound poll
+      ▼                                       │
+DiscordFrontend ◀──────── FrontendRouter ── TeamsFrontend
+      │                                       │
+      └──────────── ConversationSurface ──────┘
+                              │
+                              ▼
+                 shared session execution core
+        persistence · prompts · streams · Lounge · claims
+                              │
+                              ▼
+                        BackendFactory
+                ┌────────┬────────┬────────┬────────┐
+                ▼        ▼        ▼        ▼
+             Claude    Codex    Local    AG-UI
+              CLI       CLI      CLI     HTTP/SSE
 ```
 
-## Module Responsibilities
+Discord remains the primary frontend for creating scheduled conversations and exposes the richest
+administration command surface. Teams inbound activities reach the same session runner through the
+private `ActivityPuller`. The public receiver can neither authenticate as the bot nor run an agent.
 
-### Entry Points
+## Frontend contract
 
-| Module | Role |
-|--------|------|
-| `main.py` | Standalone entry point. Loads `.env`, initializes DB, creates components, starts bot. For users who run this as their only bot. |
-| `__init__.py` | Public API surface. Exports `ClaudeChatCog`, `ClaudeRunner`, `SessionRepository`, and all types needed by consumers who embed this into their own bot. |
-| `bot.py` | `ClaudeDiscordBot` — minimal `commands.Bot` subclass. Configures intents (message_content, guilds), stores `channel_id`, syncs slash commands on ready. Only used in standalone mode. |
+`claude_code_core.frontend` defines two protocols:
 
-### Cogs Layer (`cogs/`)
+- `SessionFrontend` creates or resolves conversations; and
+- `ConversationSurface` renders one conversation's text, status, activity, prompts, interrupt
+  control, and file delivery.
 
-| Module | Class | Role |
-|--------|-------|------|
-| `claude_chat.py` | `ClaudeChatCog` | Core message handler. Listens for `on_message` in the configured channel and its child threads. Creates threads for new conversations, resumes sessions for thread replies. Manages concurrency via `asyncio.Semaphore`. Provides `/clear` slash command to reset sessions. |
-| `skill_command.py` | `SkillCommandCog` | Provides `/skill` and `/skills` slash commands. Scans `~/.claude/skills/` at startup, parses YAML frontmatter from `SKILL.md` files, offers Discord autocomplete. Creates a thread and delegates to `_run_helper`. |
-| `_run_helper.py` | `run_claude_in_thread()` | Shared function extracted to avoid duplicating the Claude CLI streaming logic between ClaudeChatCog and SkillCommandCog. Handles the full event loop: session init, tool use embeds, status updates, text accumulation, chunked response posting, error handling, and session persistence. |
+`DiscordFrontend` and `TeamsFrontend` are siblings. Neither is implemented in terms of the other.
+The same executable conformance suites run against both, which pins behavior that Python protocols
+alone cannot express.
 
-### Claude CLI Layer (`claude/`)
+Platform differences live in `SurfaceCapabilities` rather than scattered name checks:
 
-| Module | Class/Function | Role |
-|--------|---------------|------|
-| `runner.py` | `ClaudeRunner` | Subprocess lifecycle manager. Builds command args, sanitizes environment, spawns `claude` via `create_subprocess_exec`, reads stdout line-by-line, yields `StreamEvent` objects. Handles timeout, cleanup, and `kill()`. Supports `clone()` for creating fresh runner instances per session. |
-| `parser.py` | `parse_line()` | Stateless JSON parser. Takes a single line of stream-json output, returns a `StreamEvent` or `None`. Dispatches to `_parse_system`, `_parse_assistant`, `_parse_user`, `_parse_result` based on message type. |
-| `types.py` | `StreamEvent`, `ToolUseEvent`, `SessionState`, enums | Type definitions. `MessageType` (system/assistant/user/result), `ContentBlockType` (text/tool_use/tool_result), `ToolCategory` (read/edit/command/web/think/other). `TOOL_CATEGORIES` maps Claude Code tool names to categories. `ToolUseEvent.display_name` provides human-readable descriptions. |
+| Capability | Discord | Teams |
+|---|---:|---:|
+| message size | 2,000 chars | 80,000 chars |
+| bot reactions | yes | no |
+| live update budget | roughly every 1.5 s | 1,800/hour/conversation |
+| files | attachment | personal-chat consent upload at the surface layer |
+| native bot slash commands | yes | no |
 
-### Database Layer (`database/`)
+The `FrontendRouter` resolves a stored thread key through every registered frontend and creates new
+surfaces through the primary frontend. `frontend_threads` maps Teams string conversation IDs into
+the integer keyspace used by the existing session tables, while preserving the frontend origin so
+results cannot cross platforms.
 
-| Module | Class/Function | Role |
-|--------|---------------|------|
-| `models.py` | `init_db()` | Schema definition and initialization. Single `sessions` table with `thread_id` (PK), `session_id`, `working_dir`, `model`, timestamps. Uses `datetime('now', 'localtime')` for timestamps. |
-| `repository.py` | `SessionRepository` | CRUD operations. `get()` by thread_id, `save()` with upsert, `delete()`, `cleanup_old()` for age-based cleanup. Each operation opens and closes its own `aiosqlite` connection (simple, no connection pooling). |
+## Teams transport boundary
 
-### Discord UI Layer (`discord_ui/`)
+Teams requires inbound HTTPS; the agent host should not. The recommended transport is split:
 
-| Module | Class/Function | Role |
-|--------|---------------|------|
-| `status.py` | `StatusManager` | Emoji reaction manager. Shows one status emoji at a time on the user's original message. Debounced at 700ms to avoid rate limits. Includes stall detection: soft warning (hourglass) at 10s, hard warning at 30s. Maps `ToolCategory` to emoji. Cleans up reactions when done. |
-| `chunker.py` | `chunk_message()` | Fence-aware message splitter. Splits at paragraph boundaries (preferred), then line boundaries, then hard-splits. Tracks open code fences and properly closes/reopens them across chunk boundaries. Limits chunks to 1950 chars (2000 minus overhead). |
-| `embeds.py` | `tool_use_embed()`, `session_start_embed()`, etc. | Discord embed builders. Color-coded: blurple for info, green for success, red for error, yellow for tool use. Consistent visual language across all bot output. |
+1. The public receiver verifies Bot Framework signature, issuer, audience, expiry, and the signed
+   `serviceurl` claim before parsing an activity into a bounded envelope.
+2. It writes that envelope to a dedicated queue using an add-only credential.
+3. `ActivityPuller` on the private host reads outbound, deduplicates activity IDs, and dispatches
+   the activity to `TeamsSessionHost`.
+4. The session host resolves the Teams surface, selects the backend through the shared settings and
+   factory, and calls the same `run_claude_with_config` execution path used by Discord.
+5. `BotConnector` posts the response directly to Microsoft's regional service URL using the client
+   credential that exists only on the private host.
 
-### Utilities (`utils/`)
+Delivery is at least once. The puller deduplicates successful activity IDs, retries transient
+failures, and drops a poison message after a bounded attempt count rather than blocking the queue.
+See [Teams relay](teams-relay.md) and [Teams setup](teams-setup.md).
 
-| Module | Function | Role |
-|--------|----------|------|
-| `logger.py` | `setup_logging()` | Configures root logger with timestamp format. Silences discord.py's verbose logging (`WARNING` level). |
+## Backend contract
 
-## Data Flow
+`SessionBackend` exposes one asynchronous event stream regardless of transport. `BackendFactory`
+constructs the selected implementation at the start of each turn:
 
-### New Conversation
+- `ClaudeRunner` executes Claude Code stream-json;
+- `CodexRunner` executes Codex JSONL;
+- the local backend executes Codex against a ccdb-owned OpenAI-compatible configuration; and
+- `AgUiBackend` sends `RunAgentInput` over HTTP and parses JSON server-sent events.
 
-```
-1. User sends message in configured channel
+`BackendSettings` resolves values in thread → global → environment order. Session IDs are only
+resumed when the stored backend matches the selected backend; native Claude, Codex, and remote
+AG-UI identifiers are not interchangeable.
+
+See [Choose an agent backend](backends.md).
+
+## Shared execution flow
+
+```text
+inbound user turn
    │
-2. on_message() in ClaudeChatCog
-   │
-3. _handle_new_conversation()
-   ├── Create Discord thread (name = first 100 chars of message)
-   │
-4. _run_claude()
-   ├── Check semaphore (post "waiting" if full)
-   ├── Create StatusManager on user's message
-   ├── Clone runner (fresh subprocess state)
-   │
-5. run_claude_in_thread()
-   ├── Create SessionState
-   │
-6. runner.run(prompt, session_id=None)
-   ├── _build_args() → [claude, -p, --output-format, stream-json, ...]
-   ├── _build_env() → strip DISCORD_BOT_TOKEN etc.
-   ├── create_subprocess_exec()
-   │
-7. Stream events:
-   ├── SYSTEM {session_id} → save to DB, post session_start_embed
-   ├── ASSISTANT {text}    → accumulate in SessionState
-   ├── ASSISTANT {tool_use} → set status emoji, post tool_use_embed
-   ├── USER {tool_result}  → set thinking emoji
-   ├── RESULT {text, cost} → post chunked text, session_complete_embed
-   │
-8. Cleanup
-   ├── Kill subprocess
-   ├── Clean up status reactions
-   └── Return session_id
-```
-
-### Thread Reply (Session Resume)
-
-```
-1. User replies in existing thread
-   │
-2. on_message() → _handle_thread_reply()
-   ├── repo.get(thread_id) → SessionRecord with session_id
-   │
-3. _run_claude(session_id=existing_id)
-   │
-4. runner.run(prompt, session_id=existing_id)
-   ├── _build_args includes --resume {session_id}
-   │
-5. Same streaming flow as above
-   └── Session ID persisted on RESULT event
+   ├─ resolve frontend conversation and stable ThreadKey
+   ├─ load session record and backend settings
+   ├─ build one backend runner for this turn
+   ├─ construct RunConfig with the platform-neutral surface
+   ▼
+run_claude_with_config
+   ├─ enforce shared concurrency
+   ├─ inject coordination/worktree context
+   ├─ consume StreamEvent values
+   ├─ render through ConversationSurface
+   ├─ fail closed on unanswered approvals
+   └─ persist session id, backend, working directory, and origin
 ```
 
-### Skill Execution
+The execution helper retains its historical name for compatibility; it is backend-neutral.
 
-```
-1. User invokes /skill goodmorning
-   │
-2. SkillCommandCog.run_skill()
-   ├── Validate skill name (regex)
-   ├── Look up in loaded skills list
-   ├── Defer interaction
-   ├── Create thread named "/goodmorning"
-   │
-3. run_claude_in_thread(prompt="/goodmorning", session_id=None)
-   │
-4. Same streaming flow as new conversation
-   └── Claude Code interprets "/goodmorning" as a skill invocation
-```
+## Persistence and isolation
 
-## Concurrency Model
+One `DataLayout` root contains the session database and related stores. Sessions, settings,
+approval state, Lounge entries, claims, usage, summaries, ingestion, and frontend mappings share
+the deployment boundary deliberately so concurrent agents can see and coordinate with one another.
 
-```
-                    ┌──────────────────┐
-                    │   Semaphore(N)   │  N = MAX_CONCURRENT_SESSIONS (default 3)
-                    └────────┬─────────┘
-                             │
-          ┌──────────────────┼──────────────────┐
-          ▼                  ▼                  ▼
-   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
-   │ Thread #1   │   │ Thread #2   │   │ Thread #3   │
-   │ Runner (A)  │   │ Runner (B)  │   │ Runner (C)  │
-   │ claude proc │   │ claude proc │   │ claude proc │
-   └─────────────┘   └─────────────┘   └─────────────┘
-```
+That same property means unrelated customers must not share a data root. Use a separate process,
+bot identity, queue, and `CCDB_DATA_ROOT` for each isolation boundary.
 
-- Each Claude CLI invocation gets its own `ClaudeRunner` instance via `clone()`.
-- The `_active_runners` dict tracks runners by thread_id for kill-on-demand (`/clear`).
-- The semaphore is held in `_run_helper.run_claude_with_config()` and applies to **all** code paths — chat, skills, scheduler, and webhooks. It is released in the `finally` block before compact/ask reruns to prevent deadlocks on recursive calls.
-- Excess requests queue with a "waiting" message to prevent resource exhaustion.
-- All I/O is async (asyncio subprocess, aiosqlite), so the event loop is never blocked.
+## Main modules
 
-## Extension Points
+| Module | Responsibility |
+|---|---|
+| `claude_code_core/frontend.py` | frontend/surface protocols, capabilities, stable thread keys |
+| `claude_code_core/backend.py` | backend protocol and common construction vocabulary |
+| `claude_discord/frontend.py` | Discord conversation adapter |
+| `claude_teams/frontend.py` | Teams conversation adapter |
+| `claude_discord/teams_integration.py` | normal-process Teams runtime and `ActivityPuller` dispatch |
+| `claude_teams/relay/` | verified envelope, receiver, queue client, and poller |
+| `claude_discord/backend_factory.py` | Claude, Codex, local, and AG-UI construction |
+| `claude_discord/cogs/event_processor.py` | neutral stream-event rendering and prompt dispatch |
+| `claude_discord/stores.py` | construction of the shared SQLite repositories |
+| `claude_discord/deployment.py` | one configurable data-root layout |
 
-### For Framework Consumers (Package Users)
+## Extension points
 
-1. **Custom Cogs**: Import `ClaudeChatCog` and `SkillCommandCog`, add to your own `commands.Bot`. Add your own Cogs alongside them.
-2. **Custom Runner Configuration**: `ClaudeRunner` accepts `command`, `model`, `permission_mode`, `working_dir`, `timeout_seconds`, `allowed_tools`, `dangerously_skip_permissions`.
-3. **Selective Imports**: `__init__.py` exports individual components — use only what you need. Import `parse_line` and `chunk_message` for custom pipelines.
-4. **run_claude_in_thread()**: Can be called from any Cog or async context. Needs a `Thread`, `ClaudeRunner`, `SessionRepository`, and a prompt.
+### Add a frontend
 
-### For Framework Contributors
+Implement `SessionFrontend` and `ConversationSurface`, declare accurate capabilities, then run both
+frontend and surface conformance suites against the real adapter with only its transport faked.
+Do not import Discord components into the new frontend.
 
-1. **New Cog**: Follow CONTRIBUTING.md pattern. Use `_run_helper.run_claude_in_thread()` for Claude execution.
-2. **New Tool Category**: Add to `ToolCategory` enum, update `TOOL_CATEGORIES` mapping in `types.py`, add emoji in `status.py` `CATEGORY_EMOJI` and `embeds.py` `CATEGORY_ICON`.
-3. **New Event Type**: Add to `MessageType` enum, add `_parse_xxx()` function in `parser.py`, handle in `_run_helper.py` event loop.
-4. **New Embed Type**: Add builder function in `embeds.py`, call from `_run_helper.py`.
+### Add a backend
 
-## Dependency Graph
+Implement `SessionBackend`, emit neutral `StreamEvent` values, register it in `BackendFactory` and
+`BackendSettings`, and make credentials explicit. A remote backend is a data boundary; do not echo
+untrusted response bodies or leak its credentials into child processes.
 
-```
-claude_discord/
-  __init__.py ──────────┬──→ claude/runner.py
-                        ├──→ claude/parser.py
-                        ├──→ claude/types.py
-                        ├──→ cogs/claude_chat.py ──→ _run_helper.py ──→ runner, types
-                        ├──→ cogs/skill_command.py ──→ _run_helper.py     parser, repo
-                        ├──→ database/repository.py                       status, chunker
-                        ├──→ discord_ui/status.py                         embeds
-                        ├──→ discord_ui/chunker.py
-                        └──→ discord_ui/embeds.py
+### Embed the relay
 
-  main.py ──→ bot.py, runner, claude_chat, models, repository, logger
-
-External:
-  discord.py (Gateway, commands, app_commands)
-  aiosqlite (async SQLite)
-  python-dotenv (env loading, standalone mode only)
-```
-
-Key design constraint: `claude/` and `discord_ui/` have zero dependencies on each other. The `cogs/` layer (specifically `_run_helper.py`) is the only place where CLI output meets Discord rendering. This keeps the parser testable without Discord mocks and the UI components testable without subprocess mocks.
+`setup_bridge()` wires the standard Discord deployment and exposes `BridgeComponents` for custom
+cogs. Public names remain compatibility constrained even though the product name changed; see
+[the rename plan](RENAME_PLAN.md).
