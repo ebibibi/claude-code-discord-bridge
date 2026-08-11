@@ -51,7 +51,15 @@ class TestEnvVarRename:
         from claude_discord.main import load_config
 
         merged = {**self._REQUIRED, **env}
-        with patch.dict("os.environ", merged, clear=True):
+        # load_config() calls load_dotenv(find_dotenv(usecwd=True)) internally,
+        # which walks up from the real cwd and would silently repopulate
+        # os.environ from an actual .env file (e.g. a live deployment's own
+        # config) even though clear=True just wiped it — patch.dict only
+        # controls the *starting* snapshot, not writes made during the block.
+        with (
+            patch.dict("os.environ", merged, clear=True),
+            patch("claude_discord.main.load_dotenv"),
+        ):
             return load_config()
 
     def test_ccdb_model_takes_precedence(self) -> None:
