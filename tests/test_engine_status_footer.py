@@ -115,3 +115,13 @@ class TestGating:
                 thread_id=1,
             )
         assert thread.send.await_count == 0
+
+
+class TestZaiStatusLine:
+    """Z.ai runs the Claude Code CLI, so it shares Claude's statusline rendering."""
+
+    async def test_zai_turn_renders_claude_statusline(self) -> None:
+        """Z.ai gets the claude statusline (render_claude_sl is True for zai)."""
+        body = await _run(backend="zai", mode="off", codex_line=None, statusline="Ctx 1%")
+        assert body is not None
+        assert "Ctx 1%" in body

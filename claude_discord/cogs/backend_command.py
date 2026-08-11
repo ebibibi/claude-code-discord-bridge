@@ -47,6 +47,7 @@ VALID_EFFORTS: dict[str, frozenset[str]] = {
     "claude": frozenset({"low", "medium", "high", "max"}),
     "codex": VALID_CODEX_EFFORTS,
     "local": VALID_CODEX_EFFORTS,  # same CLI, same levels
+    "zai": frozenset({"low", "medium", "high", "max"}),  # Claude Code CLI
 }
 
 # Ordered effort levels per backend for the /effort autocomplete (frozensets are
@@ -55,6 +56,7 @@ EFFORT_ORDER: dict[str, list[str]] = {
     "claude": ["low", "medium", "high", "max"],
     "codex": ["minimal", "low", "medium", "high", "xhigh"],
     "local": ["minimal", "low", "medium", "high", "xhigh"],
+    "zai": ["low", "medium", "high", "max"],
 }
 
 # Suggested model ids per backend for the /model autocomplete. The model field is
@@ -84,6 +86,14 @@ SUGGESTED_MODELS: dict[str, list[tuple[str, str]]] = {
     "local": [
         ("gpt-oss:120b", "gpt-oss 120B (tool use, needs real VRAM)"),
         ("qwen3.5:35b", "Qwen3.5 35B"),
+    ],
+    # Z.ai serves the Anthropic-compatible GLM family. The model id is free-text,
+    # so any id the Z.ai endpoint accepts works even if it is not listed here.
+    "zai": [
+        ("glm-5.2[1m]", "GLM-5.2 with 1M context"),
+        ("glm-5.2", "GLM-5.2"),
+        ("glm-5-turbo", "GLM-5 Turbo"),
+        ("glm-4.7", "GLM-4.7"),
     ],
 }
 
@@ -150,7 +160,7 @@ class BackendCommandCog(commands.Cog):
         ],
     )
     @app_commands.describe(
-        name="claude, codex, local, or agui. Omit to show current setting.",
+        name="claude, codex, local, agui, or zai. Omit to show current setting.",
         scope=(
             "thread: only this thread; global: server-wide default. "
             "Default: thread when invoked in a thread, otherwise global."
@@ -222,9 +232,12 @@ class BackendCommandCog(commands.Cog):
             if resolved_scope == SCOPE_THREAD and target_thread_id is not None
             else "**globally**"
         )
-        emoji = {"codex": "\U0001f300", "local": "\U0001f3e0", "agui": "\U0001f50c"}.get(
-            name, "\U0001f916"
-        )
+        emoji = {
+            "codex": "\U0001f300",
+            "local": "\U0001f3e0",
+            "agui": "\U0001f50c",
+            "zai": "\U0001f7e3",
+        }.get(name, "\U0001f916")
         await interaction.response.send_message(
             f"{emoji} Backend set to `{name}` {scope_label}. Next session will use it.",
             ephemeral=False,

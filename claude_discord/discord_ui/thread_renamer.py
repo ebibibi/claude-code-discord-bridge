@@ -97,12 +97,19 @@ async def suggest_title(
 
     prompt = _PROMPT_TEMPLATE.format(text=user_message[:2000])
 
+    # The default ``haiku`` is an Anthropic alias the Z.ai endpoint does not
+    # serve, so a title call against a Z.ai-configured env would 404. Detect
+    # the endpoint the same way api_provider does and pick a model it serves.
+    title_model = "haiku"
+    if env and "api.z.ai" in (env.get("ANTHROPIC_BASE_URL") or ""):
+        title_model = "glm-4.7"
+
     try:
         proc = await asyncio.create_subprocess_exec(
             claude_command,
             "-p",
             "--model",
-            "haiku",
+            title_model,
             prompt,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,

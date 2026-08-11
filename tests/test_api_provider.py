@@ -76,3 +76,8 @@ def test_truthy_variations() -> None:
 def test_falsy_flag_is_direct() -> None:
     for val in ("0", "false", "", "no"):
         assert detect_api_provider({"CLAUDE_CODE_USE_BEDROCK": val}) == ("Anthropic API (direct)")
+
+
+def test_zai_base_url_has_provider_label() -> None:
+    env = {"ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic"}
+    assert detect_api_provider(env) == "Z.ai"

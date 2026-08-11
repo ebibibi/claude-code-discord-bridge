@@ -323,3 +323,36 @@ class TestSuggestTitleErrors:
             result = await suggest_title("some request")
         assert result is None
         proc.kill.assert_called_once()
+
+
+class TestSuggestTitleZaiEnv:
+    """When the env points at Z.ai, the title call uses a Z.ai-served model.
+
+    The default ``haiku`` is an Anthropic alias the Z.ai endpoint does not
+    serve, so a title call would 404. suggest_title detects Z.ai from the env
+    and switches to a GLM model for the one-shot title generation.
+    """
+
+    @pytest.mark.asyncio
+    async def test_zai_env_uses_glm_model(self):
+        proc = _make_proc(b"Z.ai title\n")
+        zai_env = {
+            "ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic",
+            "PATH": "/usr/bin",
+        }
+        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+            await suggest_title("some request", env=zai_env)
+        args = mock_exec.call_args[0]
+        assert "--model" in args
+        model_idx = args.index("--model")
+        assert args[model_idx + 1] == "glm-4.7"
+
+    @pytest.mark.asyncio
+    async def test_non_zai_env_still_uses_haiku(self):
+        proc = _make_proc(b"Anthropic title\n")
+        anthropic_env = {"ANTHROPIC_BASE_URL": "https://api.anthropic.com", "PATH": "/usr/bin"}
+        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+            await suggest_title("some request", env=anthropic_env)
+        args = mock_exec.call_args[0]
+        model_idx = args.index("--model")
+        assert args[model_idx + 1] == "haiku"

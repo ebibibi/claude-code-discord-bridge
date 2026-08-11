@@ -48,12 +48,18 @@ logger = logging.getLogger(__name__)
 
 
 def _backend_name_from_runner(runner: object) -> str:
-    """Best-effort mapping from runner class name to embed backend tag."""
+    """Best-effort mapping from runner class to embed backend tag."""
     cls = type(runner).__name__
     if cls == "AnonymizingBackend":
         inner = getattr(runner, "inner", None)
         if inner is not None and inner is not runner:
             return _backend_name_from_runner(inner)
+    # Prefer the runner's declared ``backend_name`` (ClaudeRunner and ZaiRunner
+    # set it as a class attribute) over class-name matching, so a subclass is
+    # identified by which endpoint it targets rather than by its class name.
+    declared = getattr(runner, "backend_name", None)
+    if declared in {"claude", "codex", "local", "agui", "zai"}:
+        return declared
     # LocalCodexRunner subclasses CodexRunner, so it has to be matched first.
     if cls == "LocalCodexRunner":
         return "local"
@@ -1120,7 +1126,7 @@ async def _post_engine_status_footer(
     # Render the Claude statusLine on Claude turns, or whenever the Codex line
     # is being shown (so both engines appear together). On non-Claude turns the
     # session model id is not a Claude model, so suppress the model label.
-    render_claude_sl = backend == "claude" or codex_line is not None
+    render_claude_sl = backend in {"claude", "zai"} or codex_line is not None
     statusline_text: str | None = None
     if render_claude_sl:
         statusline_text = await _render_claude_statusline_text(

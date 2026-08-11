@@ -53,6 +53,8 @@ def detect_api_provider(env: Mapping[str, str]) -> str:
     base_url = (env.get("ANTHROPIC_BASE_URL") or "").strip()
     if base_url:
         host = urlparse(base_url).hostname or base_url
+        if host.lower() == "api.z.ai":
+            return "Z.ai"
         return f"Custom endpoint ({host})"
 
     return "Anthropic API (direct)"

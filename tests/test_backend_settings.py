@@ -9,9 +9,11 @@ import aiosqlite
 import pytest
 
 from claude_discord.backend_settings import (
+    ALL_BACKENDS,
     BACKEND_GLOBAL,
     CODEX_STATUS_GLOBAL,
     BackendSettings,
+    session_is_resumable,
 )
 from claude_discord.database.settings_repo import SettingsRepository
 
@@ -227,3 +229,47 @@ class TestEffort:
         s = await self._settings()
         with pytest.raises(ValueError):
             await s.set_effort("gpt4", "high")  # type: ignore[arg-type]
+
+
+class TestZaiBackend:
+    """Z.ai is a first-class backend alongside claude/codex/local/agui."""
+
+    async def _settings(self) -> BackendSettings:
+        repo, _ = await _new_repo()
+        return BackendSettings(
+            repo,
+            env_backend="claude",
+            env_model_for_claude="sonnet",
+            env_model_for_codex="",
+            env_model_for_zai="glm-5.2[1m]",
+        )
+
+    def test_zai_is_a_supported_backend(self) -> None:
+        assert "zai" in ALL_BACKENDS
+
+    def test_zai_and_claude_sessions_are_not_interchangeable(self) -> None:
+        # Z.ai keeps its own Claude Code session store under separate
+        # credentials, so a claude session id cannot resume on zai (or vice versa).
+        assert session_is_resumable("claude", "zai") is False
+        assert session_is_resumable("zai", "claude") is False
+        assert session_is_resumable("zai", "zai") is True
+
+    async def test_zai_backend_and_model_are_independent(self) -> None:
+        s = await self._settings()
+        await s.set_backend("zai")
+        await s.set_model("zai", "glm-4.7")
+        assert await s.current_backend() == "zai"
+        assert await s.current_model("zai") == "glm-4.7"
+        # Switching backend must not leak the Z.ai model into claude.
+        assert await s.current_model("claude") == "sonnet"
+
+    async def test_env_model_for_zai_is_optional(self) -> None:
+        """Old call sites that omit env_model_for_zai still construct cleanly."""
+        repo, _ = await _new_repo()
+        s = BackendSettings(
+            repo,
+            env_backend="claude",
+            env_model_for_claude="sonnet",
+            env_model_for_codex="",
+        )
+        assert await s.current_model("zai") is None

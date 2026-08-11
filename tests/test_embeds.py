@@ -406,3 +406,23 @@ class TestToolResultPreviewEmbed:
         embed = tool_result_preview_embed("🔧 Running: cat...", "output")
         assert embed.title is not None
         assert not embed.title.endswith(".")
+
+
+class TestSessionStartEmbedBackend:
+    """The session-start embed reflects which backend a turn runs on."""
+
+    def test_zai_uses_distinct_title_and_color(self) -> None:
+        from claude_discord.discord_ui.embeds import session_start_embed
+
+        embed = session_start_embed(backend="zai", model="glm-5.2[1m]")
+        assert embed.title is not None
+        assert "Z.ai" in embed.title
+        assert embed.colour.value == 0x6D5DFB  # Z.ai purple
+
+    def test_zai_distinct_from_claude(self) -> None:
+        from claude_discord.discord_ui.embeds import session_start_embed
+
+        zai = session_start_embed(backend="zai", model="glm-5.2[1m]")
+        claude = session_start_embed(backend="claude", model="sonnet")
+        assert zai.colour.value != claude.colour.value
+        assert zai.title != claude.title

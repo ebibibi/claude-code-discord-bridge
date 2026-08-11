@@ -34,6 +34,13 @@ class TestCreateBackendFromEnv:
         assert isinstance(backend, ClaudeRunner)
         assert backend.working_dir == "/tmp"
 
+    def test_zai_backend(self) -> None:
+        from claude_code_core.zai_runner import ZaiRunner
+
+        backend = create_backend(backend="zai", model="glm-5.2[1m]")
+        assert isinstance(backend, ZaiRunner)
+        assert backend.model == "glm-5.2[1m]"
+
 
 class TestEnvVarRename:
     """Verify CCDB_* env vars with CLAUDE_* fallbacks in load_config()."""
@@ -82,3 +89,20 @@ class TestEnvVarRename:
     def test_ccdb_backend_env(self) -> None:
         config = self._load({"CCDB_BACKEND": "codex"})
         assert config["backend"] == "codex"
+
+    def test_zai_backend_env_and_model(self) -> None:
+        config = self._load({"CCDB_BACKEND": "zai"})
+        assert config["backend"] == "zai"
+        # Z.ai has its own model setting, decoupled from CLAUDE_MODEL.
+        assert config["zai_model"] == "glm-5.2[1m]"
+        assert config["zai_env_file"] == ""
+
+    def test_zai_model_env_override(self) -> None:
+        config = self._load({"CCDB_BACKEND": "zai", "CCDB_ZAI_MODEL": "glm-4.7"})
+        assert config["zai_model"] == "glm-4.7"
+        # The default_model resolution for zai reads CCDB_ZAI_MODEL.
+        assert config["model"] == "glm-4.7"
+
+    def test_zai_env_file_configured(self) -> None:
+        config = self._load({"CCDB_ZAI_ENV_FILE": "/etc/ccdb/zai.env"})
+        assert config["zai_env_file"] == "/etc/ccdb/zai.env"

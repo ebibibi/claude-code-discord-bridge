@@ -83,3 +83,17 @@ class TestCodexDescribeApi:
             assert label.startswith("Custom endpoint")
         finally:
             _restore(saved)
+
+
+class TestZaiDescribeApi:
+    def test_identifies_zai_from_cli_env_overlay(self, tmp_path: Path) -> None:
+        saved = _clear()
+        overlay = tmp_path / "zai.env"
+        overlay.write_text(
+            "ANTHROPIC_AUTH_TOKEN=test-key\nANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic\n"
+        )
+        os.environ["CCDB_CLI_ENV_FILE"] = str(overlay)
+        try:
+            assert ClaudeRunner().describe_api() == "Z.ai"
+        finally:
+            _restore(saved)

@@ -98,6 +98,17 @@ def test_backend_name_does_not_unwrap_arbitrary_mock_attributes() -> None:
     assert _backend_name_from_runner(MagicMock()) == "claude"
 
 
+def test_backend_name_prefers_declared_zai_backend_name() -> None:
+    """A runner that declares backend_name='zai' is identified as zai, not claude."""
+    from claude_code_core.zai_runner import ZaiRunner
+
+    class ZaiLikeRunner:
+        backend_name = "zai"
+
+    assert _backend_name_from_runner(ZaiLikeRunner()) == "zai"
+    assert _backend_name_from_runner(ZaiRunner(model="glm-5.2[1m]")) == "zai"
+
+
 class TestEventProcessorProperties:
     """Initial state and property behaviour."""
 

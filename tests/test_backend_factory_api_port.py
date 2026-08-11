@@ -69,3 +69,41 @@ class TestFactoryApiPort:
         assert runner.api_port == 8099
         env = runner._build_env()
         assert env["CCDB_API_URL"] == "http://127.0.0.1:8099"
+
+
+class TestZaiBackendFactory:
+    """Z.ai runs the Claude Code CLI against the Z.ai endpoint."""
+
+    def test_zai_backend_uses_claude_command_and_dedicated_env(self, tmp_path) -> None:
+        from claude_code_core.zai_runner import ZaiRunner
+
+        env_file = tmp_path / "zai.env"
+        factory = _factory(
+            zai_env_file=str(env_file),
+            zai_model="glm-5.2[1m]",
+        )
+        runner = factory.build(backend="zai")
+        assert isinstance(runner, ZaiRunner)
+        assert runner.model == "glm-5.2[1m]"
+        assert runner.env_file == str(env_file)
+        assert runner.command == "claude"  # reuses the Claude CLI binary
+
+    def test_zai_default_model_when_none_configured(self) -> None:
+        from claude_code_core.zai_runner import ZaiRunner
+
+        factory = _factory()
+        runner = factory.build(backend="zai")
+        assert isinstance(runner, ZaiRunner)
+        # The factory ships a sensible GLM default.
+        assert runner.model == "glm-5.2[1m]"
+
+    def test_zai_clone_preserves_env_file(self, tmp_path) -> None:
+        from claude_code_core.zai_runner import ZaiRunner
+
+        env_file = tmp_path / "zai.env"
+        factory = _factory(zai_env_file=str(env_file), zai_model="glm-5.2[1m]")
+        runner = factory.build(backend="zai", thread_id=1)
+        cloned = runner.clone(thread_id=2)
+        assert isinstance(cloned, ZaiRunner)
+        assert cloned.env_file == str(env_file)
+        assert cloned.thread_id == 2

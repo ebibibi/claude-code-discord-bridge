@@ -64,6 +64,12 @@ class TestCreateBackend:
         )
         assert isinstance(backend, AgUiBackend)
 
+    def test_zai_backend(self) -> None:
+        from claude_code_core.zai_runner import ZaiRunner
+
+        backend = create_backend(backend="zai", model="glm-5.2[1m]")
+        assert isinstance(backend, ZaiRunner)
+
     def test_unknown_backend_raises(self) -> None:
         with pytest.raises(ValueError, match="Unknown backend"):
             create_backend(backend="unknown", model="sonnet")
