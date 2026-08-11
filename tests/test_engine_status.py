@@ -42,8 +42,8 @@ class TestFormat:
         assert line is not None
         assert "Codex" in line
         assert "5h 1%" in line
-        assert "週次 8%" in line
-        assert "クレジット 0" in line
+        assert "weekly 8%" in line
+        assert "credits 0" in line
         assert "(prolite)" in line
 
     def test_team_plan_primary_is_weekly_not_5h(self) -> None:
@@ -57,14 +57,14 @@ class TestFormat:
         line = format_codex_status_line(TEAM_SAMPLE)
         assert line is not None
         assert "5h" not in line
-        assert "週次 33%" in line
+        assert "weekly 33%" in line
         assert "(team)" in line
 
     @pytest.mark.parametrize(
         ("mins", "expected_label"),
         [
             (300, "5h"),
-            (10080, "週次"),
+            (10080, "weekly"),
             (1440, "1d"),
             (2880, "2d"),
         ],
@@ -80,7 +80,7 @@ class TestFormat:
         data = {"rateLimits": {"primary": {"usedPercent": 5}, "credits": {"unlimited": True}}}
         line = format_codex_status_line(data)
         assert line is not None
-        assert "クレジット 無制限" in line
+        assert "credits unlimited" in line
 
     def test_rounds_fractional_percent(self) -> None:
         data = {"rateLimits": {"primary": {"usedPercent": 12.6}}}
@@ -97,7 +97,7 @@ class TestFormat:
         }
         line = format_codex_status_line(data)
         assert line is not None
-        assert "上限到達" in line
+        assert "limit reached" in line
 
     @pytest.mark.parametrize("bad", [None, {}, {"rateLimits": None}, {"rateLimits": {}}, "x"])
     def test_returns_none_for_unusable(self, bad: object) -> None:

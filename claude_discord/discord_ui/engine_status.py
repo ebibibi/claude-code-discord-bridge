@@ -140,7 +140,7 @@ def _window_label(window_duration_mins: object) -> str:
         return ""
     if mins % 1440 == 0:
         days = mins // 1440
-        return "週次" if days == 7 else f"{days}d"
+        return "weekly" if days == 7 else f"{days}d"
     return f"{mins // 60:g}h"
 
 
@@ -161,7 +161,7 @@ def _segment(snap: dict | None, fallback_label: str) -> str | None:
 def format_codex_status_line(data: dict | None) -> str | None:
     """Format a ``account/rateLimits/read`` result into one Discord line.
 
-    Example: ``🤖 Codex: 5h 1% · 週次 8% · クレジット 0 (prolite)``.
+    Example: ``🤖 Codex: 5h 1% · weekly 8% · credits 0 (prolite)``.
     Returns ``None`` when there is nothing meaningful to show.
     """
     if not isinstance(data, dict):
@@ -174,16 +174,16 @@ def format_codex_status_line(data: dict | None) -> str | None:
     primary = _segment(snap.get("primary"), "5h")
     if primary is not None:
         segments.append(primary)
-    secondary = _segment(snap.get("secondary"), "週次")
+    secondary = _segment(snap.get("secondary"), "weekly")
     if secondary is not None:
         segments.append(secondary)
 
     credit_info = snap.get("credits")
     if isinstance(credit_info, dict):
         if credit_info.get("unlimited"):
-            segments.append("クレジット 無制限")
+            segments.append("credits unlimited")
         elif credit_info.get("balance") is not None:
-            segments.append(f"クレジット {credit_info.get('balance')}")
+            segments.append(f"credits {credit_info.get('balance')}")
 
     if not segments:
         return None
@@ -191,7 +191,7 @@ def format_codex_status_line(data: dict | None) -> str | None:
     plan = snap.get("planType")
     suffix = f" ({plan})" if plan else ""
     reached = snap.get("rateLimitReachedType")
-    warn = " ⚠ 上限到達" if reached else ""
+    warn = " ⚠ limit reached" if reached else ""
     return f"\U0001f916 Codex: {' · '.join(segments)}{suffix}{warn}"
 
 
