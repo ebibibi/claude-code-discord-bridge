@@ -130,6 +130,48 @@ _RECENT_HEADER = "\nRecent lounge messages:\n"
 _NO_MESSAGES = "\n(No messages yet — be the first to say hello!)\n"
 _INVITE_CLOSE = "\n---\n"
 
+# _LOUNGE_INVITE above tells every session to run these exact curl commands
+# against its own localhost control-plane API. Under --permission-mode auto
+# (ccdb's production default) a Bash call with no matching permission rule has
+# no human to ask, so it falls to a risk classifier that intermittently denies
+# it as "posting to an external service" -- even though the target never
+# leaves the loopback interface. Each rule is anchored on the literal
+# "$CCDB_API_URL/api/<resource>" substring (not the whole curl invocation), so
+# it stays scoped to that one ccdb resource regardless of how Claude happens
+# to format flags/quoting around it. Claude Code evaluates chained
+# subcommands (&&, ;, |, ...) independently, so a wildcard here cannot grant
+# permission to some unrelated command tacked onto the same line (see
+# anthropics/claude-code#28784, fixed before the wildcard-chaining exploit
+# could apply here). This deliberately does NOT cover the rest of the control
+# plane (/api/spawn, /api/tasks, /api/ingest, ...) -- only the endpoints
+# _LOUNGE_INVITE actually tells a session to curl on its own.
+DEFAULT_COORDINATION_ALLOWED_TOOLS: tuple[str, ...] = (
+    "Bash(curl *$CCDB_API_URL/api/lounge*)",
+    "Bash(curl *$CCDB_API_URL/api/sessions*)",
+    "Bash(curl *$CCDB_API_URL/api/threads/*)",
+    "Bash(curl *$CCDB_API_URL/api/claims*)",
+)
+
+
+def merge_default_allowed_tools(
+    override: list[str] | None = None,
+    *,
+    disable_default: bool = False,
+) -> list[str] | None:
+    """Combine the default coordination allow-list with an operator override.
+
+    ``override`` is appended after the baseline (duplicates dropped) so an
+    operator's ``CCDB_ALLOWED_TOOLS`` or a guild's ``/tools-set`` never
+    silently drops the coordination rules. Returns ``None`` only when the
+    baseline is disabled and no override is given, matching the pre-existing
+    "no --allowedTools flag at all" default.
+    """
+    base = [] if disable_default else list(DEFAULT_COORDINATION_ALLOWED_TOOLS)
+    for tool in override or ():
+        if tool not in base:
+            base.append(tool)
+    return base or None
+
 
 def build_lounge_prompt(
     recent_messages: list[LoungeMessage],

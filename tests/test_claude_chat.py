@@ -2237,3 +2237,38 @@ class TestGoalCommand:
 
         send_args = interaction.followup.send.call_args
         assert "◎" in send_args.args[0] or "goal" in send_args.args[0].lower()
+
+
+class TestGetAllowedTools:
+    """_get_allowed_tools() must never drop ccdb's default coordination rules."""
+
+    @pytest.mark.asyncio
+    async def test_no_settings_repo_returns_none(self) -> None:
+        cog = _make_cog()
+        cog._settings_repo = None
+        assert await cog._get_allowed_tools() is None
+
+    @pytest.mark.asyncio
+    async def test_no_stored_override_returns_none(self) -> None:
+        """None here means 'inherit the base runner', which already carries
+        the default -- _get_allowed_tools must not duplicate it."""
+        cog = _make_cog()
+        cog._settings_repo = MagicMock()
+        cog._settings_repo.get = AsyncMock(return_value=None)
+        assert await cog._get_allowed_tools() is None
+
+    @pytest.mark.asyncio
+    async def test_guild_override_is_merged_with_the_default_baseline(self) -> None:
+        from claude_discord.lounge import DEFAULT_COORDINATION_ALLOWED_TOOLS
+
+        cog = _make_cog()
+        cog._settings_repo = MagicMock()
+        cog._settings_repo.get = AsyncMock(return_value="Bash(git *),Read")
+
+        result = await cog._get_allowed_tools()
+
+        assert result is not None
+        for rule in DEFAULT_COORDINATION_ALLOWED_TOOLS:
+            assert rule in result
+        assert "Bash(git *)" in result
+        assert "Read" in result

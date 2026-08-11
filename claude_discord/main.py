@@ -70,6 +70,7 @@ def load_config() -> dict[str, str]:
             "CCDB_DANGEROUSLY_SKIP_PERMISSIONS", "CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS", ""
         ),
         "allowed_tools": _env("CCDB_ALLOWED_TOOLS", "CLAUDE_ALLOWED_TOOLS", ""),
+        "disable_default_allowed_tools": os.getenv("CCDB_DISABLE_DEFAULT_ALLOWED_TOOLS", ""),
         "effort": _env("CCDB_EFFORT", "CLAUDE_EFFORT", ""),
         "append_system_prompt": os.getenv("APPEND_SYSTEM_PROMPT", ""),
         "max_concurrent": os.getenv("MAX_CONCURRENT_SESSIONS", "3"),
@@ -102,10 +103,23 @@ async def main() -> None:
             int(x.strip()) for x in config["channel_ids"].split(",") if x.strip().isdigit()
         } or None
 
-    # Parse allowed tools
-    allowed_tools: list[str] | None = None
-    if config["allowed_tools"]:
-        allowed_tools = [t.strip() for t in config["allowed_tools"].split(",") if t.strip()] or None
+    # Parse allowed tools, merged with ccdb's default coordination allow-list
+    # (lounge/sessions/threads/claims curl calls -- see lounge.py) so that
+    # under --permission-mode auto those mandatory calls don't depend on a
+    # risk classifier that has no human to ask. CCDB_DISABLE_DEFAULT_ALLOWED_TOOLS
+    # opts back out to the pre-existing "no baseline" behavior.
+    from .lounge import merge_default_allowed_tools
+
+    operator_tools = (
+        [t.strip() for t in config["allowed_tools"].split(",") if t.strip()]
+        if config["allowed_tools"]
+        else None
+    )
+    allowed_tools = merge_default_allowed_tools(
+        operator_tools,
+        disable_default=config["disable_default_allowed_tools"].strip().lower()
+        in ("1", "true", "yes"),
+    )
 
     # Create runner via backend factory (CCDB_BACKEND=claude|codex)
     backend_name = config["backend"]

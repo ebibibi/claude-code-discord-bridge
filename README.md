@@ -861,7 +861,8 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CCDB_PERMISSION_MODE` | Permission mode for CLI (overrides `CLAUDE_PERMISSION_MODE`) | `acceptEdits` |
 | `CCDB_DANGEROUSLY_SKIP_PERMISSIONS` | Skip all permission checks — overrides `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | `false` |
 | `CCDB_WORKING_DIR` | Working directory for CLI (overrides `CLAUDE_WORKING_DIR`) | current dir |
-| `CCDB_ALLOWED_TOOLS` | Comma-separated list of allowed tools (overrides `CLAUDE_ALLOWED_TOOLS`) | (optional) |
+| `CCDB_ALLOWED_TOOLS` | Comma-separated list of allowed tools (overrides `CLAUDE_ALLOWED_TOOLS`), merged on top of ccdb's default coordination allow-list (see "Default coordination allow-list" below) | (optional) |
+| `CCDB_DISABLE_DEFAULT_ALLOWED_TOOLS` | Set to `1`/`true` to opt out of ccdb's default coordination allow-list (lounge/sessions/threads/claims curl calls) and fall back to whatever `CCDB_ALLOWED_TOOLS`/permission mode alone would allow | `false` |
 | `CCDB_CHANNEL_IDS` | Additional channel IDs, comma-separated (overrides `CLAUDE_CHANNEL_IDS`) | (optional) |
 | `CLAUDE_COMMAND` | Path or name of the Claude CLI binary (legacy name — prefer `CCDB_COMMAND`). Use to pin a specific version (e.g. `CLAUDE_COMMAND=/usr/local/lib/node_modules/@anthropic-ai/claude-code@2.1.77/cli.js`) — useful to avoid regressions in newer CLI releases. | `claude` |
 | `CLAUDE_MODEL` | Model to use (legacy — prefer `CCDB_MODEL`) | `sonnet` |
@@ -911,6 +912,8 @@ Claude Code CLI runs in **`-p` (non-interactive) mode** when used through ccdb. 
 **Fallback to yolo mode:** If auto mode blocks operations you need, set `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS=true` instead. Since ccdb controls who can interact with Claude via `allowed_user_ids`, the CLI-level permission checks add friction without meaningful security benefit. The "dangerously" in the name reflects the CLI's general-purpose warning; in the ccdb context where access is already gated, it's a practical choice.
 
 > **Note:** When `CLAUDE_PERMISSION_MODE` is set to `auto` or `plan`, `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` is automatically ignored — these modes have their own safety classifiers that would be overridden by the yolo flag.
+
+> **Default coordination allow-list:** ccdb's own prompt injection tells every session to `curl` its own `/api/lounge`, `/api/sessions`, `/api/threads/*`, and `/api/claims` endpoints (see [AI Lounge](#ai-lounge)). Under `auto` mode's classifier there is no human to approve those calls, and "posting to an external service" is exactly the shape it's cautious about — even though the target never leaves the loopback interface. ccdb therefore pre-approves those four resources by default via `--allowedTools`, so the mandatory session-start/end lounge announcement doesn't depend on a per-call classifier judgment. This does not extend to the rest of the REST API (`/api/spawn`, `/api/tasks`, `/api/ingest`, ...), which stays fully governed by your chosen permission mode. Set `CCDB_DISABLE_DEFAULT_ALLOWED_TOOLS=true` to opt out.
 
 **For fine-grained control**, use `CLAUDE_ALLOWED_TOOLS` to allow specific tools without fully bypassing permissions:
 

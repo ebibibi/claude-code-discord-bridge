@@ -195,6 +195,41 @@ class TestLoadConfig:
         # Must be str to satisfy dict[str, str] return type
         assert isinstance(config["dangerously_skip_permissions"], str)
 
+    def test_disable_default_allowed_tools_defaults_to_empty(self) -> None:
+        """CCDB_DISABLE_DEFAULT_ALLOWED_TOOLS defaults to empty (baseline stays on)."""
+        from claude_discord.main import load_config
+
+        with (
+            patch("claude_discord.main.load_dotenv"),
+            patch.dict(
+                "os.environ",
+                {"DISCORD_BOT_TOKEN": "tok", "DISCORD_CHANNEL_ID": "111"},
+                clear=True,
+            ),
+        ):
+            config = load_config()
+
+        assert config["disable_default_allowed_tools"] == ""
+
+    def test_disable_default_allowed_tools_read_from_env(self) -> None:
+        from claude_discord.main import load_config
+
+        with (
+            patch("claude_discord.main.load_dotenv"),
+            patch.dict(
+                "os.environ",
+                {
+                    "DISCORD_BOT_TOKEN": "tok",
+                    "DISCORD_CHANNEL_ID": "111",
+                    "CCDB_DISABLE_DEFAULT_ALLOWED_TOOLS": "true",
+                },
+                clear=True,
+            ),
+        ):
+            config = load_config()
+
+        assert config["disable_default_allowed_tools"] == "true"
+
 
 class TestAllowedToolsParsing:
     """Tests for CLAUDE_ALLOWED_TOOLS env var parsing in main()."""

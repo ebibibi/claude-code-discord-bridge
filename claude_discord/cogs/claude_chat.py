@@ -43,6 +43,7 @@ from ..discord_ui.thread_context import DEFAULT_DAYS, build_recent_transcript
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.thread_renamer import suggest_title
 from ..discord_ui.views import RewindSelectView, StopView
+from ..lounge import merge_default_allowed_tools
 from ._run_helper import run_claude_with_config
 from .prompt_builder import build_prompt_and_images, wants_file_attachment
 from .run_config import RunConfig
@@ -215,9 +216,12 @@ class ClaudeChatCog(commands.Cog):
     async def _get_allowed_tools(self) -> list[str] | None:
         """Return the tool override from settings_repo, or None to use runner default.
 
-        When /tools-set has been used to change the allowed tools, this returns
-        the parsed list.  Returns None if no override is set or settings_repo
-        is unavailable (meaning: inherit from the base runner).
+        When /tools-set has been used to change the allowed tools, this merges
+        the parsed override on top of ccdb's default coordination allow-list
+        (see merge_default_allowed_tools) so a guild override never silently
+        drops the lounge/claims/sessions curl rules. Returns None if no
+        override is set or settings_repo is unavailable (meaning: inherit from
+        the base runner, which already carries the same default).
         """
         if self._settings_repo is None:
             return None
@@ -226,7 +230,8 @@ class ClaudeChatCog(commands.Cog):
         stored = await self._settings_repo.get(SETTING_ALLOWED_TOOLS)
         if stored is None:
             return None
-        return [t.strip() for t in stored.split(",") if t.strip()]
+        override = [t.strip() for t in stored.split(",") if t.strip()]
+        return merge_default_allowed_tools(override)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

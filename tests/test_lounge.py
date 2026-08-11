@@ -20,7 +20,13 @@ from claude_discord.database.lounge_repo import LoungeMessage, LoungeRepository
 from claude_discord.database.models import init_db
 from claude_discord.database.notification_repo import NotificationRepository
 from claude_discord.ext.api_server import ApiServer
-from claude_discord.lounge import _NO_MESSAGES, build_lounge_prompt
+from claude_discord.lounge import (
+    _LOUNGE_INVITE,
+    _NO_MESSAGES,
+    DEFAULT_COORDINATION_ALLOWED_TOOLS,
+    build_lounge_prompt,
+    merge_default_allowed_tools,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -596,3 +602,82 @@ class TestRunHelperLoungeInjection:
         if runner.clone.called:
             system_prompt = runner.clone.call_args[1].get("append_system_prompt", "")
             assert "AI Lounge" not in system_prompt
+
+
+# ---------------------------------------------------------------------------
+# Default coordination allow-list
+#
+# Background: under --permission-mode auto (ccdb's production default), a
+# Bash tool call with no matching permission rule has no human to ask, so it
+# falls to a risk classifier that intermittently denies it as "posting to an
+# external service" -- even when the target is ccdb's own loopback API. The
+# curl commands below are exactly what _LOUNGE_INVITE tells every session to
+# run, so ccdb pre-approves them by default instead of leaving every session
+# to the classifier's mercy for its own mandatory coordination surface.
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultCoordinationAllowedTools:
+    """Pins the default allow-list to what _LOUNGE_INVITE actually tells Claude to run."""
+
+    @pytest.mark.parametrize(
+        "endpoint_fragment",
+        [
+            "$CCDB_API_URL/api/lounge",
+            "$CCDB_API_URL/api/sessions",
+            "$CCDB_API_URL/api/threads/",
+            "$CCDB_API_URL/api/claims",
+        ],
+    )
+    def test_endpoint_appears_in_both_the_prompt_and_the_allow_list(
+        self, endpoint_fragment: str
+    ) -> None:
+        """Regression guard: if the injected curl text changes shape, this
+        fails loudly instead of letting the allow-list silently drift out of
+        sync with what Claude is actually told to run."""
+        assert endpoint_fragment in _LOUNGE_INVITE
+        assert any(endpoint_fragment in rule for rule in DEFAULT_COORDINATION_ALLOWED_TOOLS)
+
+    def test_every_rule_is_anchored_to_the_ccdb_api_url(self) -> None:
+        """Each rule must require the literal $CCDB_API_URL substring, so it
+        cannot match a curl call to an unrelated host even with a wildcard."""
+        for rule in DEFAULT_COORDINATION_ALLOWED_TOOLS:
+            assert "$CCDB_API_URL/api/" in rule
+
+    def test_does_not_cover_the_wider_control_plane(self) -> None:
+        """Endpoints _LOUNGE_INVITE never tells a session to curl ad hoc
+        (spawn, tasks, ingest, notify, teams sync, ...) stay fully subject
+        to the permission mode -- this is a narrow allow-list, not a bypass
+        for the whole REST API."""
+        unrelated = ("/api/spawn", "/api/tasks", "/api/ingest", "/api/notify")
+        for rule in DEFAULT_COORDINATION_ALLOWED_TOOLS:
+            for path in unrelated:
+                assert path not in rule
+
+
+class TestMergeDefaultAllowedTools:
+    """merge_default_allowed_tools() combines the baseline with an operator override."""
+
+    def test_no_override_returns_the_default_baseline(self) -> None:
+        assert merge_default_allowed_tools() == list(DEFAULT_COORDINATION_ALLOWED_TOOLS)
+
+    def test_disable_default_with_no_override_returns_none(self) -> None:
+        """None means 'no --allowedTools flag at all', matching the pre-existing default."""
+        assert merge_default_allowed_tools(disable_default=True) is None
+
+    def test_override_is_appended_after_the_baseline(self) -> None:
+        result = merge_default_allowed_tools(["Bash(git *)"])
+        assert result == [*DEFAULT_COORDINATION_ALLOWED_TOOLS, "Bash(git *)"]
+
+    def test_disable_default_keeps_only_the_override(self) -> None:
+        result = merge_default_allowed_tools(["Bash(git *)"], disable_default=True)
+        assert result == ["Bash(git *)"]
+
+    def test_empty_override_list_still_returns_the_baseline(self) -> None:
+        assert merge_default_allowed_tools([]) == list(DEFAULT_COORDINATION_ALLOWED_TOOLS)
+
+    def test_duplicate_override_entry_is_not_repeated(self) -> None:
+        rule = DEFAULT_COORDINATION_ALLOWED_TOOLS[0]
+        result = merge_default_allowed_tools([rule])
+        assert result is not None
+        assert result.count(rule) == 1
