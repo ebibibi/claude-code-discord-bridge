@@ -3,20 +3,61 @@
 > **注意:** これは英語のオリジナルドキュメントを自動翻訳したものです。
 > 内容に相違がある場合は、[英語版](../../README.md)が優先されます。
 
-# Claude & Codex Discord Bridge
+# Ebi Agent Chat Relay
 
-*パッケージ名: `claude-code-discord-bridge`（ケバブケース）*
+*旧称は Claude Code Discord Bridge、その後 Claude & Codex Discord Bridge。既存の識別子は
+すべて引き続き利用できます。パッケージ名は `claude-code-discord-bridge`（ケバブケース）、
+コマンドは `ccdb` で、このドキュメントでも略称として `ccdb` を使用します。*
 
 [![CI](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/codeql.yml)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**スマホの Discord から Claude Code _または_ OpenAI Codex をガンガン使おう。複数スレッドを同時に回して、本格開発もOK。**
+**Discord または Microsoft Teams からコーディングエージェントを実行。Claude Code、
+OpenAI Codex、ローカルモデル、または互換性のある AG-UI エージェントを、同じ会話の背後で
+選択できます。**
 
-Discord のスレッドを開くだけで、Claude Code または OpenAI Codex のセッションが立ち上がります。スマートフォンから何スレッドでも並行して動かせます — あるスレッドで機能開発、別のスレッドで PR レビュー、さらに別のスレッドでバックグラウンドタスク。スレッドごとにバックエンドを混在させながら、全部同時進行。コンフリクトしないように、ブリッジがセッション間の調整を完全自動化します。
+Ebi Agent Chat Relay は、Discord の各スレッドまたは Teams の各会話を、分離された永続的な
+エージェントセッションに変換します。ある会話で機能を開発し、別の会話で PR をレビューし、さらに
+別の会話でバックグラウンドタスクを実行できます。Discord ではスレッドごとにバックエンドを
+混在でき、v4 の Teams では設定済みのグローバルバックエンドを使用します。セッション同士が
+互いの作業を壊さないよう、リレーが協調処理を担います。
 
-**既存のサブスクリプションをそのまま活用。API キーの設定は不要。** ccdb は公式 CLI の上で動作します — Claude Code（[Claude Pro/Max サブスクリプション](https://claude.ai/pricing)に含まれる）と OpenAI Codex（[ChatGPT Plus/Pro/Business](https://chatgpt.com)に含まれる）。`/backend` でバックエンドを切り替えるか、スレッドごとに設定 — 予測可能なコストで Discord 経由で両方の AI を利用できます。
+**名称変更の理由。** 当初は 1 つの AI と 1 つのチャットアプリを結ぶブリッジでしたが、現在は
+2 つの本番対応フロントエンドと 4 つのバックエンドを選べるリレーになりました。旧名称を
+構成していた 4 語のうち 3 語が実態に合わなくなったためです。判断の詳細は
+[ADR-0001](../adr/0001-adopt-ebi-agent-chat-relay.md)、互換性を維持した移行方法は
+[名称変更計画](../RENAME_PLAN.md)を参照してください。
+
+**既存のサブスクリプション、自前のインフラ、リモートエージェントを利用できます。** ccdb は公式の
+Claude Code CLI と Codex CLI、Codex 互換のローカルエンドポイント、または AG-UI HTTP/SSE
+エージェントを実行できます。Discord では実行時に `/backend` で切り替えられ、v4 の Teams では同じファクトリーを
+通じて設定済みバックエンドを使用します。
+
+## v4 の新機能
+
+Version 4 では、**人がどこで会話するか**と**どのエージェントが作業するか**を独立した選択肢として
+明確に分けました。対応するどのフロントエンドからでも、対応するどのバックエンドも利用できます。
+
+### フロントエンド × バックエンド
+
+| | Claude Code | OpenAI Codex | Local | AG-UI |
+|---|---:|---:|---:|---:|
+| Discord | ✅ | ✅ | ✅ | ✅ |
+| Microsoft Teams | ✅ | ✅ | ✅ | ✅ |
+
+- **Discord** は移行不要のデフォルトです。既存環境はこれまでとまったく同じように起動します。
+- **Microsoft Teams** は、小さな公開レシーバーと、プライベートなセッションホストから outbound 接続する
+  `ActivityPuller` によって本番対応しています。`CCDB_FRONTENDS=discord,teams` を設定すれば、
+  Discord と Teams を 1 つのプロセスで同時に実行できます。
+- **AG-UI** は、Agent–User Interaction Protocol を実装する HTTP/SSE エージェントへ、どちらの
+  チャットサーフェスからも接続できます。Claude Code、Codex、安全策付きローカルバックエンドも引き続き
+  利用できます。
+
+まず[バックエンドガイド](../backends.md)を参照してください。Teams は、完全版の
+[Microsoft Teams セットアップガイド](../teams-setup.md)に沿って構築し、詳細は
+[サーフェスの動作](../teams.md)と[リレーのセキュリティモデル](../teams-relay.md)を参照してください。
 
 **[English](../../README.md)** | **[简体中文](../zh-CN/README.md)** | **[한국어](../ko/README.md)** | **[Español](../es/README.md)** | **[Português](../pt-BR/README.md)** | **[Français](../fr/README.md)**
 
@@ -321,11 +362,11 @@ Bot の再起動中にセッションが中断された場合、Bot が再起動
 - **自動（任意のシャットダウン）** — `ClaudeChatCog.cog_unload()` が任意のシャットダウン方法（`systemctl stop`、`bot.close()`、SIGTERM 等）でも実行中のセッションを自動登録します。
 - **手動** — `POST /api/mark-resume` を直接呼び出して登録することもできます。
 
-### バックエンド切り替え — Claude / Codex をオンデマンドで
+### バックエンド切り替え — Claude / Codex / AG-UI をオンデマンドで
 
 ccdb 3.0 では、Bot を再起動せずにどの AI が次のセッションを処理するかを切り替える 3 つのスラッシュコマンドが追加されました:
 
-- `/backend [name] [scope]` — バックエンドの表示または切り替え。`name` は `claude` または `codex`。`scope` は `thread`（このスレッドのみ）または `global`（サーバー全体のデフォルト）。`scope` を省略すると自動解決: スレッド内ではそのスレッドにスコープ、それ以外ではグローバルデフォルトを設定。
+- `/backend [name] [scope]` — バックエンドの表示または切り替え。`name` は `claude`、`codex`、`local`、または `agui`。`scope` は `thread`（このスレッドのみ）または `global`（サーバー全体のデフォルト）。`scope` を省略すると自動解決: スレッド内ではそのスレッドにスコープ、それ以外ではグローバルデフォルトを設定。
 - `/model [name] [scope]` — **現在の**バックエンドで使用するモデルの表示または切り替え。各バックエンドは独自のモデル設定を記憶するため、バックエンドを切り替えても好みのモデルが保持されます。バックエンドのモデルを未設定にすると、その CLI 自身のデフォルトに委ねられます（たとえば Codex は `~/.codex/config.toml` の `model` を使用するため、ccdb が特定バージョンに固定せずコンソールのデフォルトに追従します）。
   `name` のオートコンプリートは**実行時に取得**されます。ccdb が Anthropic のモデル一覧エンドポイントへ（Claude Code CLI がすでに持っている認証情報を使って）アカウントから見えるモデルを問い合わせるため、今朝リリースされたばかりのモデルでも ccdb をアップグレードすることなくドロップダウンに現れます。エイリアス（`opus`、`sonnet` など）には、現時点でそのエイリアスが解決される実際のモデルが併記されます。オフライン時・未認証時・Bedrock/Vertex/Foundry 利用時は、小さな静的リストへ黙ってフォールバックします。`CCDB_MODEL_DISCOVERY=0` を設定すると常にその静的リストを使用します。Codex の候補は静的なままです（Codex CLI はモデル一覧を公開していないため）— 任意の id を直接入力すれば従来どおり動作します。
 - `/effort [level] [scope]` — 現在のバックエンドで使用する**推論の強度**の表示または切り替え。有効なレベルはバックエンドごとに異なり、Claude は `low/medium/high/max`、Codex は `minimal/low/medium/high/xhigh`（CLI の `model_reasoning_effort` にマッピング）を受け付けます。未設定にすると CLI のデフォルトに委ねられます。
@@ -353,6 +394,7 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 /effort xhigh                          # global → codex reasons at xhigh effort
                                        # …open a thread, send a message…
 /backend claude scope:thread          # this thread only → switch back to claude
+/backend agui scope:thread            # this thread only → configured remote AG-UI agent
 /model opus scope:thread              # this thread only → claude/opus
 /effort max scope:thread              # this thread only → claude reasons at max
                                        # other threads keep the global codex defaults
@@ -360,7 +402,7 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 
 内部の仕組み:
 
-- `BackendFactory` — 起動時に静的な設定（バックエンドごとのコマンドパス、パーミッションモード、作業ディレクトリ、許可ツール、タイムアウト、append-system-prompt、effort、api_port、api_secret）を取り込み、必要に応じて `ClaudeRunner` または `CodexRunner` を新規生成。`api_port` は REST API サーバー起動後に `setup_bridge` が自動で設定するため、Factory 経由で生成されたランナーは常に `CCDB_API_URL` がサブプロセス環境に注入される。
+- `BackendFactory` — 起動時に静的な設定（バックエンドごとのコマンドパスまたは AG-UI endpoint、パーミッションモード、作業ディレクトリ、許可ツール、タイムアウト、append-system-prompt、effort、api_port、api_secret）を取り込み、必要に応じて `ClaudeRunner`、`CodexRunner`、または `AgUiBackend` を新規生成。`api_port` は REST API サーバー起動後に `setup_bridge` が自動で設定するため、Factory 経由で生成された CLI runner は常に `CCDB_API_URL` がサブプロセス環境に注入される。
 - `BackendSettings` — **スレッド > グローバル > 環境変数**の優先順位でアクティブなバックエンドを解決し、スラッシュコマンドからの書き込みを永続化する `SettingsRepository` の薄いラッパー。
 - `SessionBackend` プロトコル — 両方のランナーが満たす抽象インターフェース。内部配管（Cog、embed、ビュー、スケジューラー、Webhook トリガー）は `SessionBackend` を受け取り、具体的なランナークラスには依存しない。
 
@@ -464,6 +506,9 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 - **シークレット分離** — Bot トークンを subprocess 環境から除去
 - **ユーザー認証** — `allowed_user_ids` で Claude を呼び出せるユーザーを制限
 - **ログインジェクション防止** — API 経由のユーザー入力値はログ書き込み前に無害化（改行文字除去）
+- **ローカルモデルバックエンド**（オプション）— `/backend local` で自身のハードウェア上のモデルに対してスレッドを実行。通常は「local」実行でもベンダーへ接続するため、ccdb は update check と analytics を無効にした専用 CLI home を管理し、その設定がなければ起動を拒否します — [docs/local-backend.md](../local-backend.md)参照
+- **リモート AG-UI バックエンド**（オプション）— `/backend agui` で既存の Discord/Teams セッション機構を任意の HTTP/SSE AG-UI エージェントへ接続し、ccdb の session ledger、rendering、cancellation、運用制御を維持します — [docs/agui-backend.md](../agui-backend.md)参照
+- **匿名化ゲートウェイ**（オプション）— プロンプトが Claude または Codex へ届く前に組織を識別する語を安定した alias へ置換し、回答内で復元。ローカルモデルが置換漏れを確認し、デフォルトでは漏れを検出すると送信をブロックします。rules file を作成するまでは無効です — [docs/anonymization.md](../anonymization.md)参照
 
 ---
 
@@ -475,7 +520,7 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 - 以下のうち少なくとも 1 つ:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — インストールと認証（`claude login`）。Anthropic Pro/Max サブスクライバーに推奨。
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` の後 `codex login`。既存の ChatGPT Plus/Pro/Business サブスクリプションを使用。
-- 両方インストールも可能。実行時に `/backend` でいつでも切り替えられます（[バックエンド切り替え](#バックエンド切り替え--claude--codex-をオンデマンドで) 参照）。
+- 両方インストールも可能。実行時に `/backend` でいつでも切り替えられます（[バックエンド切り替え](#バックエンド切り替え--claude--codex--ag-ui-をオンデマンドで) 参照）。
 
 **対応プラットフォーム:** 主に **Linux** で開発・テストされています。macOS と Windows はサポートされ CI は通過しますが、実環境でのテストは限定的 — バグ報告歓迎。
 
@@ -805,10 +850,12 @@ CHAT_ONLY_CHANNEL_IDS=444,555
 |--------|------|-----------|
 | `DISCORD_BOT_TOKEN` | Discord Bot トークン | （必須） |
 | `DISCORD_CHANNEL_ID` | Claude チャット用チャンネル ID | （必須） |
-| `CCDB_BACKEND` | 使用する CLI バックエンド: `claude`（Claude Code CLI）または `codex`（OpenAI Codex CLI） | `claude` |
+| `CCDB_BACKEND` | 使用するバックエンド: `claude`、`codex`、`local`、または `agui` | `claude` |
 | `CCDB_COMMAND` | CLI バイナリのパスまたは名前（`CLAUDE_COMMAND` より優先）。`CCDB_BACKEND` で選択された初期ランナーに使用され、実行時に `/backend` で切り替えた際は以下の 2 つのバックエンド別変数が優先されます。 | _（自動: `claude` or `codex`）_ |
 | `CCDB_CLAUDE_COMMAND` | Claude CLI バイナリの明示的なパス。`/backend claude` がアクティブなとき `BackendFactory` が使用（`CCDB_BACKEND` の初期値に依存しない）。`CLAUDE_COMMAND`、次に `claude`（PATH）へのフォールバックあり。 | （オプション） |
 | `CCDB_CODEX_COMMAND` | OpenAI Codex CLI バイナリの明示的なパス。systemd 下で Bot を実行する場合に必須（デフォルトのサービス PATH に `~/.npm-global/bin` が含まれない）。`codex`（PATH）へのフォールバックあり。 | （オプション） |
+| `CCDB_AGUI_URL` | `/backend agui` で使用する正確な HTTP(S) run endpoint。redirect は拒否されます。 | （`agui` では必須） |
+| `CCDB_AGUI_TOKEN` | AG-UI endpoint 用の任意の bearer token。Claude/Codex subprocess の環境から除去されます。 | （オプション） |
 | `PATH` | Bot **と Bot が起動する全 CLI セッション**のバイナリ検索パス（セッションは Bot の環境を継承）。systemd はユニットを最小限の PATH で起動し `~/.bashrc` / `~/.profile` を読まないため、systemd 運用時は `.env` に設定する。[ツールチェーンの PATH](#ツールチェーンの-path--env-に設定する) 参照 | （親プロセスから継承） |
 | `CCDB_MODEL` | 使用するモデル（`CLAUDE_MODEL` より優先） | `sonnet` |
 | `CCDB_MODEL_DISCOVERY` | `0` にすると、`/model` のオートコンプリートが Anthropic のモデル一覧エンドポイントへ「この認証情報から見えるモデル」を問い合わせるのをやめ、常に静的な候補リストを使用する。この問い合わせは読み取り専用で、Claude Code CLI 自身の認証情報を再利用し、オフライン時・未認証時・Bedrock/Vertex/Foundry 利用時には自動的にフォールバックする | `1` |
@@ -1056,7 +1103,7 @@ class MyCog(commands.Cog):
 通知とタスク管理のためのオプション REST API。aiohttp が必要:
 
 ```bash
-uv add "claude-code-discord-bridge[api]"
+uv sync --extra api
 ```
 
 ### エンドポイント
@@ -1124,6 +1171,50 @@ curl -X POST http://localhost:8080/api/tasks \
   -H "Content-Type: application/json" \
   -d '{"prompt": "デイリースタンドアップ要約", "interval_seconds": 86400}'
 ```
+
+---
+
+## Microsoft Teams
+
+Teams は port ではなく、本番対応の**兄弟フロントエンド**です。`claude_discord` と
+`claude_teams` はそれぞれ `claude_code_core.frontend` の共通語彙を実装し、互いを
+import しません。両方に同じ conformance contract を実行することで、「Teams 側に機能が
+足りない」という問題を利用者が何か月も後になって発見する事態を防ぎます。
+
+```bash
+uv sync --extra teams
+python -m claude_teams manifest --out dist/teams-app.zip
+```
+
+通常の launcher は、`CCDB_FRONTENDS=discord,teams` の設定により Discord と Teams を同時に
+実行します。公開レシーバーが Bot Framework token を検証して activity を queue へ追加し、private 側の
+`ActivityPuller` が outbound 接続で取得します。その後、Discord と同じ session runner へ各 prompt を
+送り、結果を Teams へ投稿します。session host に Teams 向けの inbound listener は不要です。
+
+Teams の体験は Discord をそのまま移植したものではありません。Discord では 15 件に分割される回答も
+**1 件**で届き、縦に並ぶ embed は更新される 1 枚の session card になります。ccdb が使用する card は
+Teams の 28 KB 制限以内に収まるよう構成されています。
+
+`AskUserQuestion` と permission prompt は、button または form を備えた card として同じ会話に
+表示されます。prompt の回答権限は runner と同じ owner policy に従い、thread/conversation の addressing
+情報は各 turn で永続化されます。回答のない permission request は拒否され、card を投稿できなかった
+場合も同様です。誰にも見えなかった prompt を、誰も回答しなかった prompt より安全なものとして
+扱うことはありません。
+
+Teams surface は、1 回限りの upload URL を使った personal chat の file consent に対応します。byte を
+送る前に、URL の host が Microsoft 自身の domain であることを確認します。channel への file delivery は
+未対応で、private queue relay も file-consent invoke をまだ bridge しません。この surface-level の差に
+より、conformance contract は 2 回実行されます。personal chat は 18 項目すべてに合格し、channel は
+該当する 1 項目だけ不合格になることを test で確認しています。
+
+Discord と異なり、Teams には**公開 HTTPS endpoint**、Entra application、Azure Bot、install 可能な
+Teams app package、および公開側と private 側を結ぶ queue が必要です。値は tenant 固有なので、安全かつ
+正確な万能 manifest をリポジトリへ check in することはできません。
+
+登録から最初の Teams → agent → Teams round trip までは、
+[Teamsセットアップガイド](../teams-setup.md)に沿って進めてください。機能の詳細は
+[Teams surface の動作](../teams.md)、trust boundary と実測運用は
+[relay のセキュリティモデル](../teams-relay.md)を参照してください。
 
 ---
 
