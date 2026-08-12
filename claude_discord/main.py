@@ -108,7 +108,7 @@ async def main() -> None:
     # under --permission-mode auto those mandatory calls don't depend on a
     # risk classifier that has no human to ask. CCDB_DISABLE_DEFAULT_ALLOWED_TOOLS
     # opts back out to the pre-existing "no baseline" behavior.
-    from .lounge import merge_default_allowed_tools
+    from .lounge import is_default_allowed_tools_disabled, merge_default_allowed_tools
 
     operator_tools = (
         [t.strip() for t in config["allowed_tools"].split(",") if t.strip()]
@@ -117,8 +117,7 @@ async def main() -> None:
     )
     allowed_tools = merge_default_allowed_tools(
         operator_tools,
-        disable_default=config["disable_default_allowed_tools"].strip().lower()
-        in ("1", "true", "yes"),
+        disable_default=is_default_allowed_tools_disabled(config["disable_default_allowed_tools"]),
     )
 
     # Create runner via backend factory (CCDB_BACKEND=claude|codex)

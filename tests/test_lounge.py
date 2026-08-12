@@ -25,6 +25,7 @@ from claude_discord.lounge import (
     _NO_MESSAGES,
     DEFAULT_COORDINATION_ALLOWED_TOOLS,
     build_lounge_prompt,
+    is_default_allowed_tools_disabled,
     merge_default_allowed_tools,
 )
 
@@ -681,3 +682,17 @@ class TestMergeDefaultAllowedTools:
         result = merge_default_allowed_tools([rule])
         assert result is not None
         assert result.count(rule) == 1
+
+
+class TestIsDefaultAllowedToolsDisabled:
+    """is_default_allowed_tools_disabled() parses the opt-out flag from a raw
+    string so main()'s config dict and the Cog's os.getenv() call share one
+    definition of a truthy opt-out."""
+
+    @pytest.mark.parametrize("value", ["1", "true", "TRUE", "Yes", " yes "])
+    def test_truthy_values_opt_out(self, value: str) -> None:
+        assert is_default_allowed_tools_disabled(value) is True
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "random"])
+    def test_other_values_keep_the_baseline(self, value: str) -> None:
+        assert is_default_allowed_tools_disabled(value) is False

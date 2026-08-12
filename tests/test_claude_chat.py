@@ -2272,3 +2272,14 @@ class TestGetAllowedTools:
             assert rule in result
         assert "Bash(git *)" in result
         assert "Read" in result
+
+    @pytest.mark.asyncio
+    async def test_guild_override_respects_default_baseline_opt_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CCDB_DISABLE_DEFAULT_ALLOWED_TOOLS", "true")
+        cog = _make_cog()
+        cog._settings_repo = MagicMock()
+        cog._settings_repo.get = AsyncMock(return_value="Bash(git *),Read")
+
+        assert await cog._get_allowed_tools() == ["Bash(git *)", "Read"]

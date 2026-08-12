@@ -153,6 +153,11 @@ DEFAULT_COORDINATION_ALLOWED_TOOLS: tuple[str, ...] = (
 )
 
 
+def is_default_allowed_tools_disabled(value: str | None) -> bool:
+    """Return whether an environment/config value opts out of the baseline."""
+    return (value or "").strip().lower() in ("1", "true", "yes")
+
+
 def merge_default_allowed_tools(
     override: list[str] | None = None,
     *,

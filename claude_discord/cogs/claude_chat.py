@@ -43,7 +43,7 @@ from ..discord_ui.thread_context import DEFAULT_DAYS, build_recent_transcript
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.thread_renamer import suggest_title
 from ..discord_ui.views import RewindSelectView, StopView
-from ..lounge import merge_default_allowed_tools
+from ..lounge import is_default_allowed_tools_disabled, merge_default_allowed_tools
 from ._run_helper import run_claude_with_config
 from .prompt_builder import build_prompt_and_images, wants_file_attachment
 from .run_config import RunConfig
@@ -231,7 +231,12 @@ class ClaudeChatCog(commands.Cog):
         if stored is None:
             return None
         override = [t.strip() for t in stored.split(",") if t.strip()]
-        return merge_default_allowed_tools(override)
+        return merge_default_allowed_tools(
+            override,
+            disable_default=is_default_allowed_tools_disabled(
+                os.getenv("CCDB_DISABLE_DEFAULT_ALLOWED_TOOLS")
+            ),
+        )
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
