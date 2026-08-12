@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Teams session cards now leave the running state when a turn ends** — teardown removes and
+  unregisters the Stop action, then flushes the final card repaint so the completed or error status
+  is visible immediately instead of leaving a stale working card behind.
+
 ## [4.0.0] - 2026-08-11
 
 ### Added

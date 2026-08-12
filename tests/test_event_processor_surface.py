@@ -36,6 +36,7 @@ async def test_surface_only_config_drives_session_text_and_notices() -> None:
     await processor.process(
         StreamEvent(message_type=MessageType.RESULT, is_complete=True, session_id="session-1")
     )
+    await processor.finalize()
 
     assert surface.conformance_sent_text == ["Hello from core"]
     assert [notice.level for notice in surface.notices] == [
@@ -43,6 +44,8 @@ async def test_surface_only_config_drives_session_text_and_notices() -> None:
         NoticeLevel.SUCCESS,
     ]
     assert surface.statuses[-1] is StatusKind.DONE
+    assert len(surface.interrupts) == 1
+    assert surface.interrupts[0].disabled is True
 
 
 async def test_tool_lifecycle_is_expressed_as_surface_activity() -> None:
