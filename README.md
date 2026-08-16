@@ -679,6 +679,8 @@ See [`examples/ebibot/`](examples/ebibot/) for a full real-world example with re
 | `AutoUpgradeCog` | Webhook-triggered package upgrade |
 | `DocsSyncCog` | Automated documentation sync on push |
 | `AlertResponderCog` | Generic alert monitoring — forwards alerts from monitoring systems to Discord and triggers a Claude Code investigation session |
+| `JobFailureTriageCog` | Auto-investigates scheduler job failures posted as webhook embeds |
+| `ThreadCompletionCog` | Treats "the user deleted the thread" as "that work is finished" — batches deletions and files a work record from the surviving transcripts |
 
 ---
 
@@ -1234,7 +1236,8 @@ claude_code_core/          # Shared core library (backend-agnostic)
   models.py                # SQLite schema
   session_repo.py          # Session CRUD
   thread_search.py         # /search orchestration — summary + body merge, dedupe by thread
-  transcript_search.py     # grep/scan of ~/.claude/projects transcripts + snippet extraction
+  transcript_search.py     # grep/scan of ~/.claude/projects transcripts + snippet extraction;
+                           # find_transcript() locates one session's file without knowing its cwd
   lounge_repo.py           # AI Lounge message CRUD
   rewind.py                # Session rewind helpers
 claude_discord/
@@ -1359,6 +1362,8 @@ The project started on 2026-02-18 and continues to evolve through iterative conv
 - **AutoUpgradeCog** — Self-updating via GitHub webhook + systemctl restart
 - **DocsSyncCog** — Auto-translate documentation on push via webhook
 - **AlertResponderCog** — Generic alert-monitoring Cog; watches a configurable source and posts severity-annotated notifications to Discord
+- **JobFailureTriageCog** — Picks up scheduler job-failure embeds and starts a triage session
+- **ThreadCompletionCog** — Deleting a thread means the work is done; deletions are batched and filed as a written record built from the session transcript, since the thread's messages are already gone
 
 Run it with: `ccdb start --cogs-dir examples/ebibot/cogs/`
 

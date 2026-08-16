@@ -83,8 +83,10 @@ thread = await channel.create_thread(
 
 Discord fixes the window when the thread is created and defaults to a short one. An archived
 thread leaves the channel's thread list, so a conversation the user still considers open looks
-deleted. `tests/test_thread_policy.py` scans the package and fails when a call site omits the
-keyword or hardcodes a number instead of using the constant.
+deleted. `tests/test_thread_policy.py` scans both `claude_discord/` and the example Cogs in
+`examples/ebibot/cogs/`, and fails when a call site omits the keyword or hardcodes a number
+instead of using the constant. The rule is about Discord's behaviour, not about which package the
+call lives in, so a custom Cog is held to it too.
 
 ## Project Structure
 

@@ -680,6 +680,8 @@ async def setup(bot, runner, components):
 | `AutoUpgradeCog` | Webhook トリガーによるパッケージ自動アップグレード |
 | `DocsSyncCog` | プッシュ時の自動ドキュメント同期 |
 | `AlertResponderCog` | 汎用アラート監視 — 監視システムからのアラートを Discord に転送し、Claude Code による調査セッションをトリガー |
+| `JobFailureTriageCog` | Webhook の embed として投稿されたスケジューラージョブの失敗を自動でトリアージ |
+| `ThreadCompletionCog` | 「スレッドを削除した」＝「その作業が完了した」とみなす — 削除をまとめて、残っている transcript から作業記録を書き起こす |
 
 ---
 
@@ -1232,7 +1234,8 @@ claude_code_core/          # バックエンド非依存のコアライブラリ
   models.py                # SQLite スキーマ
   session_repo.py          # セッション CRUD
   thread_search.py         # /search のオーケストレーション — サマリー + 本文をマージしスレッド単位で重複排除
-  transcript_search.py     # ~/.claude/projects トランスクリプトの grep/スキャン + スニペット抽出
+  transcript_search.py     # ~/.claude/projects トランスクリプトの grep/スキャン + スニペット抽出。
+                           # find_transcript() は作業ディレクトリを知らなくても単一セッションのファイルを特定する
   lounge_repo.py           # AI Lounge メッセージ CRUD
   rewind.py                # セッションリワインドヘルパー
 claude_discord/
@@ -1357,6 +1360,8 @@ uv run pytest tests/ -v --cov=claude_discord
 - **AutoUpgradeCog** — GitHub webhook + systemctl restart による自己更新
 - **DocsSyncCog** — push 時の Webhook 経由でドキュメントを自動翻訳
 - **AlertResponderCog** — 汎用アラート監視 Cog。設定可能なソースを監視し、重要度付き通知を Discord に投稿
+- **JobFailureTriageCog** — スケジューラージョブの失敗 embed を拾ってトリアージセッションを開始
+- **ThreadCompletionCog** — スレッドの削除は作業完了の合図。削除をまとめて 1 件の作業記録にする。スレッドのメッセージはすでに消えているため、記録はセッションの transcript から組み立てる
 
 実行方法: `ccdb start --cogs-dir examples/ebibot/cogs/`
 
