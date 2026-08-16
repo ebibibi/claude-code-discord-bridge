@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Threads stay in the channel's thread list for a week instead of an hour** — every
+  `create_thread()` call site now asks for Discord's maximum auto-archive window (7 days) via the
+  shared `THREAD_AUTO_ARCHIVE_MINUTES` constant. Chat threads had been created with a 60-minute
+  window, so a conversation dropped out of the sidebar an hour after the last reply and looked
+  deleted; the other call sites silently inherited discord.py's 24-hour default. An architecture
+  test fails when a new call site forgets the keyword.
+
 - **Teams session cards now leave the running state when a turn ends** — teardown removes and
   unregisters the Stop action, then flushes the final card repaint so the completed or error status
   is visible immediately instead of leaving a stale working card behind.

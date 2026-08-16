@@ -38,6 +38,7 @@ from claude_code_core.transcript_search import default_transcripts_root
 from ..discord_ui.file_sender import send_file_blobs
 from ..relay import MODE_INTERRUPT, MODE_QUEUE, VALID_MODES, RelayGuard, build_relay_prompt
 from ..session_view import STATE_HISTORY, STATE_RUNNING, build_session_views
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 from . import ingest_manifest, teams_sync
 from .teams_store import TeamsVaultStore
 from .teams_sync import ThreadRef
@@ -510,7 +511,10 @@ class ApiServer:
         if thread_name:
             if not hasattr(raw_channel, "create_thread"):
                 return web.json_response({"error": "Channel does not support threads"}, status=400)
-            thread_result = await raw_channel.create_thread(name=thread_name)  # type: ignore[union-attr]
+            thread_result = await raw_channel.create_thread(  # type: ignore[union-attr]
+                name=thread_name,
+                auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+            )
             # create_thread may return Thread or ThreadWithMessage depending on discord.py version
             thread = thread_result.thread if hasattr(thread_result, "thread") else thread_result  # type: ignore[union-attr]
             target = thread

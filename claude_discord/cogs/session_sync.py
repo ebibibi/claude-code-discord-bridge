@@ -16,6 +16,7 @@ import discord
 from ..database.repository import SessionRepository
 from ..discord_ui.embeds import COLOR_INFO
 from ..session_sync import CliSession, extract_recent_messages, scan_cli_sessions
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +55,16 @@ async def create_sync_thread(
         embed.set_footer(text=f"Session: {cli_session.session_id[:8]}...")
 
         summary_msg = await channel.send(embed=embed)
-        return await summary_msg.create_thread(name=f"\U0001f5a5 {thread_name}")
+        return await summary_msg.create_thread(
+            name=f"\U0001f5a5 {thread_name}",
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+        )
 
     # Default: channel thread
     return await channel.create_thread(
         name=f"\U0001f5a5 {thread_name}",
         type=discord.ChannelType.public_thread,
+        auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
     )
 
 
