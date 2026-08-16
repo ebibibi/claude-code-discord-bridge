@@ -9,7 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`find_transcript(session_id, root)`** in `claude_code_core.transcript_search` — resolves one
+  session's transcript without knowing its working directory. A thread can be deleted; its
+  transcript can't, so anything that wants to say something about a finished conversation after the
+  thread is gone needs this. The id is validated before it reaches a filesystem glob.
+- **`ThreadCompletionCog`** (EbiBot example) — treats "the user deleted the thread" as "that work is
+  finished". Deletions are batched over a quiet period, resolved against the session rows and
+  on-disk transcripts, written to a manifest, and handed to one Claude session that files the
+  records. Threads that never held a session (notification threads) are dropped, and the Cog's own
+  record threads don't re-trigger it. Disabled unless `THREAD_COMPLETION_CHANNEL_ID` is set.
+
 ### Fixed
+
+- **EbiBot's own Cogs kept the 24-hour thread window** — `alert_responder` and `job_failure_triage`
+  passed `auto_archive_duration=1440` literally. They now use the shared constant, and the
+  architecture test scans `examples/ebibot/cogs` too.
 
 - **Threads stay in the channel's thread list for a week instead of an hour** — every
   `create_thread()` call site now asks for Discord's maximum auto-archive window (7 days) via the
