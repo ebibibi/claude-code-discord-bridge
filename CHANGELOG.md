@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`ThreadCompletionCog`'s prompt is external** (`THREAD_COMPLETION_PROMPT_FILE`) — where a
+  completion record goes is one person's note-taking convention, and this repository is public. The
+  Cog keeps the generic half (batching, session/transcript resolution, the manifest) and reads the
+  instance-specific instructions from a file outside the repo. An unreadable path falls back to a
+  generic prompt rather than dropping the batch.
+
+### Added
+
+- **A test that fails when shipped source names a real person** — `examples/ebibot` is a real
+  instance's configuration, so a docstring explaining why a Cog exists is exactly where personal
+  detail leaks in. The check is narrow on purpose: names, not topics.
+
 ### Added
 
 - **`find_transcript(session_id, root)`** in `claude_code_core.transcript_search` — resolves one
