@@ -680,7 +680,7 @@ See [`examples/ebibot/`](examples/ebibot/) for a full real-world example with re
 | `DocsSyncCog` | Automated documentation sync on push |
 | `AlertResponderCog` | Generic alert monitoring — forwards alerts from monitoring systems to Discord and triggers a Claude Code investigation session |
 | `JobFailureTriageCog` | Auto-investigates scheduler job failures posted as webhook embeds |
-| `ThreadCompletionCog` | Treats "the user deleted the thread" as "that work is finished" — batches deletions and files a work record from the surviving transcripts |
+| `ThreadCompletionCog` | Treats "the user deleted the thread" as "that work is finished" — batches deletions and files a work record from the surviving transcripts. Off until `/thread-completion on` |
 
 ---
 
@@ -1363,7 +1363,7 @@ The project started on 2026-02-18 and continues to evolve through iterative conv
 - **DocsSyncCog** — Auto-translate documentation on push via webhook
 - **AlertResponderCog** — Generic alert-monitoring Cog; watches a configurable source and posts severity-annotated notifications to Discord
 - **JobFailureTriageCog** — Picks up scheduler job-failure embeds and starts a triage session
-- **ThreadCompletionCog** — Deleting a thread means the work is done; deletions are batched and filed as a written record built from the session transcript, since the thread's messages are already gone. What that record says and where it goes comes from an external prompt file (`THREAD_COMPLETION_PROMPT_FILE`), not from the Cog
+- **ThreadCompletionCog** — Deleting a thread means the work is done; deletions are batched and filed as a written record built from the session transcript, since the thread's messages are already gone. What that record says and where it goes comes from an external prompt file (`THREAD_COMPLETION_PROMPT_FILE`), not from the Cog. Recording is off until you run `/thread-completion on` — the environment variables decide only whether the switch exists
 
 Run it with: `ccdb start --cogs-dir examples/ebibot/cogs/`
 
