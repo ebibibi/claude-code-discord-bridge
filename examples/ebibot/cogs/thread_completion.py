@@ -1,23 +1,32 @@
 """thread_completion.py — deleting a thread files the work as done (custom Cog)
 
-胡田さんはDiscordのスレッドをTodoリストとして使っている。終わったものは自分で
-削除する。つまり **削除イベントは「この作業は完了した」という、人手ゼロで発生する
-高品質なラベル** である。ここではそれを拾って、Obsidianへの記録につなげる。
+Some people keep Discord threads as a to-do list and delete a thread once the
+work in it is finished. Where that is the habit, the delete event is a
+zero-effort completion signal, and this Cog turns it into a written record.
 
-重要な制約: 削除イベントが届いた時点で、そのスレッドのメッセージはもう取得できない
-（チャンネルごと消えている）。だから記録の材料は「ccdbが手元に持っていたもの」——
-セッション行と、`~/.claude/projects/<project>/<session_id>.jsonl` のtranscript——
-に限られる。transcriptにはユーザー発言もClaudeの返答もツール実行も全部入っている
-ので、Discordを別途ミラーする必要はない。
+The constraint that shapes the design: by the time the delete event arrives the
+thread's messages are already unreachable. So the record is built from what ccdb
+still holds — the session row, and the transcript at
+``~/.claude/projects/<project>/<session_id>.jsonl``, which contains the user
+turns, the replies and the tool calls. Nothing needs to mirror Discord.
 
-まとめて消されることが多いので、削除を一定時間ためてから1回だけ記録セッションを
-起こす。1件ごとにセッションを立てると、掃除のたびにスレッドが増えて本末転倒になる。
+Deletions arrive in bursts (a cleanup, not one thread at a time), so they are
+batched over a quiet period and handed to a single session. One session per
+deleted thread would create more threads than the cleanup removed.
+
+**Where the record goes is not decided here.** This Cog resolves the deleted
+threads and hands a manifest to Claude; the instructions for what to write and
+where live in an external prompt file, because that part is specific to one
+person's notes and this repository is public.
 
 Configuration (environment variables):
-    THREAD_COMPLETION_CHANNEL_ID  (required) 記録スレッドを作るチャンネル。
-                                  未設定ならCogは無効。
-    THREAD_COMPLETION_DEBOUNCE    (optional) 静かになってから起動するまでの秒数。
-                                  既定180秒。連続削除を1バッチにまとめるため。
+    THREAD_COMPLETION_CHANNEL_ID  (required) Channel to open the record thread in.
+                                  The Cog is disabled when unset.
+    THREAD_COMPLETION_PROMPT_FILE (optional) Path to a prompt template with
+                                  ``{count}`` and ``{manifest}`` placeholders.
+                                  Falls back to a generic prompt.
+    THREAD_COMPLETION_DEBOUNCE    (optional) Seconds of quiet before the batch
+                                  runs. Default 180.
 """
 
 from __future__ import annotations
@@ -55,42 +64,34 @@ THREAD_COMPLETION_CHANNEL_ID: int | None = int(_raw_channel_id) if _raw_channel_
 
 DEBOUNCE_SECONDS = float(os.environ.get("THREAD_COMPLETION_DEBOUNCE", "180"))
 
+PROMPT_FILE = os.environ.get("THREAD_COMPLETION_PROMPT_FILE", "")
+
 MANIFEST_DIR = str(Path.home() / "ccdb-completions")
 
-_PROMPT = """\
-Discordのスレッドが {count} 件削除されました。
+_DEFAULT_PROMPT = """\
+{count} Discord thread(s) were deleted.
 
-このワークスペースでは **スレッドの削除＝その作業が完了した** という意味です
-（終わったものを自分で消すTodo運用）。削除された分の作業記録をObsidianに残してください。
+In this workspace a deleted thread means **the work in it is finished** — threads
+are kept as a to-do list and removed once done. Write a record of that work.
 
-## 材料
+`{manifest}` lists the deleted threads. Each entry has:
 
-`{manifest}` に削除されたスレッドの一覧が入っています。各要素:
+- `thread_id` / `thread_name` — the Discord identifiers (the thread itself is gone)
+- `summary` — the opening prompt of that session
+- `working_dir` — where the work happened
+- `last_used_at` — when it was last touched
+- `transcript_path` — the full conversation
+  (`~/.claude/projects/.../<session_id>.jsonl`), containing the user turns, the
+  replies and the tool calls. **This is the primary source.**
 
-- `thread_id` / `thread_name` — Discord側の識別子（スレッド自体はもう存在しません）
-- `summary` — そのセッションの最初のプロンプト
-- `working_dir` — 作業ディレクトリ
-- `last_used_at` — 最後にやりとりした時刻
-- `transcript_path` — 会話の全文（`~/.claude/projects/.../<session_id>.jsonl`）。
-  ユーザー発言・返答・ツール実行が全部入っています。**ここが一次情報です**
+Read the manifest, then read as much of each transcript as you need — they can be
+large, so don't load them whole. Where `transcript_path` is null, work from
+`summary` alone and don't guess beyond it.
 
-## やること
+Record the work following this workspace's own conventions. Skip anything not
+worth reading later: a short record of what mattered beats a complete one.
 
-1. マニフェストを読み、各スレッドの transcript を確認して「実際に何をやったか」を掴む
-   （transcriptは大きいことがあるので、全文をコンテキストに載せず必要な範囲を読むこと）
-2. `transcript_path` が null のものは `summary` だけで判断する。無理に推測しない
-3. CLAUDE.md の記録ルールに従って書く:
-   - プロジェクトに紐づく作業 → 該当プロジェクトの `log.md` に詳細、`status.md` を更新
-     （完了したタスクは `[ ]` → `[x]` に必ず変える）
-   - デイリーノート `obsidian/01_Daily/YYYY-MM-DD.md` には wikilink + 1行サマリーだけ
-4. 知識が生まれていたら 3点セット（wiki / KB / ADR）に入れる。無理に作らない
-5. 雑談・確認だけで終わったもの、記録する価値がないものは **書かない**。
-   「全部書く」より「後で読む価値があるものだけ書く」を優先する
-
-## 報告
-
-このスレッドに、何を記録したか（と、記録しなかったものと理由）を簡潔に報告してください。
-報告が終わったらこのスレッドも消して構いません。
+Report in this thread what you recorded, and what you skipped and why.
 """
 
 
@@ -164,8 +165,25 @@ def write_manifest(records: list[CompletionRecord], directory: str, stamp: str) 
     return str(path)
 
 
-def build_prompt(manifest_path: str, records: list[CompletionRecord]) -> str:
-    return _PROMPT.format(count=len(records), manifest=manifest_path)
+def load_template(prompt_file: str | None) -> str:
+    """The instance's prompt, or the generic one.
+
+    An unreadable path falls back rather than raising: losing the record's
+    wording is recoverable, losing the whole batch is not.
+    """
+    if not prompt_file:
+        return _DEFAULT_PROMPT
+    try:
+        return Path(prompt_file).read_text(encoding="utf-8")
+    except OSError:
+        logger.exception("thread_completion: cannot read %s; using default prompt", prompt_file)
+        return _DEFAULT_PROMPT
+
+
+def build_prompt(
+    manifest_path: str, records: list[CompletionRecord], template: str | None = None
+) -> str:
+    return (template or _DEFAULT_PROMPT).format(count=len(records), manifest=manifest_path)
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +192,7 @@ def build_prompt(manifest_path: str, records: list[CompletionRecord]) -> str:
 
 
 class ThreadCompletionCog(commands.Cog):
-    """Batches thread deletions and files the finished work in Obsidian."""
+    """Batches thread deletions and files the finished work as a record."""
 
     def __init__(self, bot: commands.Bot, runner: object, components: object) -> None:
         self.bot = bot
@@ -259,7 +277,7 @@ class ThreadCompletionCog(commands.Cog):
             RunConfig(
                 thread=thread,
                 runner=cloned_runner,
-                prompt=build_prompt(manifest, records),
+                prompt=build_prompt(manifest, records, load_template(PROMPT_FILE)),
                 session_id=None,
                 repo=session_repo,
                 registry=registry,

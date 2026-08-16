@@ -25,6 +25,7 @@ from examples.ebibot.cogs.thread_completion import (  # noqa: E402
     CompletionRecord,
     build_prompt,
     collect_records,
+    load_template,
     write_manifest,
 )
 
@@ -137,3 +138,29 @@ class TestBuildPrompt:
     def test_prompt_states_the_count(self) -> None:
         recs = [CompletionRecord(i, "s", None, None, None, None) for i in range(3)]
         assert "3" in build_prompt("/tmp/m.json", recs)
+
+
+class TestLoadTemplate:
+    """The instance's wording lives outside this repository, which is public."""
+
+    def test_no_file_configured_falls_back_to_the_generic_prompt(self) -> None:
+        template = load_template("")
+        assert "{count}" in template and "{manifest}" in template
+        rendered = build_prompt(
+            "/tmp/m.json", [CompletionRecord(1, "s", None, None, None, None)], template
+        )
+        assert "{" not in rendered  # every placeholder was filled
+        assert "deleted" in rendered.lower()
+
+    def test_an_external_template_is_used_verbatim(self, tmp_path) -> None:
+        path = tmp_path / "prompt.md"
+        path.write_text("{count}件を{manifest}から記録して", encoding="utf-8")
+        prompt = build_prompt(
+            "/tmp/m.json",
+            [CompletionRecord(1, "s", None, None, None, None)],
+            load_template(str(path)),
+        )
+        assert prompt == "1件を/tmp/m.jsonから記録して"
+
+    def test_an_unreadable_template_falls_back_instead_of_losing_the_batch(self) -> None:
+        assert load_template("/nonexistent/prompt.md") == load_template("")
