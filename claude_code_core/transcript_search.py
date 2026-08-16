@@ -46,6 +46,27 @@ def default_transcripts_root() -> str | None:
     return str(root) if root.is_dir() else None
 
 
+def find_transcript(session_id: str, root: str | None) -> str | None:
+    """Path to one session's transcript, or None if it isn't on this machine.
+
+    The project directory is derived from the session's working directory, which
+    callers generally don't have, so this searches every project directory rather
+    than reconstructing the path. The id is validated first because it reaches a
+    filesystem glob: anything that isn't exactly a session filename is refused
+    rather than allowed to escape ``root``.
+    """
+    if not root or not _SESSION_FILE_RE.match(f"{session_id}.jsonl"):
+        return None
+    root_path = Path(root)
+    if not root_path.is_dir():
+        return None
+    for project_dir in sorted(root_path.iterdir()):
+        candidate = project_dir / f"{session_id}.jsonl"
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def make_snippet(text: str, query: str, width: int = _SNIPPET_WIDTH) -> str:
     """Return a one-line snippet of ``text`` centred on the first ``query`` hit."""
     flat = " ".join(text.split())
