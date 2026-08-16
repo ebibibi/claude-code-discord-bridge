@@ -78,7 +78,7 @@ already held — the session row, and the transcript at
 `~/.claude/projects/<project>/<session_id>.jsonl`, which contains every user turn, reply, and tool
 call. That transcript is the primary source, so there is no need to mirror Discord separately.
 
-Two consequences worth knowing before enabling it:
+Three consequences worth knowing before enabling it:
 
 - **Deletions are batched.** Threads are usually cleaned up in bursts, so the Cog waits for a quiet
   period and then starts *one* session for the whole batch. Filing one session per deleted thread
@@ -86,10 +86,18 @@ Two consequences worth knowing before enabling it:
 - **Threads that never held a session are dropped.** Notification threads (scheduler alerts, PR
   watches) have no session row, and filing "work completed" for them would be a lie. The Cog's own
   record threads are ignored too, so deleting a record does not file a record about it.
+- **Where the record goes is not decided here.** The Cog resolves the deleted threads and hands
+  Claude a manifest; the instructions for what to write and where live in the prompt file named by
+  `THREAD_COMPLETION_PROMPT_FILE`, because that part is one person's note-taking convention and
+  this repository is public. With no file configured, a generic prompt asks for a record following
+  the workspace's own conventions — and an unreadable path falls back to that same prompt rather
+  than dropping the batch, since losing the record's wording is recoverable and losing the batch is
+  not.
 
 Configuration (the Cog is disabled unless the channel is set):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `THREAD_COMPLETION_CHANNEL_ID` | — (required) | Channel the record thread is created in |
+| `THREAD_COMPLETION_PROMPT_FILE` | — (generic prompt) | Prompt template holding the instance's own instructions, with `{count}` and `{manifest}` placeholders |
 | `THREAD_COMPLETION_DEBOUNCE` | `180` | Seconds of quiet before the batch is filed |
