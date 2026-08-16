@@ -44,6 +44,8 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 
 13. **A local backend is a measured claim, not a configured one** (`claude_code_core/local_backend.py`): `/backend local` runs the Codex CLI against a model on the user's own hardware. Pointing the CLI at a local endpoint is not sufficient — measured on codex-cli 0.145.0, a fully local, logged-out run still contacts `chatgpt.com` for the startup update check and analytics. ccdb therefore generates and owns a separate `CODEX_HOME` with both disabled, re-verifies those settings on every spawn, and refuses to start rather than run a "local" thread that phones home. The check is structural (works on Windows too), not an OS egress rule; re-measure after a CLI upgrade. See `docs/local-backend.md`.
 
+14. **Escalation is isolated by verified argv, not by procedure** (`claude_code_core/escalation.py`): `/ask` sends one anonymized, self-contained question to an external model. The CLI runs with `--setting-sources ""`, an empty temp cwd, every tool disallowed, and `--` before the prompt; `verify_isolation()` checks the argv immediately before spawning and refuses otherwise. The first flag is load-bearing — measured with cwd=/home/ebi and all tools already off, the CLI reports a CLAUDE.md-only term as present in its context without it and absent with it, so a naive escalation ships the whole file regardless of how well the question was anonymized. See `docs/escalation.md`.
+
 ### Why REST API over stdout markers for Claude→ccdb communication
 
 Alternative considered: Claude embeds `<!-- ccdb:schedule {...} -->` in response text; ccdb parses stdout.
