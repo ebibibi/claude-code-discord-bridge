@@ -71,6 +71,24 @@ uv run ruff check claude_discord/
 uv run ruff format claude_discord/
 ```
 
+## Discord スレッドの作成
+
+`create_thread()` の呼び出しでは、必ず共有の自動アーカイブ期間を渡してください:
+
+```python
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
+
+thread = await channel.create_thread(
+    name=name,
+    auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+)
+```
+
+Discord の自動アーカイブ期間はスレッド作成時に確定し、既定値は短めです。アーカイブされたスレッドは
+チャンネルのスレッド一覧から消えるため、利用者がまだ作業中だと思っている会話が削除されたように
+見えてしまいます。`tests/test_thread_policy.py` はパッケージ全体を走査し、キーワードを付け忘れた
+呼び出しや、定数を使わず数値をハードコードした呼び出しがあると失敗します。
+
 ## プロジェクト構造
 
 - `claude_code_core/` — バックエンド非依存コアライブラリ: `SessionBackend` プロトコル、`ClaudeRunner`、`CodexRunner`、`create_backend()` ファクトリー、パーサー、型定義、SQLite モデル
