@@ -25,7 +25,9 @@ from examples.ebibot.cogs.thread_completion import (  # noqa: E402
     CompletionRecord,
     build_prompt,
     collect_records,
+    is_enabled,
     load_template,
+    set_enabled,
     write_manifest,
 )
 
@@ -164,3 +166,50 @@ class TestLoadTemplate:
 
     def test_an_unreadable_template_falls_back_instead_of_losing_the_batch(self) -> None:
         assert load_template("/nonexistent/prompt.md") == load_template("")
+
+
+class TestEnabledSwitch:
+    """The Cog does nothing until the user turns it on.
+
+    Deleting a thread is a destructive, everyday act; having it silently spawn a
+    session is a surprise. So the switch defaults to off and the state survives a
+    restart, which means it lives in the settings repo rather than in memory.
+    """
+
+    @pytest.mark.asyncio
+    async def test_default_is_off(self) -> None:
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=None)
+        assert await is_enabled(repo) is False
+
+    @pytest.mark.asyncio
+    async def test_on_after_being_set(self) -> None:
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value="1")
+        assert await is_enabled(repo) is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_off_is_off(self) -> None:
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value="0")
+        assert await is_enabled(repo) is False
+
+    @pytest.mark.asyncio
+    async def test_no_settings_repo_is_off(self) -> None:
+        """Without somewhere to store consent, assume it wasn't given."""
+        assert await is_enabled(None) is False
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_setting_is_off(self) -> None:
+        """A broken read must not be read as permission."""
+        repo = MagicMock()
+        repo.get = AsyncMock(side_effect=RuntimeError("db is locked"))
+        assert await is_enabled(repo) is False
+
+    @pytest.mark.asyncio
+    async def test_set_enabled_persists_both_directions(self) -> None:
+        repo = MagicMock()
+        repo.set = AsyncMock()
+        await set_enabled(repo, True)
+        await set_enabled(repo, False)
+        assert [c.args[1] for c in repo.set.call_args_list] == ["1", "0"]

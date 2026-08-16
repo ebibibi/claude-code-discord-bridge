@@ -19,6 +19,12 @@ threads and hands a manifest to Claude; the instructions for what to write and
 where live in an external prompt file, because that part is specific to one
 person's notes and this repository is public.
 
+**Recording is off until the user turns it on** with ``/thread-completion on``.
+Deleting a thread is an everyday, destructive act, and having it silently spawn a
+Claude session is a surprise; the environment variables below only decide whether
+the switch exists, never whether it is thrown. The answer is stored so it survives
+a restart.
+
 Configuration (environment variables):
     THREAD_COMPLETION_CHANNEL_ID  (required) Channel to open the record thread in.
                                   The Cog is disabled when unset.
@@ -41,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from claude_code_core.transcript_search import default_transcripts_root, find_transcript
@@ -67,6 +74,9 @@ DEBOUNCE_SECONDS = float(os.environ.get("THREAD_COMPLETION_DEBOUNCE", "180"))
 PROMPT_FILE = os.environ.get("THREAD_COMPLETION_PROMPT_FILE", "")
 
 MANIFEST_DIR = str(Path.home() / "ccdb-completions")
+
+# Settings key holding the user's answer to "should a deletion record anything?".
+ENABLED_KEY = "thread_completion.enabled"
 
 _DEFAULT_PROMPT = """\
 {count} Discord thread(s) were deleted.
@@ -165,6 +175,27 @@ def write_manifest(records: list[CompletionRecord], directory: str, stamp: str) 
     return str(path)
 
 
+async def is_enabled(settings_repo: Any) -> bool:
+    """Whether the user has turned recording on. Off unless they said otherwise.
+
+    Deleting a thread is an everyday, destructive act; having it silently spawn a
+    Claude session is a surprise, so consent is explicit and opt-in. Anything
+    other than a stored "on" — no repo, no value, a failed read — is off, because
+    the absence of an answer is not permission.
+    """
+    if settings_repo is None:
+        return False
+    try:
+        return await settings_repo.get(ENABLED_KEY) == "1"
+    except Exception:
+        logger.exception("thread_completion: cannot read %s; treating as off", ENABLED_KEY)
+        return False
+
+
+async def set_enabled(settings_repo: Any, enabled: bool) -> None:
+    await settings_repo.set(ENABLED_KEY, "1" if enabled else "0")
+
+
 def load_template(prompt_file: str | None) -> str:
     """The instance's prompt, or the generic one.
 
@@ -206,10 +237,55 @@ class ThreadCompletionCog(commands.Cog):
         # record about filing a record.
         self._own_threads: set[int] = set()
 
+    @property
+    def _settings_repo(self) -> Any:
+        return getattr(self.components, "settings_repo", None)
+
+    @app_commands.command(
+        name="thread-completion",
+        description="Record finished work when a thread is deleted (off by default)",
+    )
+    @app_commands.describe(switch="on, off, or leave empty to see the current state")
+    @app_commands.choices(
+        switch=[
+            app_commands.Choice(name="on", value="on"),
+            app_commands.Choice(name="off", value="off"),
+        ]
+    )
+    async def thread_completion(
+        self, interaction: discord.Interaction, switch: str | None = None
+    ) -> None:
+        repo = self._settings_repo
+        if repo is None:
+            await interaction.response.send_message(
+                "⚠️ No settings store, so the switch can't be remembered — recording stays off.",
+                ephemeral=True,
+            )
+            return
+
+        if switch is None:
+            state = "on" if await is_enabled(repo) else "off"
+            await interaction.response.send_message(
+                f"Thread-completion recording is **{state}**.", ephemeral=True
+            )
+            return
+
+        await set_enabled(repo, switch == "on")
+        if switch == "on":
+            message = (
+                "✅ Thread-completion recording is **on**. Deleting a thread now files a record of "
+                f"the work in it, {int(DEBOUNCE_SECONDS)}s after the last deletion."
+            )
+        else:
+            message = "🛑 Thread-completion recording is **off**. Deleting a thread does nothing."
+        await interaction.response.send_message(message, ephemeral=True)
+
     @commands.Cog.listener()
     async def on_raw_thread_delete(self, payload: discord.RawThreadDeleteEvent) -> None:
         if payload.thread_id in self._own_threads:
             self._own_threads.discard(payload.thread_id)
+            return
+        if not await is_enabled(self._settings_repo):
             return
         self._pending.append(payload.thread_id)
         self._schedule_flush()
@@ -227,6 +303,11 @@ class ThreadCompletionCog(commands.Cog):
             return
         batch, self._pending = self._pending, []
         if not batch:
+            return
+        # Checked again: the switch may have been turned off during the wait, and
+        # "stop" given before anything ran should be honoured.
+        if not await is_enabled(self._settings_repo):
+            logger.info("thread_completion: switched off while waiting; dropping %d", len(batch))
             return
         try:
             await self._file_records(batch)
@@ -297,6 +378,7 @@ async def setup(bot: commands.Bot, runner: object, components: object) -> None:
 
     await bot.add_cog(ThreadCompletionCog(bot, runner, components))
     logger.info(
-        "ThreadCompletionCog loaded — deleted threads are filed as completed work in channel %d",
+        "ThreadCompletionCog loaded — recording is OFF until /thread-completion on; "
+        "records would go to channel %d",
         THREAD_COMPLETION_CHANNEL_ID,
     )

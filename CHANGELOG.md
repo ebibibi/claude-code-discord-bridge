@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Thread-completion recording is opt-in, off by default** — deleting a thread is an everyday,
+  destructive act, and having it silently start a Claude session is a surprise. `/thread-completion
+  on|off` throws the switch and the answer is stored, so it survives a restart; the environment
+  variables now decide only whether the switch exists. The state is re-checked after the debounce
+  window, so turning it off during the wait drops the pending batch. Anything other than a stored
+  "on" — no settings repo, no value, a failed read — is off, because the absence of an answer is
+  not permission.
+
+### Changed
+
 - **`ThreadCompletionCog`'s prompt is external** (`THREAD_COMPLETION_PROMPT_FILE`) — where a
   completion record goes is one person's note-taking convention, and this repository is public. The
   Cog keeps the generic half (batching, session/transcript resolution, the manifest) and reads the
