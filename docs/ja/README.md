@@ -1361,7 +1361,7 @@ uv run pytest tests/ -v --cov=claude_discord
 - **DocsSyncCog** — push 時の Webhook 経由でドキュメントを自動翻訳
 - **AlertResponderCog** — 汎用アラート監視 Cog。設定可能なソースを監視し、重要度付き通知を Discord に投稿
 - **JobFailureTriageCog** — スケジューラージョブの失敗 embed を拾ってトリアージセッションを開始
-- **ThreadCompletionCog** — スレッドの削除は作業完了の合図。削除をまとめて 1 件の作業記録にする。スレッドのメッセージはすでに消えているため、記録はセッションの transcript から組み立てる
+- **ThreadCompletionCog** — スレッドの削除は作業完了の合図。削除をまとめて 1 件の作業記録にする。スレッドのメッセージはすでに消えているため、記録はセッションの transcript から組み立てる。何をどこに記録するかは Cog ではなく外部のプロンプトファイル（`THREAD_COMPLETION_PROMPT_FILE`）が決める
 
 実行方法: `ccdb start --cogs-dir examples/ebibot/cogs/`
 

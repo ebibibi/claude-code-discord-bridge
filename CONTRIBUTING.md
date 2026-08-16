@@ -88,6 +88,24 @@ deleted. `tests/test_thread_policy.py` scans both `claude_discord/` and the exam
 instead of using the constant. The rule is about Discord's behaviour, not about which package the
 call lives in, so a custom Cog is held to it too.
 
+## Personal Detail Stays Out of Shipped Source
+
+This repository is public, and `examples/ebibot/` is a real instance's configuration — which makes
+it the place where personal detail leaks in. A docstring explaining *why* a Cog exists is the most
+natural thing in the world to write, and the natural way to write it is to name the person whose
+workflow it serves.
+
+`tests/test_no_personal_identifiers.py` scans `claude_discord/`, `claude_code_core/`,
+`claude_teams/` and `examples/`, and fails when shipped source names a real person. The check is
+deliberately narrow — names, not topics. A broad "no Japanese" rule, or a list of tools someone
+might use, produces false positives that get suppressed, and a suppressed guard is not a guard.
+
+When a feature genuinely needs one person's conventions, point at them from outside the repository
+rather than embedding them. `ThreadCompletionCog` is the reference pattern: the Cog keeps the
+generic half (batching, session and transcript resolution, the manifest) and reads the
+instance-specific instructions from the file named by `THREAD_COMPLETION_PROMPT_FILE`. An
+unreadable path falls back to a generic prompt rather than dropping the work.
+
 ## Project Structure
 
 - `claude_code_core/` — Backend-agnostic core library: `SessionBackend` protocol, `ClaudeRunner`, `CodexRunner`, `create_backend()` factory, parser, types, SQLite models

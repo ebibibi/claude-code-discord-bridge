@@ -1363,7 +1363,7 @@ The project started on 2026-02-18 and continues to evolve through iterative conv
 - **DocsSyncCog** — Auto-translate documentation on push via webhook
 - **AlertResponderCog** — Generic alert-monitoring Cog; watches a configurable source and posts severity-annotated notifications to Discord
 - **JobFailureTriageCog** — Picks up scheduler job-failure embeds and starts a triage session
-- **ThreadCompletionCog** — Deleting a thread means the work is done; deletions are batched and filed as a written record built from the session transcript, since the thread's messages are already gone
+- **ThreadCompletionCog** — Deleting a thread means the work is done; deletions are batched and filed as a written record built from the session transcript, since the thread's messages are already gone. What that record says and where it goes comes from an external prompt file (`THREAD_COMPLETION_PROMPT_FILE`), not from the Cog
 
 Run it with: `ccdb start --cogs-dir examples/ebibot/cogs/`
 
