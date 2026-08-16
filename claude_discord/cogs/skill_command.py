@@ -29,6 +29,7 @@ from claude_code_core.backend import SessionBackend
 
 from ..concurrency import SessionRegistry
 from ..database.repository import SessionRepository
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 from ._run_helper import run_claude_with_config
 from .run_config import RunConfig
 
@@ -294,6 +295,7 @@ class SkillCommandCog(commands.Cog):
         thread = await channel.create_thread(
             name=thread_name[:100],
             type=discord.ChannelType.public_thread,
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
         )
 
         display = f"`/{name} {args}`" if args else f"`/{name}`"
