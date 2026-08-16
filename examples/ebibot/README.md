@@ -78,7 +78,21 @@ already held — the session row, and the transcript at
 `~/.claude/projects/<project>/<session_id>.jsonl`, which contains every user turn, reply, and tool
 call. That transcript is the primary source, so there is no need to mirror Discord separately.
 
-Three consequences worth knowing before enabling it:
+**Recording is off until you turn it on.** Deleting a thread is an everyday, destructive act, and
+having it silently start a Claude session is a surprise — so consent is explicit:
+
+```
+/thread-completion on      # deletions start being recorded
+/thread-completion off     # deletions do nothing again
+/thread-completion         # show the current state
+```
+
+The environment variables below decide only whether the switch *exists*, never whether it is
+thrown. The answer is stored in the settings repo, so it survives a restart. It is also re-checked
+after the quiet period: turning it off during the wait drops the pending batch, because "stop" said
+before anything ran should be honoured.
+
+Three consequences worth knowing before turning it on:
 
 - **Deletions are batched.** Threads are usually cleaned up in bursts, so the Cog waits for a quiet
   period and then starts *one* session for the whole batch. Filing one session per deleted thread
@@ -101,7 +115,8 @@ The prompt template takes two placeholders:
 | `{count}` | How many threads were deleted in this batch |
 | `{manifest}` | Path to the JSON listing them. Each entry carries `summary` and `transcript_path`, the latter `null` when no transcript survives |
 
-Configuration (the Cog is disabled unless the channel is set):
+Configuration (the Cog is not loaded at all unless the channel is set, and recording
+stays off until `/thread-completion on`):
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
