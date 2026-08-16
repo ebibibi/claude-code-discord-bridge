@@ -681,7 +681,7 @@ async def setup(bot, runner, components):
 | `DocsSyncCog` | プッシュ時の自動ドキュメント同期 |
 | `AlertResponderCog` | 汎用アラート監視 — 監視システムからのアラートを Discord に転送し、Claude Code による調査セッションをトリガー |
 | `JobFailureTriageCog` | Webhook の embed として投稿されたスケジューラージョブの失敗を自動でトリアージ |
-| `ThreadCompletionCog` | 「スレッドを削除した」＝「その作業が完了した」とみなす — 削除をまとめて、残っている transcript から作業記録を書き起こす |
+| `ThreadCompletionCog` | 「スレッドを削除した」＝「その作業が完了した」とみなす — 削除をまとめて、残っている transcript から作業記録を書き起こす。`/thread-completion on` を実行するまでは無効 |
 
 ---
 
@@ -1361,7 +1361,7 @@ uv run pytest tests/ -v --cov=claude_discord
 - **DocsSyncCog** — push 時の Webhook 経由でドキュメントを自動翻訳
 - **AlertResponderCog** — 汎用アラート監視 Cog。設定可能なソースを監視し、重要度付き通知を Discord に投稿
 - **JobFailureTriageCog** — スケジューラージョブの失敗 embed を拾ってトリアージセッションを開始
-- **ThreadCompletionCog** — スレッドの削除は作業完了の合図。削除をまとめて 1 件の作業記録にする。スレッドのメッセージはすでに消えているため、記録はセッションの transcript から組み立てる。何をどこに記録するかは Cog ではなく外部のプロンプトファイル（`THREAD_COMPLETION_PROMPT_FILE`）が決める
+- **ThreadCompletionCog** — スレッドの削除は作業完了の合図。削除をまとめて 1 件の作業記録にする。スレッドのメッセージはすでに消えているため、記録はセッションの transcript から組み立てる。何をどこに記録するかは Cog ではなく外部のプロンプトファイル（`THREAD_COMPLETION_PROMPT_FILE`）が決める。記録は `/thread-completion on` を実行するまで無効 — 環境変数はスイッチを「用意する」だけで、入れるかどうかは決めない
 
 実行方法: `ccdb start --cogs-dir examples/ebibot/cogs/`
 

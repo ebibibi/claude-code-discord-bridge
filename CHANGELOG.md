@@ -19,8 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "on" — no settings repo, no value, a failed read — is off, because the absence of an answer is
   not permission.
 
-### Changed
-
 - **`ThreadCompletionCog`'s prompt is external** (`THREAD_COMPLETION_PROMPT_FILE`) — where a
   completion record goes is one person's note-taking convention, and this repository is public. The
   Cog keeps the generic half (batching, session/transcript resolution, the manifest) and reads the
