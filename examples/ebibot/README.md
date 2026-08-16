@@ -94,19 +94,12 @@ Three consequences worth knowing before enabling it:
   than dropping the batch, since losing the record's wording is recoverable and losing the batch is
   not.
 
-**Where the record goes is not decided by the Cog.** Note-taking conventions — which file, which
-folder, which headings — are personal, and this repository is public, so the Cog resolves the
-deleted threads and hands over a manifest while the instructions live in an external template at
-`THREAD_COMPLETION_PROMPT_FILE`. The template takes two placeholders:
+The prompt template takes two placeholders:
 
 | Placeholder | Expands to |
 |-------------|------------|
 | `{count}` | How many threads were deleted in this batch |
-| `{manifest}` | Path to the JSON listing them, each with `summary` and `transcript_path` |
-
-Leave it unset and a generic prompt is used, which says to record the work following the
-workspace's own conventions without naming any. An unreadable path falls back to that same generic
-prompt rather than dropping the batch — losing the wording is recoverable, losing the batch is not.
+| `{manifest}` | Path to the JSON listing them. Each entry carries `summary` and `transcript_path`, the latter `null` when no transcript survives |
 
 Configuration (the Cog is disabled unless the channel is set):
 
@@ -115,4 +108,3 @@ Configuration (the Cog is disabled unless the channel is set):
 | `THREAD_COMPLETION_CHANNEL_ID` | — (required) | Channel the record thread is created in |
 | `THREAD_COMPLETION_PROMPT_FILE` | — (generic prompt) | Prompt template holding the instance's own instructions, with `{count}` and `{manifest}` placeholders |
 | `THREAD_COMPLETION_DEBOUNCE` | `180` | Seconds of quiet before the batch is filed |
-| `THREAD_COMPLETION_PROMPT_FILE` | — (generic prompt) | Template saying what to record and where |
