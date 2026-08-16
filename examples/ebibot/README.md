@@ -13,6 +13,8 @@ This example demonstrates how to extend ccdb with custom Cogs using the `CUSTOM_
 | AutoUpgradeCog | `cogs/auto_upgrade.py` | Self-update via GitHub webhook + systemctl restart |
 | DocsSyncCog | `cogs/docs_sync.py` | Auto-translate docs on push via webhook |
 | AlertResponderCog | `cogs/alert_responder.py` | Watch a channel for ⚠️ alerts → auto-investigate with Claude Code |
+| JobFailureTriageCog | `cogs/job_failure_triage.py` | Scheduler job failure embeds → auto-triage with Claude Code |
+| ThreadCompletionCog | `cogs/thread_completion.py` | Thread deleted = work finished → file a record from the session transcript |
 
 ## Quick Start
 
@@ -58,7 +60,36 @@ ccdb (framework)
   |
   +-- setup_bridge() -> ClaudeChatCog, SessionManageCog, SkillCommandCog, SchedulerCog
   |
-  +-- load_custom_cogs(cogs_dir) -> ReminderCog, WatchdogCog, AutoUpgradeCog, DocsSyncCog, AlertResponderCog
+  +-- load_custom_cogs(cogs_dir) -> ReminderCog, WatchdogCog, AutoUpgradeCog, DocsSyncCog,
+                                    AlertResponderCog, JobFailureTriageCog, ThreadCompletionCog
 ```
 
 All Cogs share the same bot instance, event loop, and Discord connection.
+
+## Thread Deletion as a Completion Signal
+
+`ThreadCompletionCog` exists because this bot's owner uses Discord threads as a todo list and
+deletes them when the work is done. That deletion is a completion label that costs nobody any
+effort, so the Cog turns it into a written record.
+
+The constraint that shapes the whole design: **by the time the delete event arrives, the thread's
+messages are gone.** Nothing can be fetched back from Discord. The only material left is what ccdb
+already held — the session row, and the transcript at
+`~/.claude/projects/<project>/<session_id>.jsonl`, which contains every user turn, reply, and tool
+call. That transcript is the primary source, so there is no need to mirror Discord separately.
+
+Two consequences worth knowing before enabling it:
+
+- **Deletions are batched.** Threads are usually cleaned up in bursts, so the Cog waits for a quiet
+  period and then starts *one* session for the whole batch. Filing one session per deleted thread
+  would create more threads than the cleanup removed.
+- **Threads that never held a session are dropped.** Notification threads (scheduler alerts, PR
+  watches) have no session row, and filing "work completed" for them would be a lie. The Cog's own
+  record threads are ignored too, so deleting a record does not file a record about it.
+
+Configuration (the Cog is disabled unless the channel is set):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `THREAD_COMPLETION_CHANNEL_ID` | — (required) | Channel the record thread is created in |
+| `THREAD_COMPLETION_DEBOUNCE` | `180` | Seconds of quiet before the batch is filed |
