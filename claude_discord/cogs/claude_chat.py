@@ -80,6 +80,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "model": "🤖 Model",
     "backend": "🤖 Model",
     "engine-status": "🤖 Model",
+    "ask": "🤖 Model",  # one anonymized question to an external model
     "effort": "⚡ Effort",
     "tools-show": "🔧 Advanced",
     "tools-set": "🔧 Advanced",

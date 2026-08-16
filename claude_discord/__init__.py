@@ -12,6 +12,7 @@ from .claude.parser import parse_line
 from .claude.runner import ClaudeRunner
 from .claude.types import MessageType, StreamEvent, ToolCategory, ToolUseEvent
 from .cog_loader import load_custom_cogs
+from .cogs.ask_command import AskCommandCog
 from .cogs.auto_upgrade import AutoUpgradeCog, UpgradeConfig
 from .cogs.claude_chat import ClaudeChatCog
 from .cogs.collision_watch import CollisionWatchCog
@@ -53,6 +54,7 @@ __all__ = [
     "SessionRegistry",
     "SessionManageCog",
     "CollisionWatchCog",
+    "AskCommandCog",
     "SkillCommandCog",
     "SessionRepository",
     "SettingsRepository",

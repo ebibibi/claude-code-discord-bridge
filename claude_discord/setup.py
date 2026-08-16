@@ -486,6 +486,22 @@ async def setup_bridge(
         await bot.add_cog(backend_cmd_cog)
         logger.info("Registered BackendCommandCog")
 
+    # --- AskCommandCog (auto-discovered: only when anonymization rules exist) ---
+    # Zero-config by the same rule as the gateway itself — no rules file, no
+    # command, because a /ask that forwards real names is worse than none.
+    from claude_code_core.privacy import get_gateway
+
+    try:
+        if get_gateway() is not None:
+            from .cogs.ask_command import AskCommandCog
+
+            await bot.add_cog(AskCommandCog(bot))  # type: ignore[arg-type]
+            logger.info("Registered AskCommandCog (anonymized external escalation)")
+    except Exception:
+        # A broken rules file must not take the whole bot down; the gateway
+        # raises deliberately, and the chat path surfaces it on first use.
+        logger.exception("Could not register AskCommandCog")
+
     components = BridgeComponents(
         session_repo=session_repo,
         task_repo=task_repo,
