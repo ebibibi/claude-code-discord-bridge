@@ -68,6 +68,24 @@ uv run ruff check claude_discord/
 uv run ruff format claude_discord/
 ```
 
+## Creating Discord Threads
+
+Every `create_thread()` call must pass the shared auto-archive window:
+
+```python
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
+
+thread = await channel.create_thread(
+    name=name,
+    auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+)
+```
+
+Discord fixes the window when the thread is created and defaults to a short one. An archived
+thread leaves the channel's thread list, so a conversation the user still considers open looks
+deleted. `tests/test_thread_policy.py` scans the package and fails when a call site omits the
+keyword or hardcodes a number instead of using the constant.
+
 ## Project Structure
 
 - `claude_code_core/` — Backend-agnostic core library: `SessionBackend` protocol, `ClaudeRunner`, `CodexRunner`, `create_backend()` factory, parser, types, SQLite models
