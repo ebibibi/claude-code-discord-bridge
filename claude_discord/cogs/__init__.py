@@ -6,6 +6,7 @@ from .claude_chat import ClaudeChatCog
 from .collision_watch import CollisionWatchCog
 from .context_links import ContextLinksCog
 from .event_processor import EventProcessor
+from .notification_dispatch import NotificationDispatchCog
 from .run_config import RunConfig
 from .scheduler import SchedulerCog
 from .session_manage import SessionManageCog
@@ -19,6 +20,7 @@ __all__ = [
     "ContextLinksCog",
     "EventProcessor",
     "RunConfig",
+    "NotificationDispatchCog",
     "SchedulerCog",
     "SessionManageCog",
     "AskCommandCog",

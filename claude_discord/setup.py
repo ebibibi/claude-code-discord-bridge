@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from .database.frontend_thread_repo import FrontendThreadRepository
     from .database.ingest_repo import IngestResultRepository
     from .database.lounge_repo import LoungeRepository
+    from .database.notification_repo import NotificationRepository
     from .database.repository import SessionRepository, UsageStatsRepository
     from .database.resume_repo import PendingResumeRepository
     from .database.settings_repo import SettingsRepository
@@ -68,6 +69,10 @@ class BridgeComponents:
     settings_repo: SettingsRepository | None = None
     ask_repo: PendingAskRepository | None = None
     usage_repo: UsageStatsRepository | None = None
+    #: The scheduled-notification store the API server writes through, exposed
+    #: so a custom Cog scheduling a reminder lands in the same database the
+    #: dispatcher reads.  A Cog that opens its own file writes into a void.
+    notification_repo: NotificationRepository | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -521,6 +526,25 @@ async def setup_bridge(
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided
     if api_server is not None:
+        # An API that accepts POST /api/schedule has to deliver it, so the
+        # dispatcher ships with the endpoint rather than with the consumer.
+        # It is handed the API's own repository object: matching two paths is
+        # a convention that drifts, sharing one object is a structure.
+        from .cogs.notification_dispatch import NotificationDispatchCog
+
+        await bot.add_cog(
+            NotificationDispatchCog(
+                bot,
+                repo=api_server.repo,
+                default_channel_id=claude_channel_id,
+            )
+        )
+        logger.info("Registered NotificationDispatchCog")
+
+        # Custom Cogs schedule reminders through this rather than opening a
+        # database of their own.
+        components.notification_repo = api_server.repo
+
         components.apply_to_api_server(api_server)
         if runner.api_port is None:
             runner.api_port = api_server.port

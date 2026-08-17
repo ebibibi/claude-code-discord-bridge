@@ -73,6 +73,29 @@ class TestHealth:
         assert data["status"] == "ok"
         assert "timestamp" in data
 
+    @pytest.mark.asyncio
+    async def test_health_reports_no_overdue_when_clean(self, client: TestClient) -> None:
+        resp = await client.get("/api/health")
+        assert (await resp.json())["overdue_notifications"] == 0
+
+    @pytest.mark.asyncio
+    async def test_health_counts_overdue_notifications(
+        self, client: TestClient, repo: NotificationRepository
+    ) -> None:
+        """A notification long past its time is the symptom of a dead dispatcher.
+
+        The previous outage was invisible precisely because every endpoint kept
+        answering normally while nothing was delivered, so the health check now
+        reports the backlog instead of a bare "ok".
+        """
+        await repo.create(message="取り残された", scheduled_at="2020-01-01T09:00:00")
+        await repo.create(message="まだ先", scheduled_at="2099-01-01T09:00:00")
+
+        data = await (await client.get("/api/health")).json()
+
+        assert data["overdue_notifications"] == 1
+        assert data["status"] == "degraded"
+
 
 class TestNotify:
     @pytest.mark.asyncio

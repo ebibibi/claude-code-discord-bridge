@@ -18,6 +18,7 @@ from .cogs.claude_chat import ClaudeChatCog
 from .cogs.collision_watch import CollisionWatchCog
 from .cogs.context_links import ContextLinksCog
 from .cogs.event_processor import EventProcessor
+from .cogs.notification_dispatch import NotificationDispatchCog
 from .cogs.run_config import RunConfig
 from .cogs.scheduler import SchedulerCog
 from .cogs.session_manage import SessionManageCog
@@ -69,6 +70,7 @@ __all__ = [
     "AutoUpgradeCog",
     "UpgradeConfig",
     # Scheduling
+    "NotificationDispatchCog",
     "SchedulerCog",
     "ScheduledTaskRepository",
     "DrainAware",
