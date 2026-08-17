@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-__all__ = ["Category", "Matcher", "AnonymizationRules", "RulesError"]
+__all__ = ["normalize_category", "Category", "Matcher", "AnonymizationRules", "RulesError"]
 
 
 class RulesError(ValueError):
@@ -36,6 +36,73 @@ class Category:
     IPV4 = "ipv4"
     PROJECT = "project"
     TERM = "term"
+
+
+# An inspector invents its own category names ("organization_name",
+# "internal hostname"). Left raw they become the alias, so a hidden name gets
+# replaced by something longer than itself in every message. Map them onto the
+# categories the alias templates already know.
+_CATEGORY_SYNONYMS: dict[str, str] = {
+    "org": Category.ORG,
+    "organisation": Category.ORG,
+    "organization": Category.ORG,
+    "company": Category.ORG,
+    "corporation": Category.ORG,
+    "corp": Category.ORG,
+    "employer": Category.ORG,
+    "customer": Category.ORG,
+    "vendor": Category.ORG,
+    "person": Category.PERSON,
+    "people": Category.PERSON,
+    "human": Category.PERSON,
+    "individual": Category.PERSON,
+    "employee": Category.PERSON,
+    "user": Category.PERSON,
+    "username": Category.PERSON,
+    "account": Category.PERSON,
+    "host": Category.HOST,
+    "hostname": Category.HOST,
+    "server": Category.HOST,
+    "machine": Category.HOST,
+    "computer": Category.HOST,
+    "device": Category.HOST,
+    "domain": Category.DOMAIN,
+    "fqdn": Category.DOMAIN,
+    "url": Category.DOMAIN,
+    "website": Category.DOMAIN,
+    "site": Category.DOMAIN,
+    "email": Category.EMAIL,
+    "mail": Category.EMAIL,
+    "ipv4": Category.IPV4,
+    "ip": Category.IPV4,
+    "address": Category.IPV4,
+    "project": Category.PROJECT,
+    "product": Category.PROJECT,
+    "codename": Category.PROJECT,
+    "code": Category.PROJECT,
+    "system": Category.PROJECT,
+}
+
+
+def normalize_category(raw: str) -> str:
+    """Map a free-form category name onto a known one, or ``term``.
+
+    Word by word, first hit wins: ``organization_name`` is an org because of
+    its first word, and the vague ``name`` half is deliberately not a synonym
+    of anything. An unrecognised category is not an error — it just falls back
+    to the generic alias template.
+    """
+    cleaned = re.sub(r"[^a-z0-9]+", " ", (raw or "").lower()).strip()
+    if not cleaned:
+        return Category.TERM
+    direct = _CATEGORY_SYNONYMS.get(cleaned.replace(" ", ""))
+    if direct is not None:
+        return direct
+    for word in cleaned.split():
+        mapped = _CATEGORY_SYNONYMS.get(word)
+        if mapped is not None:
+            return mapped
+    return Category.TERM
 
 
 @dataclass(frozen=True)

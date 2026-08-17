@@ -16,7 +16,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from .mapping import MappingStore
-from .rules import AnonymizationRules, Category, Matcher
+from .rules import AnonymizationRules, Matcher, normalize_category
 
 __all__ = ["Anonymizer", "AnonymizationResult", "Replacement", "is_adoptable"]
 
@@ -98,7 +98,7 @@ class Anonymizer:
         for value, category in list(terms)[:MAX_ADOPT_TERMS]:
             cleaned = (value or "").strip()
             if is_adoptable(cleaned):
-                self.store.alias_for(category or Category.TERM, cleaned)
+                self.store.alias_for(normalize_category(category), cleaned)
         self._invalidate_restore_cache()
         return self.anonymize(text)
 

@@ -156,6 +156,10 @@ rules file before anything can be sent, which in practice means a new customer
 name stops the command until someone maintains a list by hand. `adopt` closes
 that loop automatically while keeping the same determinism.
 
+The category an inspector invents (`organization_name`) is normalized onto
+the known ones (`org`) before the alias is minted, so an adopted term does
+not get replaced by something longer than the name it hides.
+
 The trade-off worth knowing: a false positive is replaced too. An over-eager
 inspector that calls `Azure` an organisation will alias it, and the external
 model then answers about `org-004`. The sent text is shown in the reply

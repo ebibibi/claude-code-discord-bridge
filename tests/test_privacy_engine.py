@@ -281,3 +281,40 @@ class TestAdoptGuards:
         blob = "あ" * 500
         result = anon.adopt(f"{blob} の件", [(blob, "org")])
         assert blob in result.text
+
+
+class TestCategoryNormalization:
+    """An inspector names its own categories; aliases should not inherit them.
+
+    Left raw, `kind: "organization_name"` produces
+    `organization-name-001` — longer than the real name it hides, in every
+    message, forever.
+    """
+
+    def test_synonyms_map_onto_the_known_categories(self):
+        from claude_code_core.privacy.rules import normalize_category
+
+        assert normalize_category("organization_name") == Category.ORG
+        assert normalize_category("company") == Category.ORG
+        assert normalize_category("person_name") == Category.PERSON
+        assert normalize_category("internal hostname") == Category.HOST
+        assert normalize_category("domain_name") == Category.DOMAIN
+        assert normalize_category("project code name") == Category.PROJECT
+
+    def test_exact_category_names_pass_through(self):
+        from claude_code_core.privacy.rules import normalize_category
+
+        for name in (Category.ORG, Category.PERSON, Category.HOST, Category.TERM):
+            assert normalize_category(name) == name
+
+    def test_unknown_and_empty_fall_back_to_term(self):
+        from claude_code_core.privacy.rules import normalize_category
+
+        assert normalize_category("license_key") == Category.TERM
+        assert normalize_category("") == Category.TERM
+        assert normalize_category("   ") == Category.TERM
+
+    def test_adopt_uses_the_normalized_alias(self):
+        anon = Anonymizer(rules=AnonymizationRules.from_dict(RULES), store=MappingStore())
+        result = anon.adopt("Fabrikam の件", [("Fabrikam", "organization_name")])
+        assert "org-001" in result.text

@@ -520,3 +520,29 @@ class TestAdoptFallsBackToBlocking:
         )
         outcome = await gateway.guard("Fabrikam の件")
         assert not outcome.allowed
+
+
+class TestAdoptedAliasesAreReal:
+    async def test_reported_aliases_are_the_ones_actually_substituted(self):
+        """`adopted` must name the aliases in the sent text, not a second set.
+
+        Resolving the alias a second time with the raw inspector category mints
+        a parallel entry, so the surfaced alias differs from the substituted one
+        and the mapping table grows two rows per term.
+        """
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value="Fabrikam", kind="organization_name"),)),
+        )
+        outcome = await gateway.guard("Fabrikam の件")
+        assert outcome.adopted
+        for alias in outcome.adopted:
+            assert alias in outcome.text
+
+    async def test_one_term_makes_one_mapping_entry(self):
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value="Fabrikam", kind="organization_name"),)),
+        )
+        await gateway.guard("Fabrikam の件")
+        assert len(gateway.anonymizer.store.originals()) == 1

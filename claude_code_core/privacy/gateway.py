@@ -17,7 +17,7 @@ from .config import InspectionPolicy, PrivacyConfig
 from .engine import AnonymizationResult, Anonymizer, is_adoptable
 from .inspector import InspectionResult, LocalLlmInspector, Suspect
 from .mapping import MappingStore
-from .rules import AnonymizationRules
+from .rules import AnonymizationRules, normalize_category
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,10 @@ class PrivacyGateway:
         for suspect in inspection.suspects:
             value = (suspect.value or "").strip()
             if is_adoptable(value):
-                terms.append((value, suspect.kind or "term"))
+                # Normalized here as well as in the engine: resolving the
+                # alias below with the raw category would mint a second
+                # entry and surface an alias that was never substituted.
+                terms.append((value, normalize_category(suspect.kind)))
             else:
                 remaining.append(suspect)
 
