@@ -75,6 +75,59 @@ worse than no command.
 The reply shows the exact text that was sent (`show_sent`, on by default), then
 the answer with your real names restored. Both are in the audit log.
 
+## Is the question still a question?
+
+Replacement can succeed and destroy the request at the same time:
+
+```
+/ask question: 胡田昌彦の所属会社はJBSです。この会社の良い点と悪い点を挙げてください。
+→ sent: person-002の所属会社はorg-002です。この会社の良い点と悪い点を挙げてください。
+```
+
+Nothing leaked and nothing is broken — and the answer is worthless, because the
+thing being asked about *is* the thing that was hidden. Observed in practice, the
+external model treats the aliases as record IDs and reports that it cannot look
+them up.
+
+So before the external call, a local model judges one narrow thing about the
+already-anonymized text: **does answering require knowing what the placeholders
+stand for?** If it does, nothing is sent and the reply says so.
+
+| | Leak inspector | Answerability judge |
+|---|---|---|
+| Guards | a safety property | a quality property |
+| Sees | the anonymized text | the anonymized text |
+| Costs, when wrong | a real name leaves the machine | one wasted call |
+| **Unavailable means** | **block** (fail closed) | **send** (fail open) |
+
+That last row is the load-bearing one. Copying the inspector's fail-closed
+stance here would take `/ask` down whenever the local model is busy, to save an
+API call — so `AnswerabilityVerdict.blocks` is true only for a judgement that
+actually ran.
+
+Two more properties keep it cheap and overridable:
+
+- **No substitutions, no judgement.** A question the rules did not touch cannot
+  have been broken by them, so the usual technical `/ask` pays nothing. Measured
+  on qwen3.5:35b, a judged question costs ~1s warm (8s cold).
+- **`force: true` skips the check.** A local model will sometimes be wrong, and
+  a guard on question *quality* must never be the last word.
+
+```
+/ask question: org-002 の良い点と悪い点  force: true
+```
+
+Set `CCDB_ASK_ANSWERABILITY=0` to turn the check off entirely. It needs no
+endpoint of its own — it rides on the inspector's local model, so it works the
+moment `/ask` does.
+
+Measured 2026-08-17 on qwen3.5:35b, 6/6 correct: the reputation, evaluation and
+alias-comparison questions were withheld; conditional-access troubleshooting, a
+Kerberos error and an MFA rollout plan all went out even though they carried
+`org-001` and `host-002`. The false-positive direction is the one to re-measure
+after changing the model — a judge that refuses real technical questions is
+worse than no judge.
+
 ## Limits
 
 - **One question, no memory.** A consult does not resume; each one starts clean.

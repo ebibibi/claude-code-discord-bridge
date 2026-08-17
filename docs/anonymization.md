@@ -119,6 +119,7 @@ that false positive stops a message that was already safe.
 | `CCDB_ANONYMIZE_AUDIT` | next to the rules file | JSONL audit trail |
 | `CCDB_ANONYMIZE_AUDIT_ENABLED` | `1` | Set to `0` to write no audit trail |
 | `CCDB_ANONYMIZE_AUDIT_TEXT` | `1` | Set to `0` to log metadata without the sent text |
+| `CCDB_ASK_ANSWERABILITY` | `1` | Set to `0` to send `/ask` questions without judging whether anonymization left them answerable |
 
 ### Scope
 
@@ -167,6 +168,15 @@ model then answers about `org-004`. The sent text is shown in the reply
 
 A malformed rules file raises instead of disabling the feature. Sending real
 names because of a missing comma is the exact failure this exists to prevent.
+
+### When replacement succeeds and the question dies
+
+Hiding the subject of a question leaves nothing to answer: "the pros and cons of
+`org-002`" is correctly anonymized and unanswerable. `/ask` therefore asks a
+local model one more thing before spending the external call — *does answering
+need the hidden identity?* — and withholds the question if it does. That check
+fails **open**, the opposite of the inspector above, because its worst case is a
+wasted call rather than a leak. See [escalation](escalation.md).
 
 ## What it does not protect
 

@@ -16,6 +16,7 @@ Design rules, in order of importance:
 
 from __future__ import annotations
 
+from .answerability import AnswerabilityJudge, AnswerabilityVerdict, get_judge
 from .audit import AuditLog
 from .backend import AnonymizingBackend
 from .config import GatewayScope, InspectionPolicy, PrivacyConfig
@@ -30,6 +31,8 @@ __all__ = [
     "AnonymizationRules",
     "Anonymizer",
     "AnonymizingBackend",
+    "AnswerabilityJudge",
+    "AnswerabilityVerdict",
     "AuditLog",
     "Category",
     "GatewayScope",
@@ -45,5 +48,6 @@ __all__ = [
     "RulesError",
     "Suspect",
     "get_gateway",
+    "get_judge",
     "reset_gateway_cache",
 ]

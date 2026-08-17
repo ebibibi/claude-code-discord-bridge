@@ -251,13 +251,11 @@ class TestInspectorParsing:
         assert _parse_suspects('{"suspects": [{"value": "  "}]}') == ()
 
     async def test_hallucinated_suspects_are_dropped(self, monkeypatch):
-        inspector = LocalLlmInspector(model="fake")
-        monkeypatch.setattr(
-            inspector,
-            "_request",
-            lambda text: '{"suspects": ["Fabrikam", "NotInTheText"]}',
-        )
-        result = await inspector.inspect("Fabrikam had an outage")
+        async def fake_chat(**kwargs):
+            return '{"suspects": ["Fabrikam", "NotInTheText"]}'
+
+        monkeypatch.setattr("claude_code_core.privacy.inspector.chat_json", fake_chat, raising=True)
+        result = await LocalLlmInspector(model="fake").inspect("Fabrikam had an outage")
         assert [s.value for s in result.suspects] == ["Fabrikam"]
 
     async def test_unreachable_endpoint_is_reported_not_raised(self):

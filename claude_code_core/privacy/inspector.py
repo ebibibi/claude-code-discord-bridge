@@ -6,18 +6,20 @@ did, the substitution would stop being deterministic and the answer could no
 longer be restored.
 
 Transport is plain ``urllib`` against an Ollama-compatible endpoint, run in a
-worker thread. No new dependency, and no network call that isn't the local one
-the operator configured.
+worker thread (see ``local_llm.py``). No new dependency, and no network call
+that isn't the local one the operator configured.
+
+Contrast with ``answerability.py``, which shares the transport and reverses the
+failure direction: an unreachable inspector must block, because the harm it
+guards against is a real name leaving the machine.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
+
+from .local_llm import TRANSPORT_ERRORS, chat_json, extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +93,15 @@ class LocalLlmInspector:
         if not text.strip():
             return InspectionResult(model=self.model)
         try:
-            raw = await asyncio.to_thread(self._request, text[: self.max_chars])
-        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            raw = await chat_json(
+                base_url=self.base_url,
+                model=self.model,
+                system=_SYSTEM_PROMPT,
+                user=text,
+                timeout_seconds=self.timeout_seconds,
+                max_chars=self.max_chars,
+            )
+        except TRANSPORT_ERRORS as exc:
             logger.warning("Local inspector unreachable at %s: %s", self.base_url, exc)
             return InspectionResult(available=False, error=str(exc), model=self.model)
         except Exception as exc:  # noqa: BLE001 - inspector must never break a run
@@ -108,47 +117,11 @@ class LocalLlmInspector:
             logger.info("Inspector proposed %d suspect(s) absent from the text", dropped)
         return InspectionResult(suspects=present, model=self.model)
 
-    def _request(self, text: str) -> str:
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": text},
-            ],
-            "stream": False,
-            "format": "json",
-            # Thinking models return an empty `content` unless this is off.
-            "think": False,
-            "options": {"temperature": 0},
-        }
-        request = urllib.request.Request(  # noqa: S310 - operator-configured local URL
-            f"{self.base_url}/api/chat",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310
-            body = response.read().decode("utf-8", errors="replace")
-        parsed = json.loads(body)
-        return str(parsed.get("message", {}).get("content", ""))
-
 
 def _parse_suspects(raw: str) -> tuple[Suspect, ...]:
     """Parse the model's JSON reply, tolerating fenced or padded output."""
-    text = raw.strip()
-    if not text:
-        return ()
-    if text.startswith("```"):
-        text = text.strip("`")
-        _, _, text = text.partition("\n")
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end <= start:
-        logger.debug("Inspector reply was not JSON: %.120s", raw)
-        return ()
-    try:
-        data = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        logger.debug("Inspector reply was not valid JSON: %.120s", raw)
+    data = extract_json_object(raw)
+    if data is None:
         return ()
     entries = data.get("suspects")
     if not isinstance(entries, list):

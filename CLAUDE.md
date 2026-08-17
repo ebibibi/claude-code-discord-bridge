@@ -46,6 +46,8 @@ Discord frontend for Claude Code CLI. **This is a framework (OSS library), not a
 
 14. **Escalation is isolated by verified argv, not by procedure** (`claude_code_core/escalation.py`): `/ask` sends one anonymized, self-contained question to an external model. The CLI runs with `--setting-sources ""`, an empty temp cwd, every tool disallowed, and `--` before the prompt; `verify_isolation()` checks the argv immediately before spawning and refuses otherwise. The first flag is load-bearing — measured with cwd=/home/ebi and all tools already off, the CLI reports a CLAUDE.md-only term as present in its context without it and absent with it, so a naive escalation ships the whole file regardless of how well the question was anonymized. See `docs/escalation.md`.
 
+15. **A guard's failure direction follows what it guards** (`claude_code_core/privacy/answerability.py`): `/ask` runs two local checks on the anonymized text, and they fail in opposite directions on purpose. The leak inspector guards a *safety* property, so an unreachable inspector blocks — the harm is a real name leaving the machine. The answerability judge guards a *quality* property (replacement can hide the very subject the question is about, making "the pros and cons of `org-002`" perfectly anonymized and unanswerable), so an unreachable judge sends — the harm is refusing a good question, and being wrong costs one call. `AnswerabilityVerdict.blocks` is the single place that asymmetry lives; copying the inspector's fail-closed stance here would take `/ask` down whenever the local model is busy, in the name of saving an API call. The judge is skipped entirely when nothing was replaced (replacement cannot break what it did not touch) and overridable with `force: true`. See `docs/escalation.md`.
+
 ### Why REST API over stdout markers for Claude→ccdb communication
 
 Alternative considered: Claude embeds `<!-- ccdb:schedule {...} -->` in response text; ccdb parses stdout.
@@ -307,7 +309,9 @@ Teams or CLI frontend gets it for free):
   rules.py               # Rule table loader (literals, regexes, builtin detectors)
   mapping.py             # 対応表 — persistent, local, bidirectional alias store
   engine.py              # Deterministic replace + restore. Calls no model, ever
-  inspector.py           # Local Ollama-compatible leftover check. Reports only
+  local_llm.py           # The one Ollama transport both local guards share (think:false lives here)
+  inspector.py           # Local leftover check. Reports only. Fails closed
+  answerability.py       # Did replacement leave a question worth asking? Fails open
   config.py              # Env-driven config; absent rules file = feature off
   audit.py               # JSONL trail of what actually left the machine
   gateway.py             # Policy (block/warn/off) + process-wide accessor
