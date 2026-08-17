@@ -34,8 +34,9 @@ class InspectionPolicy:
     BLOCK = "block"  # refuse to send; show the operator what was found
     WARN = "warn"  # send anyway, but log and surface the finding
     OFF = "off"  # do not inspect at all (rule-based replacement still runs)
+    ADOPT = "adopt"  # mint an alias for what was found, replace it, and send
 
-    ALL = (BLOCK, WARN, OFF)
+    ALL = (BLOCK, WARN, OFF, ADOPT)
 
 
 class GatewayScope:

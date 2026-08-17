@@ -390,3 +390,133 @@ class TestGatewayScope:
         runner = create_backend(backend="claude", model="sonnet")
         assert isinstance(runner, AnonymizingBackend)
         reset_gateway_cache()
+
+
+class TestAdoptPolicy:
+    """`adopt` turns the inspector's report into a replacement instead of a wall.
+
+    The model still only reports; the mapping table still does every
+    substitution, so an adopted term stays restorable.
+    """
+
+    async def test_reported_term_is_replaced_and_the_message_is_allowed(self):
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value="Fabrikam", kind="org"),)),
+        )
+        outcome = await gateway.guard("Fabrikam の件で相談")
+        assert outcome.allowed
+        assert "Fabrikam" not in outcome.text
+        assert outcome.adopted
+
+    async def test_rule_terms_are_still_replaced_alongside_adopted_ones(self):
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value="Fabrikam", kind="org"),)),
+        )
+        outcome = await gateway.guard("Contoso と Fabrikam の件")
+        assert "Contoso" not in outcome.text
+        assert "Fabrikam" not in outcome.text
+
+    async def test_adopted_alias_restores_to_the_real_name(self):
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value="Fabrikam", kind="org"),)),
+        )
+        outcome = await gateway.guard("Fabrikam の件")
+        assert gateway.restore(outcome.text) == "Fabrikam の件"
+
+    async def test_unreachable_inspector_still_blocks(self):
+        """Adopting is about missed terms, not about lowering the bar."""
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(available=False, error="connection refused", model="fake"),
+        )
+        outcome = await gateway.guard("Contoso が落ちた")
+        assert not outcome.allowed
+        assert outcome.reason is not None
+
+    async def test_clean_text_is_untouched(self):
+        gateway = make_gateway(InspectionPolicy.ADOPT, InspectionResult())
+        outcome = await gateway.guard("Contoso が落ちた")
+        assert outcome.allowed
+        assert not outcome.adopted
+
+    async def test_adoption_is_recorded_in_the_audit_log(self, tmp_path):
+        path = tmp_path / "audit.jsonl"
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value="Fabrikam", kind="org"),)),
+            audit_path=path,
+        )
+        await gateway.guard("Fabrikam の件")
+        record = json.loads(path.read_text(encoding="utf-8").strip().splitlines()[-1])
+        assert record["adopted"]
+        assert record["allowed"] is True
+
+    async def test_the_real_name_never_appears_in_the_outcome_metadata(self):
+        """`adopted` is shown in Discord, so it carries aliases, not real names."""
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value="Fabrikam", kind="org"),)),
+        )
+        outcome = await gateway.guard("Fabrikam の件")
+        assert "Fabrikam" not in " ".join(outcome.adopted)
+        assert "Fabrikam" not in (outcome.warning or "")
+
+    async def test_adopted_term_needs_no_inspector_on_the_next_pass(self):
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value="Fabrikam", kind="org"),)),
+        )
+        await gateway.guard("Fabrikam の件")
+        gateway.inspector = None  # the model is gone; the table remembers
+        gateway.policy = InspectionPolicy.OFF
+        outcome = await gateway.guard("Fabrikam から再度の連絡")
+        assert "Fabrikam" not in outcome.text
+
+
+class TestAdoptConfig:
+    def test_adopt_is_a_valid_policy(self, monkeypatch, tmp_path):
+        rules = tmp_path / "rules.json"
+        rules.write_text(json.dumps(RULES), encoding="utf-8")
+        monkeypatch.setenv("CCDB_ANONYMIZE_RULES", str(rules))
+        monkeypatch.setenv("CCDB_ANONYMIZE_POLICY", "adopt")
+        assert PrivacyConfig.from_env().policy == InspectionPolicy.ADOPT
+
+
+class TestAdoptFallsBackToBlocking:
+    """A term the engine refuses to adopt must not be silently declared safe.
+
+    Adoption has bounds (length, count). Anything outside them is still an
+    unreplaced proper noun, so the message has to stop like it would under
+    `block` — clearing the report because we *tried* would send the real name.
+    """
+
+    async def test_a_term_too_short_to_adopt_still_blocks(self):
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value="の", kind="term"),)),
+        )
+        outcome = await gateway.guard("これは私の案件です")
+        assert not outcome.allowed
+        assert not outcome.adopted
+
+    async def test_a_term_too_long_to_adopt_still_blocks(self):
+        blob = "あ" * 500
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(suspects=(Suspect(value=blob, kind="org"),)),
+        )
+        outcome = await gateway.guard(f"{blob} の件")
+        assert not outcome.allowed
+
+    async def test_adoptable_and_unadoptable_together_still_block(self):
+        gateway = make_gateway(
+            InspectionPolicy.ADOPT,
+            InspectionResult(
+                suspects=(Suspect(value="Fabrikam", kind="org"), Suspect(value="の", kind="term"))
+            ),
+        )
+        outcome = await gateway.guard("Fabrikam の件")
+        assert not outcome.allowed

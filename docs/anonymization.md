@@ -112,7 +112,7 @@ that false positive stops a message that was already safe.
 | `CCDB_ANONYMIZE_RULES` | `~/.ccdb/anonymize-rules.json` | Rules file; its absence disables the feature |
 | `CCDB_ANONYMIZE_MAPPING` | next to the rules file | The mapping table. **Back this up, never share it** |
 | `CCDB_ANONYMIZE_SCOPE` | `escalation` | `escalation` (only `/ask`) or `all` (every backend too) |
-| `CCDB_ANONYMIZE_POLICY` | `block` | `block` / `warn` / `off` |
+| `CCDB_ANONYMIZE_POLICY` | `block` | `block` / `adopt` / `warn` / `off` |
 | `CCDB_ANONYMIZE_INSPECTOR_URL` | `http://127.0.0.1:11434` | Ollama-compatible endpoint |
 | `CCDB_ANONYMIZE_INSPECTOR_MODEL` | `qwen3:4b` | Inspection model |
 | `CCDB_ANONYMIZE_INSPECTOR_TIMEOUT` | `30` | Seconds |
@@ -139,8 +139,27 @@ Policies:
 - **`block`** (default) — nothing is sent while the inspector reports a
   leftover, and nothing is sent when the inspector cannot be reached. Fail
   closed: an inspector that is down must not silently become "no inspection".
+- **`adopt`** — mint an alias for each reported leftover, replace it, and send.
+  The term is written to the mapping table, so from then on it is replaced by
+  the table like any rule term — one detection is permanent, and the model is
+  not asked about it again. Still fail-closed on an unreachable inspector: it
+  can only adopt what was actually reported.
 - **`warn`** — send anyway, but say so in the thread and in the audit log.
 - **`off`** — skip inspection entirely. Rule-based replacement still runs.
+
+### Why `adopt` does not break the "no model chooses aliases" rule
+
+The model still only *reports*. The mapping table mints the alias and performs
+every substitution, exactly as for a rule term, so the answer restores. What
+changes is the consequence of a hit: `block` demands the operator edit the
+rules file before anything can be sent, which in practice means a new customer
+name stops the command until someone maintains a list by hand. `adopt` closes
+that loop automatically while keeping the same determinism.
+
+The trade-off worth knowing: a false positive is replaced too. An over-eager
+inspector that calls `Azure` an organisation will alias it, and the external
+model then answers about `org-004`. The sent text is shown in the reply
+(`show_sent`), which is where that shows up.
 
 A malformed rules file raises instead of disabling the feature. Sending real
 names because of a missing comma is the exact failure this exists to prevent.
