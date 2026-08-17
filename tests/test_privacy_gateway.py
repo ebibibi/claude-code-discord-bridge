@@ -12,6 +12,7 @@ from claude_code_core.privacy import (
     Anonymizer,
     AnonymizingBackend,
     AuditLog,
+    GatewayScope,
     InspectionPolicy,
     InspectionResult,
     LocalLlmInspector,
@@ -332,4 +333,60 @@ class TestConfigAndDiscovery:
         second = get_gateway()
         assert second is not None
         assert len(second.anonymizer.rules.matchers) != before
+        reset_gateway_cache()
+
+
+class TestGatewayScope:
+    """The gateway sits on the escalation hop by default, not on every message.
+
+    Wrapping every backend once a rules file exists was the original behaviour
+    and it is actively wrong in the local-first design: a local thread sends
+    nothing to a vendor, so anonymizing it only makes the local model reason
+    about aliases — and with the fail-closed default it would stop every
+    thread whenever the local inspector is unreachable.
+    """
+
+    def test_scope_defaults_to_escalation_only(self, tmp_path, monkeypatch):
+        rules = tmp_path / "rules.json"
+        rules.write_text(json.dumps(RULES), encoding="utf-8")
+        monkeypatch.setenv("CCDB_ANONYMIZE_RULES", str(rules))
+        config = PrivacyConfig.from_env()
+        assert config.active  # /ask is available
+        assert not config.wraps_backends  # ordinary chat is untouched
+
+    def test_scope_all_restores_backend_wrapping(self, tmp_path, monkeypatch):
+        rules = tmp_path / "rules.json"
+        rules.write_text(json.dumps(RULES), encoding="utf-8")
+        monkeypatch.setenv("CCDB_ANONYMIZE_RULES", str(rules))
+        monkeypatch.setenv("CCDB_ANONYMIZE_SCOPE", "all")
+        assert PrivacyConfig.from_env().wraps_backends
+
+    def test_unknown_scope_falls_back_to_escalation(self, monkeypatch):
+        monkeypatch.setenv("CCDB_ANONYMIZE_SCOPE", "everything")
+        assert PrivacyConfig.from_env().scope == GatewayScope.ESCALATION
+
+    def test_backend_is_not_wrapped_by_default(self, tmp_path, monkeypatch):
+        from claude_code_core.backend import create_backend
+
+        rules = tmp_path / "rules.json"
+        rules.write_text(json.dumps(RULES), encoding="utf-8")
+        monkeypatch.setenv("CCDB_ANONYMIZE_RULES", str(rules))
+        monkeypatch.setenv("CCDB_ANONYMIZE_MAPPING", str(tmp_path / "map.json"))
+        reset_gateway_cache()
+        runner = create_backend(backend="claude", model="sonnet")
+        assert not isinstance(runner, AnonymizingBackend)
+        reset_gateway_cache()
+
+    def test_backend_is_wrapped_when_scope_is_all(self, tmp_path, monkeypatch):
+        from claude_code_core.backend import create_backend
+
+        rules = tmp_path / "rules.json"
+        rules.write_text(json.dumps(RULES), encoding="utf-8")
+        monkeypatch.setenv("CCDB_ANONYMIZE_RULES", str(rules))
+        monkeypatch.setenv("CCDB_ANONYMIZE_MAPPING", str(tmp_path / "map.json"))
+        monkeypatch.setenv("CCDB_ANONYMIZE_SCOPE", "all")
+        monkeypatch.setenv("CCDB_ANONYMIZE_POLICY", "off")
+        reset_gateway_cache()
+        runner = create_backend(backend="claude", model="sonnet")
+        assert isinstance(runner, AnonymizingBackend)
         reset_gateway_cache()

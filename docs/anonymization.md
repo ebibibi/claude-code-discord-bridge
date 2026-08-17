@@ -111,6 +111,7 @@ that false positive stops a message that was already safe.
 | `CCDB_ANONYMIZE` | `1` | Set to `0` to disable even with a rules file present |
 | `CCDB_ANONYMIZE_RULES` | `~/.ccdb/anonymize-rules.json` | Rules file; its absence disables the feature |
 | `CCDB_ANONYMIZE_MAPPING` | next to the rules file | The mapping table. **Back this up, never share it** |
+| `CCDB_ANONYMIZE_SCOPE` | `escalation` | `escalation` (only `/ask`) or `all` (every backend too) |
 | `CCDB_ANONYMIZE_POLICY` | `block` | `block` / `warn` / `off` |
 | `CCDB_ANONYMIZE_INSPECTOR_URL` | `http://127.0.0.1:11434` | Ollama-compatible endpoint |
 | `CCDB_ANONYMIZE_INSPECTOR_MODEL` | `qwen3:4b` | Inspection model |
@@ -118,6 +119,20 @@ that false positive stops a message that was already safe.
 | `CCDB_ANONYMIZE_AUDIT` | next to the rules file | JSONL audit trail |
 | `CCDB_ANONYMIZE_AUDIT_ENABLED` | `1` | Set to `0` to write no audit trail |
 | `CCDB_ANONYMIZE_AUDIT_TEXT` | `1` | Set to `0` to log metadata without the sent text |
+
+### Scope
+
+By default the gateway sits on **the escalation hop only** — `/ask`. The agent
+itself is expected to run on a model you control (see
+[the local backend](local-backend.md)), and anonymizing that traffic buys
+nothing while making the local model reason about `host-001` instead of the
+real name. Worse, with the fail-closed default it would stop every thread
+whenever the local inspector is unreachable.
+
+Set `CCDB_ANONYMIZE_SCOPE=all` to wrap every backend as well. That is the right
+setting when your agent still runs against a vendor by default — but be aware
+of what it does *not* cover: the CLI reads local files and sends them itself.
+See "What it does not protect".
 
 Policies:
 

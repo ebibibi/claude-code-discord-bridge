@@ -17,7 +17,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["PrivacyConfig", "InspectionPolicy"]
+__all__ = ["PrivacyConfig", "InspectionPolicy", "GatewayScope"]
 
 DEFAULT_DIR = Path.home() / ".ccdb"
 DEFAULT_RULES_NAME = "anonymize-rules.json"
@@ -36,6 +36,25 @@ class InspectionPolicy:
     OFF = "off"  # do not inspect at all (rule-based replacement still runs)
 
     ALL = (BLOCK, WARN, OFF)
+
+
+class GatewayScope:
+    """Which traffic the gateway sits on.
+
+    ``escalation`` is the default because in the local-first design the agent
+    itself runs on a model the operator controls, and anonymizing that traffic
+    buys nothing while making the local model reason about aliases instead of
+    real names. Only the deliberate hop to an external vendor needs the
+    gateway.
+
+    ``all`` restores the original behaviour — every backend wrapped — for
+    deployments whose agent still runs against a vendor by default.
+    """
+
+    ESCALATION = "escalation"
+    ALL_TRAFFIC = "all"
+
+    ALL = (ESCALATION, ALL_TRAFFIC)
 
 
 def _env(name: str) -> str | None:
@@ -66,6 +85,7 @@ class PrivacyConfig:
     inspector_timeout: float = DEFAULT_INSPECTOR_TIMEOUT
     policy: str = InspectionPolicy.BLOCK
     audit_includes_text: bool = True
+    scope: str = GatewayScope.ESCALATION
     explicitly_disabled: bool = False
 
     @property
@@ -76,6 +96,11 @@ class PrivacyConfig:
     def active(self) -> bool:
         """The gateway runs only when it has rules and was not switched off."""
         return not self.explicitly_disabled and self.rules_exist
+
+    @property
+    def wraps_backends(self) -> bool:
+        """True when ordinary chat traffic goes through the gateway too."""
+        return self.active and self.scope == GatewayScope.ALL_TRAFFIC
 
     @classmethod
     def from_env(cls) -> PrivacyConfig:
@@ -109,6 +134,15 @@ class PrivacyConfig:
             logger.warning("Invalid CCDB_ANONYMIZE_INSPECTOR_TIMEOUT=%r", timeout_raw)
             timeout = DEFAULT_INSPECTOR_TIMEOUT
 
+        scope = (_env("CCDB_ANONYMIZE_SCOPE") or GatewayScope.ESCALATION).lower()
+        if scope not in GatewayScope.ALL:
+            logger.warning(
+                "Unknown CCDB_ANONYMIZE_SCOPE=%r; falling back to %r",
+                scope,
+                GatewayScope.ESCALATION,
+            )
+            scope = GatewayScope.ESCALATION
+
         return cls(
             rules_path=rules_path,
             mapping_path=mapping_path,
@@ -118,5 +152,6 @@ class PrivacyConfig:
             inspector_timeout=timeout,
             policy=policy,
             audit_includes_text=_env_bool("CCDB_ANONYMIZE_AUDIT_TEXT", True),
+            scope=scope,
             explicitly_disabled=not _env_bool("CCDB_ANONYMIZE", True),
         )

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from .audit import AuditLog
 from .backend import AnonymizingBackend
-from .config import InspectionPolicy, PrivacyConfig
+from .config import GatewayScope, InspectionPolicy, PrivacyConfig
 from .engine import AnonymizationResult, Anonymizer, Replacement
 from .gateway import GuardOutcome, PrivacyGateway, get_gateway, reset_gateway_cache
 from .inspector import InspectionResult, LocalLlmInspector, Suspect
@@ -32,6 +32,7 @@ __all__ = [
     "AnonymizingBackend",
     "AuditLog",
     "Category",
+    "GatewayScope",
     "GuardOutcome",
     "InspectionPolicy",
     "InspectionResult",
