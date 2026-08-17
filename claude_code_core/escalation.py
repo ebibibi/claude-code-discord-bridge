@@ -100,6 +100,16 @@ def verify_isolation(args: list[str], cwd: str | Path) -> list[str]:
     else:
         problems.append("--setting-sources is missing (CLAUDE.md and skills would be sent)")
 
+    if "--tools" in args:
+        index = args.index("--tools")
+        if index + 1 >= len(args) or args[index + 1] != "":
+            problems.append("--tools is not empty (tools would be available)")
+    else:
+        problems.append("--tools is missing (every built-in tool would be allowed)")
+
+    if "--strict-mcp-config" not in args:
+        problems.append("--strict-mcp-config is missing (configured MCP servers would be sent)")
+
     if "--" not in args:
         problems.append("-- separator is missing (the tool list would swallow the prompt)")
 
@@ -155,6 +165,18 @@ class ConsultChannel:
             self.model,
             "--setting-sources",
             "",
+            # Allow list, not deny list. The deny list below is kept as a
+            # second layer, but it cannot be the primary one: measured
+            # 2026-08-17 it still left ToolSearch (the entry point to every
+            # MCP tool), Skill and Workflow, and extending it by hand then
+            # left CronCreate, RemoteTrigger and DesignSync. Every new tool
+            # in the CLI would be allowed by default.
+            "--tools",
+            "",
+            # Without this the consult inherits the operator's configured MCP
+            # servers — Gmail, Calendar, cloud APIs — none of which belong in
+            # a one-question, text-in-text-out escalation.
+            "--strict-mcp-config",
             "--disallowedTools",
             *CONSULT_DISALLOWED_TOOLS,
             "--",

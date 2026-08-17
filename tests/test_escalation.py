@@ -162,3 +162,43 @@ class TestEscalation:
         assert records[0]["kind"] == "consult"
         assert records[0]["thread_id"] == 7
         assert "Contoso" not in records[0]["text"]
+
+
+class TestToolIsolationIsAnAllowList:
+    """Naming the tools to forbid cannot hold: the tool set keeps growing.
+
+    Measured 2026-08-17 with the deny list alone, the consult still had
+    ToolSearch (the entry point to every MCP tool — Gmail, Calendar, Azure),
+    Skill and Workflow; extending the list by hand then left CronCreate,
+    RemoteTrigger and DesignSync. `--tools ""` is the allow-list form and was
+    measured to actually stop Bash from running.
+    """
+
+    def test_build_args_disables_every_tool(self):
+        args = ConsultChannel().build_args("hi")
+        assert "--tools" in args
+        assert args[args.index("--tools") + 1] == ""
+
+    def test_build_args_ignores_configured_mcp_servers(self):
+        assert "--strict-mcp-config" in ConsultChannel().build_args("hi")
+
+    def test_missing_tools_flag_is_refused(self, tmp_path):
+        args = [a for a in ConsultChannel().build_args("hi") if a != "--tools"]
+        problems = verify_isolation(args, tmp_path)
+        assert any("--tools" in p for p in problems)
+
+    def test_non_empty_tools_flag_is_refused(self, tmp_path):
+        args = ConsultChannel().build_args("hi")
+        args[args.index("--tools") + 1] = "Bash"
+        problems = verify_isolation(args, tmp_path)
+        assert any("--tools" in p for p in problems)
+
+    def test_missing_strict_mcp_config_is_refused(self, tmp_path):
+        args = [a for a in ConsultChannel().build_args("hi") if a != "--strict-mcp-config"]
+        problems = verify_isolation(args, tmp_path)
+        assert any("mcp" in p.lower() for p in problems)
+
+    def test_the_prompt_still_survives_the_extra_flags(self):
+        args = ConsultChannel().build_args("the question")
+        assert args[-1] == "the question"
+        assert args[-2] == "--"

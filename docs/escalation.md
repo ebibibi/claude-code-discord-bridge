@@ -35,6 +35,8 @@ does not hold, nothing is sent:
 | | Why |
 |---|---|
 | `--setting-sources ""` | Otherwise CLAUDE.md, skills and memory are sent |
+| `--tools ""` | An allow list. Naming tools to forbid cannot keep up |
+| `--strict-mcp-config` | Otherwise the operator's MCP servers come along |
 | Empty temporary directory as cwd | Nothing local to read |
 | Every tool disallowed | No shell to escape the directory with |
 | `--` before the prompt | Without it the variadic tool list eats the prompt |
@@ -45,6 +47,16 @@ whether a term unique to the project's CLAUDE.md was present in its context,
 the model answered "not present" with the flag and "present" without it. A
 naive escalation ships the whole file — customer names included — no matter how
 carefully the question itself was anonymized.
+
+The tool flags are the second surprise. Measured 2026-08-17 with the deny
+list alone, the consult still had `ToolSearch` — the entry point to every
+configured MCP tool, Gmail and Calendar included — plus `Skill` and
+`Workflow`; the external model duly described them and read the anonymized
+aliases as record IDs to look up. Extending the deny list by hand then left
+`CronCreate`, `RemoteTrigger` and `DesignSync`. A deny list has to be
+rewritten for every tool the CLI adds, so it is the wrong shape: `--tools ""`
+allows nothing by default and was measured to stop `Bash` from running,
+while the deny list stays as a second layer.
 
 This is a *route*, not a procedure. `verify_isolation()` inspects the argv about
 to be used, so a future refactor that drops a flag fails loudly instead of
