@@ -445,10 +445,26 @@ class ApiServer:
             await self._ext_runner.cleanup()
 
     async def health(self, request: web.Request) -> web.Response:
-        """GET /api/health — health check."""
+        """GET /api/health — health check, including delivery backlog.
+
+        A scheduled notification that is stored but never sent used to be
+        undetectable from outside: create returned 201, the list endpoint
+        showed it, and only the human waiting for it ever found out.  The
+        backlog is therefore part of "healthy" — a row whose time has passed
+        and is still pending means the dispatcher is not draining the queue.
+        """
+        overdue = 0
+        try:
+            now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            overdue = len(await self.repo.get_pending(before=now))
+        except Exception:
+            # A liveness probe must answer even when the store is unreadable.
+            logger.exception("Health check could not read the notification backlog")
+
         return web.json_response(
             {
-                "status": "ok",
+                "status": "degraded" if overdue else "ok",
+                "overdue_notifications": overdue,
                 "timestamp": datetime.now().isoformat(),
             }
         )
