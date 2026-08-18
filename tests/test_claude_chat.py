@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -1864,6 +1865,33 @@ class TestInlineReplyChannels:
         cog._run_claude.assert_awaited_once()
         _, called_thread, *_ = cog._run_claude.call_args.args
         assert called_thread is msg.channel  # channel itself, not a thread
+
+    @pytest.mark.asyncio
+    async def test_inline_channel_resumes_stored_session(self) -> None:
+        """An inline channel is one continuous conversation, keyed by channel id.
+
+        Every message in such a channel goes through _handle_new_conversation, so
+        without this the session would restart cold each time — unlike threads.
+        """
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog.repo.get = AsyncMock(return_value=SimpleNamespace(session_id="sess-abc"))
+        cog._run_claude = AsyncMock()
+
+        msg = self._make_channel_message(channel_id=222)
+        await cog._handle_new_conversation(msg)
+
+        cog.repo.get.assert_awaited_once_with(222)
+        assert cog._run_claude.call_args.kwargs["session_id"] == "sess-abc"
+
+    @pytest.mark.asyncio
+    async def test_inline_channel_without_prior_session_starts_fresh(self) -> None:
+        """First message in an inline channel has no stored session to resume."""
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_new_conversation(self._make_channel_message(channel_id=222))
+
+        assert cog._run_claude.call_args.kwargs["session_id"] is None
 
     @pytest.mark.asyncio
     async def test_non_inline_channel_still_creates_thread(self) -> None:
