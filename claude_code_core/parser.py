@@ -64,6 +64,8 @@ def parse_line(line: str) -> StreamEvent | None:
         _parse_progress(data, event)
     elif msg_type == MessageType.RATE_LIMIT_EVENT:
         _parse_rate_limit_event(data, event)
+    elif msg_type == MessageType.STREAM_EVENT:
+        _parse_stream_event(data, event)
 
     return event
 
@@ -317,6 +319,29 @@ def _parse_rate_limit_event(data: dict[str, Any], event: StreamEvent) -> None:
         resets_at=int(info.get("resetsAt", 0)),
         is_using_overage=bool(info.get("isUsingOverage", False)),
     )
+
+
+def _parse_stream_event(data: dict[str, Any], event: StreamEvent) -> None:
+    """Parse a low-level ``stream_event`` wrapper.
+
+    Only ``message_delta`` carries usage, and it is the *final* usage for
+    that message — unlike the ``assistant`` message's own ``usage`` field,
+    which is a mid-generation snapshot (e.g. output_tokens=1 while the block
+    is still streaming). ``message_delta`` arrives immediately before
+    ``message_stop``, after all of that message's content blocks, so its
+    usage is what a caller tracking "this turn's real token count" wants —
+    see EventProcessor._last_turn_input_tokens.
+    """
+    inner = data.get("event", {})
+    if not isinstance(inner, dict) or inner.get("type") != "message_delta":
+        return
+    usage = inner.get("usage", {})
+    if not isinstance(usage, dict) or not usage:
+        return
+    event.input_tokens = usage.get("input_tokens")
+    event.output_tokens = usage.get("output_tokens")
+    event.cache_read_tokens = usage.get("cache_read_input_tokens")
+    event.cache_creation_tokens = usage.get("cache_creation_input_tokens")
 
 
 def _parse_ask_questions(tool_input: dict[str, Any]) -> list[AskQuestion]:
