@@ -486,7 +486,7 @@ Behind the scenes:
 - **Thread search** — `/search <query>` finds a past thread by keyword, matching the persistent per-thread summary (the opening prompt) and working directory; renders hits as a scannable embed with a Discord deep-link that reopens even an archived (sidebar-hidden) thread; optional `origin` filter (Discord / CLI). Add `body:True` to also grep the full local Claude transcripts (`~/.claude/projects`), so keywords that appear only mid-conversation are found too — each body hit shows the matching snippet with a `💬` badge, and a transcript with no Discord thread offers a `claude --resume <id>` hint instead of a link. The same lookup is exposed as `GET /api/search` (add `body=1`) for other sessions and skills. No AI tokens — a `LIKE` query over data ccdb already keeps, plus a safe `grep` (never `shell=True`) over the transcripts on disk
 - **Session resume** — `/resume` shows a select menu of recent sessions (up to 25) and resumes the selected one in a new thread; optional `query` parameter for keyword search (matches summary and working directory); optional `filter=orphaned` to show only sessions from deleted threads; works from any channel or thread — always creates a new thread in the configured main channel
 - **Resume info** — `/resume-info` shows the CLI command to continue the current session in a terminal (thread-only)
-- **Clear session** — `/clear` resets the Claude Code session for the current thread, starting fresh without creating a new thread
+- **Clear session** — `/clear` resets the Claude Code session for the current conversation (thread or inline-reply channel), starting fresh without creating a new thread
 - **Startup resume** — Interrupted sessions restart automatically after any bot reboot; `AutoUpgradeCog` (upgrade restarts) and `ClaudeChatCog.cog_unload()` (all other shutdowns) mark them automatically, or use `POST /api/mark-resume` manually
 - **Programmatic spawn** — `POST /api/spawn` creates a new Discord thread + Claude session from any script or Claude subprocess; returns non-blocking 201 immediately after thread creation
 - **Thread ID injection** — `DISCORD_THREAD_ID` env var is passed to every Claude subprocess, enabling sessions to spawn child sessions via `$CCDB_API_URL/api/spawn`
@@ -821,7 +821,7 @@ Or via environment variable (comma-separated channel IDs):
 INLINE_REPLY_CHANNEL_IDS=333,444
 ```
 
-In inline-reply mode, Claude's response is sent directly as a message in the channel rather than spawning a new thread. Sessions are still tracked internally, so follow-up messages in the channel continue the same Claude session.
+In inline-reply mode, Claude's response is sent directly as a message in the channel rather than spawning a new thread. The channel itself is one continuous conversation: sessions are tracked internally, so follow-up messages resume the same Claude session until `/clear` resets it.
 
 #### Chat-Only Channels
 
