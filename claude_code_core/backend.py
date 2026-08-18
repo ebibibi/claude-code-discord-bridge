@@ -94,9 +94,16 @@ def _apply_privacy_gateway(
     Auto-discovery keeps this zero-config: with no rules file the gateway is
     ``None`` and the runner is returned untouched.
     """
-    from .privacy import AnonymizingBackend, get_gateway
+    from .privacy import AnonymizingBackend, PrivacyConfig, get_gateway
 
-    gateway = get_gateway()
+    config = PrivacyConfig.from_env()
+    if not config.wraps_backends:
+        # Default scope is "escalation": the agent runs on a model the operator
+        # controls, so anonymizing its traffic buys nothing and would make the
+        # local model reason about aliases instead of real names. The gateway
+        # still guards the deliberate hop out (see escalation.py).
+        return runner
+    gateway = get_gateway(config)
     if gateway is None:
         return runner
     return AnonymizingBackend(runner, gateway, backend=backend, thread_id=thread_id)

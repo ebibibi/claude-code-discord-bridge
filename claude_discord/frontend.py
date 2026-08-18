@@ -36,6 +36,7 @@ from claude_code_core.frontend import ThreadKey
 
 from .database.frontend_thread_repo import FrontendThreadRepository
 from .surface import DiscordSurface
+from .thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +118,10 @@ class DiscordFrontend:
         # A thread needs a starter message; the title doubles as its text so
         # the channel view shows what the conversation is for.
         starter = await channel.send(title[:2000])
-        thread = await starter.create_thread(name=title[:100])
+        thread = await starter.create_thread(
+            name=title[:100],
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+        )
         await self._record(thread)
         return DiscordSurface(thread)
 

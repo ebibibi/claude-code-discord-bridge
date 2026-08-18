@@ -23,6 +23,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..protocols import DrainAware
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -258,12 +259,16 @@ class AutoUpgradeCog(commands.Cog):
         async with self._lock:
             thread = await text_channel.create_thread(
                 name=self.config.trigger_prefix[:100],
+                auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
             )
             await self._run_pipeline(thread, status_target=None)
 
     async def _run_upgrade(self, trigger_message: discord.Message) -> None:
         """Execute the upgrade pipeline triggered by a webhook message."""
-        thread = await trigger_message.create_thread(name=self.config.trigger_prefix[:100])
+        thread = await trigger_message.create_thread(
+            name=self.config.trigger_prefix[:100],
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+        )
         await self._run_pipeline(thread, status_target=trigger_message)
 
     async def _run_pipeline(

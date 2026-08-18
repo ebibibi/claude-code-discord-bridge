@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from claude_discord.database.notification_repo import NotificationRepository
 from claude_discord.ext.api_server import ApiServer
+from claude_discord.thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 
 @pytest.fixture
@@ -71,6 +72,29 @@ class TestHealth:
         data = await resp.json()
         assert data["status"] == "ok"
         assert "timestamp" in data
+
+    @pytest.mark.asyncio
+    async def test_health_reports_no_overdue_when_clean(self, client: TestClient) -> None:
+        resp = await client.get("/api/health")
+        assert (await resp.json())["overdue_notifications"] == 0
+
+    @pytest.mark.asyncio
+    async def test_health_counts_overdue_notifications(
+        self, client: TestClient, repo: NotificationRepository
+    ) -> None:
+        """A notification long past its time is the symptom of a dead dispatcher.
+
+        The previous outage was invisible precisely because every endpoint kept
+        answering normally while nothing was delivered, so the health check now
+        reports the backlog instead of a bare "ok".
+        """
+        await repo.create(message="取り残された", scheduled_at="2020-01-01T09:00:00")
+        await repo.create(message="まだ先", scheduled_at="2099-01-01T09:00:00")
+
+        data = await (await client.get("/api/health")).json()
+
+        assert data["overdue_notifications"] == 1
+        assert data["status"] == "degraded"
 
 
 class TestNotify:
@@ -302,7 +326,9 @@ class TestNotifyThread:
         data = await resp.json()
         assert data["status"] == "sent"
         assert data["thread_id"] == "111222333"
-        channel.create_thread.assert_called_once_with(name="PR Review")
+        channel.create_thread.assert_called_once_with(
+            name="PR Review", auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES
+        )
         thread.send.assert_called_once_with("PR #42 needs review")
         # Channel.send should NOT be called — message goes to thread
         channel.send.assert_not_called()
@@ -323,7 +349,9 @@ class TestNotifyThread:
             },
         )
         assert resp.status == 200
-        channel.create_thread.assert_called_once_with(name="Summary Thread")
+        channel.create_thread.assert_called_once_with(
+            name="Summary Thread", auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES
+        )
         call_kwargs = thread.send.call_args.kwargs
         assert "embed" in call_kwargs
         channel.send.assert_not_called()
@@ -398,7 +426,9 @@ class TestNotifyThread:
             json={"message": "Long title", "thread_name": raw_name},
         )
         assert resp.status == 200
-        channel.create_thread.assert_called_once_with(name="a" * 100)
+        channel.create_thread.assert_called_once_with(
+            name="a" * 100, auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES
+        )
 
 
 class TestSchedule:

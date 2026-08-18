@@ -332,12 +332,16 @@ class EventProcessor:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def finalize(self) -> None:
-        """Cancel unfinished frontend activities and legacy timers.
+        """Disable the interrupt affordance and cancel unfinished activities.
 
         Prompt tasks are left running on purpose: each owns a timeout that
         fails closed, and an approval the user is mid-way through answering
         should still reach the CLI.
         """
+        if self._interrupt is not None:
+            with contextlib.suppress(Exception):
+                await self._interrupt.disable()
+            self._interrupt = None
         for activity in self._state.active_tools.values():
             with contextlib.suppress(Exception):
                 await activity.cancel()

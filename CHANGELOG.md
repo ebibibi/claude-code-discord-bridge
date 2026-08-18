@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Thread-completion recording is opt-in, off by default** — deleting a thread is an everyday,
+  destructive act, and having it silently start a Claude session is a surprise. `/thread-completion
+  on|off` throws the switch and the answer is stored, so it survives a restart; the environment
+  variables now decide only whether the switch exists. The state is re-checked after the debounce
+  window, so turning it off during the wait drops the pending batch. Anything other than a stored
+  "on" — no settings repo, no value, a failed read — is off, because the absence of an answer is
+  not permission.
+
+- **`ThreadCompletionCog`'s prompt is external** (`THREAD_COMPLETION_PROMPT_FILE`) — where a
+  completion record goes is one person's note-taking convention, and this repository is public. The
+  Cog keeps the generic half (batching, session/transcript resolution, the manifest) and reads the
+  instance-specific instructions from a file outside the repo. An unreadable path falls back to a
+  generic prompt rather than dropping the batch.
+
+### Added
+
+- **A test that fails when shipped source names a real person** — `examples/ebibot` is a real
+  instance's configuration, so a docstring explaining why a Cog exists is exactly where personal
+  detail leaks in. The check is narrow on purpose: names, not topics.
+
+### Added
+
+- **`find_transcript(session_id, root)`** in `claude_code_core.transcript_search` — resolves one
+  session's transcript without knowing its working directory. A thread can be deleted; its
+  transcript can't, so anything that wants to say something about a finished conversation after the
+  thread is gone needs this. The id is validated before it reaches a filesystem glob.
+- **`ThreadCompletionCog`** (EbiBot example) — treats "the user deleted the thread" as "that work is
+  finished". Deletions are batched over a quiet period, resolved against the session rows and
+  on-disk transcripts, written to a manifest, and handed to one Claude session that files the
+  records. Threads that never held a session (notification threads) are dropped, and the Cog's own
+  record threads don't re-trigger it. Disabled unless `THREAD_COMPLETION_CHANNEL_ID` is set.
+
+### Fixed
+
+- **EbiBot's own Cogs kept the 24-hour thread window** — `alert_responder` and `job_failure_triage`
+  passed `auto_archive_duration=1440` literally. They now use the shared constant, and the
+  architecture test scans `examples/ebibot/cogs` too.
+
+- **Threads stay in the channel's thread list for a week instead of an hour** — every
+  `create_thread()` call site now asks for Discord's maximum auto-archive window (7 days) via the
+  shared `THREAD_AUTO_ARCHIVE_MINUTES` constant. Chat threads had been created with a 60-minute
+  window, so a conversation dropped out of the sidebar an hour after the last reply and looked
+  deleted; the other call sites silently inherited discord.py's 24-hour default. An architecture
+  test fails when a new call site forgets the keyword.
+
+- **Teams session cards now leave the running state when a turn ends** — teardown removes and
+  unregisters the Stop action, then flushes the final card repaint so the completed or error status
+  is visible immediately instead of leaving a stale working card behind.
+
 ## [4.0.0] - 2026-08-11
 
 ### Added

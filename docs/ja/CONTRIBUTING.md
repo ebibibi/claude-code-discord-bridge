@@ -71,6 +71,44 @@ uv run ruff check claude_discord/
 uv run ruff format claude_discord/
 ```
 
+## Discord スレッドの作成
+
+`create_thread()` の呼び出しでは、必ず共有の自動アーカイブ期間を渡してください:
+
+```python
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
+
+thread = await channel.create_thread(
+    name=name,
+    auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+)
+```
+
+Discord の自動アーカイブ期間はスレッド作成時に確定し、既定値は短めです。アーカイブされたスレッドは
+チャンネルのスレッド一覧から消えるため、利用者がまだ作業中だと思っている会話が削除されたように
+見えてしまいます。`tests/test_thread_policy.py` は `claude_discord/` と、`examples/ebibot/cogs/` の
+サンプル Cog の両方を走査し、キーワードを付け忘れた呼び出しや、定数を使わず数値をハードコードした
+呼び出しがあると失敗します。これは Discord の挙動に関するルールであって、どのパッケージに書かれた
+呼び出しかは関係ありません。カスタム Cog も同じ規則に従います。
+
+## 個人情報を出荷するソースに残さない
+
+このリポジトリは public であり、`examples/ebibot/` は実在するインスタンスの設定そのものです。つまり、
+個人的な事情が紛れ込むのはまさにここです。「なぜこの Cog が存在するのか」を docstring に書くのはごく
+自然なことであり、そして自然に書こうとすると、その運用をしている人物の名前を書いてしまいます。
+
+`tests/test_no_personal_identifiers.py` は `claude_discord/`、`claude_code_core/`、`claude_teams/`、
+`examples/` を走査し、出荷されるソースが実在の人物名を含んでいると失敗します。このチェックは意図的に
+狭く作ってあります — 対象は「名前」であって「話題」ではありません。「日本語を書くな」のような広い
+ルールや、誰かが使っていそうなツール名の一覧は誤検知を生み、誤検知は抑制され、抑制されたガードは
+もはやガードではないからです。
+
+ある機能がどうしても特定個人の運用ルールを必要とする場合は、それをコードに埋め込むのではなく、
+リポジトリの外を指し示してください。`ThreadCompletionCog` がその参照実装です。Cog 側には汎用部分
+（バッチ化、セッションと transcript の解決、マニフェストの生成）だけを残し、インスタンス固有の指示は
+`THREAD_COMPLETION_PROMPT_FILE` が指すファイルから読み込みます。パスが読めない場合は、処理を落とすの
+ではなく汎用プロンプトにフォールバックします。
+
 ## プロジェクト構造
 
 - `claude_code_core/` — バックエンド非依存コアライブラリ: `SessionBackend` プロトコル、`ClaudeRunner`、`CodexRunner`、`create_backend()` ファクトリー、パーサー、型定義、SQLite モデル

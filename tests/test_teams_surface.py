@@ -375,6 +375,22 @@ class TestInterrupt:
         await s.close()
         assert not connector.updated[-1][1]["attachments"][0]["content"].get("actions")
 
+    async def test_disabling_flushes_the_final_status_and_removes_stop(self) -> None:
+        async def on_stop() -> None:
+            return None
+
+        connector = RecordingConnector()
+        s = build(connector)
+        handle = await s.offer_interrupt(on_stop)
+
+        await s.set_status(StatusKind.DONE)
+        await handle.disable()
+
+        final_card = connector.updated[-1][1]["attachments"][0]["content"]
+        assert final_card["body"][1]["text"] == "Done"
+        assert not final_card.get("actions")
+        await s.close()
+
     async def test_disabling_twice_is_harmless_and_stops_honouring_the_id(self) -> None:
         # The session-end path and the user pressing Stop both reach disable().
         # A Stop that still worked afterwards would interrupt whatever ran next.
