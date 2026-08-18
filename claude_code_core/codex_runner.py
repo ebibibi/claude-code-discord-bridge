@@ -543,7 +543,7 @@ class CodexRunner:
             args.append("--dangerously-bypass-approvals-and-sandbox")
         # `codex exec` has no interactive approval loop (no human present, and
         # ccdb cannot inject responses over stdin for Codex — see
-        # inject_tool_result), and current codex-cli (0.145.0) rejects
+        # inject_tool_result), and current codex-cli (verified with 0.147.0) rejects
         # `--ask-for-approval` on `exec` outright ("unexpected argument").
         # `permission_mode` therefore has no CLI lever for Codex beyond the
         # bypass flag above; Codex's own --sandbox default (or the operator
