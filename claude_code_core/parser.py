@@ -333,10 +333,10 @@ def _parse_stream_event(data: dict[str, Any], event: StreamEvent) -> None:
     see EventProcessor._last_turn_input_tokens.
     """
     inner = data.get("event", {})
-    if inner.get("type") != "message_delta":
+    if not isinstance(inner, dict) or inner.get("type") != "message_delta":
         return
     usage = inner.get("usage", {})
-    if not usage:
+    if not isinstance(usage, dict) or not usage:
         return
     event.input_tokens = usage.get("input_tokens")
     event.output_tokens = usage.get("output_tokens")

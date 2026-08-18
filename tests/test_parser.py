@@ -431,6 +431,20 @@ class TestMessageDeltaUsage:
         assert event.input_tokens is None
         assert event.output_tokens is None
 
+    @pytest.mark.parametrize(
+        "inner",
+        [None, [], "message_delta", {"type": "message_delta", "usage": []}],
+    )
+    def test_malformed_stream_event_is_ignored(self, inner: object):
+        line = json.dumps({"type": "stream_event", "event": inner})
+
+        event = parse_line(line)
+
+        assert event is not None
+        assert event.message_type == MessageType.STREAM_EVENT
+        assert event.input_tokens is None
+        assert event.output_tokens is None
+
 
 class TestRedactedThinking:
     def test_redacted_thinking_sets_flag(self):
