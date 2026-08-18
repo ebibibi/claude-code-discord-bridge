@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from .database.frontend_thread_repo import FrontendThreadRepository
     from .database.ingest_repo import IngestResultRepository
     from .database.lounge_repo import LoungeRepository
+    from .database.notification_repo import NotificationRepository
     from .database.repository import SessionRepository, UsageStatsRepository
     from .database.resume_repo import PendingResumeRepository
     from .database.settings_repo import SettingsRepository
@@ -68,6 +69,10 @@ class BridgeComponents:
     settings_repo: SettingsRepository | None = None
     ask_repo: PendingAskRepository | None = None
     usage_repo: UsageStatsRepository | None = None
+    #: The scheduled-notification store the API server writes through, exposed
+    #: so a custom Cog scheduling a reminder lands in the same database the
+    #: dispatcher reads.  A Cog that opens its own file writes into a void.
+    notification_repo: NotificationRepository | None = None
 
     def apply_to_api_server(self, api_server: ApiServer) -> None:
         """Wire all optional repos to an ApiServer instance.
@@ -486,6 +491,22 @@ async def setup_bridge(
         await bot.add_cog(backend_cmd_cog)
         logger.info("Registered BackendCommandCog")
 
+    # --- AskCommandCog (auto-discovered: only when anonymization rules exist) ---
+    # Zero-config by the same rule as the gateway itself — no rules file, no
+    # command, because a /ask that forwards real names is worse than none.
+    from claude_code_core.privacy import get_gateway
+
+    try:
+        if get_gateway() is not None:
+            from .cogs.ask_command import AskCommandCog
+
+            await bot.add_cog(AskCommandCog(bot))  # type: ignore[arg-type]
+            logger.info("Registered AskCommandCog (anonymized external escalation)")
+    except Exception:
+        # A broken rules file must not take the whole bot down; the gateway
+        # raises deliberately, and the chat path surfaces it on first use.
+        logger.exception("Could not register AskCommandCog")
+
     components = BridgeComponents(
         session_repo=session_repo,
         task_repo=task_repo,
@@ -505,6 +526,25 @@ async def setup_bridge(
 
     # Auto-wire repos to ApiServer and set runner.api_port if provided
     if api_server is not None:
+        # An API that accepts POST /api/schedule has to deliver it, so the
+        # dispatcher ships with the endpoint rather than with the consumer.
+        # It is handed the API's own repository object: matching two paths is
+        # a convention that drifts, sharing one object is a structure.
+        from .cogs.notification_dispatch import NotificationDispatchCog
+
+        await bot.add_cog(
+            NotificationDispatchCog(
+                bot,
+                repo=api_server.repo,
+                default_channel_id=claude_channel_id,
+            )
+        )
+        logger.info("Registered NotificationDispatchCog")
+
+        # Custom Cogs schedule reminders through this rather than opening a
+        # database of their own.
+        components.notification_repo = api_server.repo
+
         components.apply_to_api_server(api_server)
         if runner.api_port is None:
             runner.api_port = api_server.port

@@ -414,6 +414,7 @@ Behind the scenes:
 #### 🔗 Session Basics
 - **Chat-only mode** — When `CHAT_ONLY_CHANNEL_IDS` includes a channel, only Claude's text responses are shown; tool embeds, thinking blocks, session start/complete embeds, and todo lists are hidden. Permission requests and `AskUserQuestion` are always shown. Ideal for public channels where non-technical users are watching.
 - **Thread = Session** — 1:1 mapping between Discord thread and Claude Code session
+- **Threads stay visible for a week** — every thread ccdb creates asks Discord for its maximum auto-archive window (7 days), so a conversation you are still working on keeps its place in the channel's thread list instead of dropping out of the sidebar an hour after the last reply
 - **Goal tracking** — `/goal <condition>` sets a completion condition; Claude keeps working until the condition is met. Omit the condition to check status; pass `clear` to cancel
 - **Session persistence** — Resume conversations across messages via `--resume`
 - **Cross-backend conversation handoff** — Switching a live thread between Claude and Codex seeds the new native session from a bounded, text-only reading of the previous backend's local JSONL; no manual summary or copy/paste required
@@ -507,6 +508,7 @@ Behind the scenes:
 - **Log injection prevention** — User-provided API values are sanitized (newlines stripped) before writing to logs
 - **Local-model backend** (optional) — `/backend local` runs a thread against a model on your own hardware. ccdb owns a separate CLI home with the update check and analytics disabled, because a "local" run otherwise still contacts the vendor; it refuses to start if those settings are missing — see [docs/local-backend.md](docs/local-backend.md)
 - **Remote AG-UI backend** (optional) — `/backend agui` connects the existing Discord/Teams session machinery to any HTTP/SSE AG-UI agent while preserving ccdb's session ledger, rendering, cancellation, and operational controls — see [docs/agui-backend.md](docs/agui-backend.md)
+- **`/ask` — explicit escalation** (optional) — sends one anonymized, self-contained question to a strong external model with no project context, no files and no tools, then restores your real names in the answer; the isolation is verified before every spawn — see [docs/escalation.md](docs/escalation.md)
 - **Anonymization gateway** (optional) — Replaces organisation-identifying terms with stable aliases before the prompt reaches Claude or Codex, and restores them in the answer. A local model checks the result for replacement misses and, by default, blocks the send when it finds one. Off until you write a rules file — see [docs/anonymization.md](docs/anonymization.md)
 
 ---
@@ -677,6 +679,8 @@ See [`examples/ebibot/`](examples/ebibot/) for a full real-world example with re
 | `AutoUpgradeCog` | Webhook-triggered package upgrade |
 | `DocsSyncCog` | Automated documentation sync on push |
 | `AlertResponderCog` | Generic alert monitoring — forwards alerts from monitoring systems to Discord and triggers a Claude Code investigation session |
+| `JobFailureTriageCog` | Auto-investigates scheduler job failures posted as webhook embeds |
+| `ThreadCompletionCog` | Treats "the user deleted the thread" as "that work is finished" — batches deletions and files a work record from the surviving transcripts. Off until `/thread-completion on` |
 
 ---
 
@@ -1232,7 +1236,8 @@ claude_code_core/          # Shared core library (backend-agnostic)
   models.py                # SQLite schema
   session_repo.py          # Session CRUD
   thread_search.py         # /search orchestration — summary + body merge, dedupe by thread
-  transcript_search.py     # grep/scan of ~/.claude/projects transcripts + snippet extraction
+  transcript_search.py     # grep/scan of ~/.claude/projects transcripts + snippet extraction;
+                           # find_transcript() locates one session's file without knowing its cwd
   lounge_repo.py           # AI Lounge message CRUD
   rewind.py                # Session rewind helpers
 claude_discord/
@@ -1357,6 +1362,8 @@ The project started on 2026-02-18 and continues to evolve through iterative conv
 - **AutoUpgradeCog** — Self-updating via GitHub webhook + systemctl restart
 - **DocsSyncCog** — Auto-translate documentation on push via webhook
 - **AlertResponderCog** — Generic alert-monitoring Cog; watches a configurable source and posts severity-annotated notifications to Discord
+- **JobFailureTriageCog** — Picks up scheduler job-failure embeds and starts a triage session
+- **ThreadCompletionCog** — Deleting a thread means the work is done; deletions are batched and filed as a written record built from the session transcript, since the thread's messages are already gone. What that record says and where it goes comes from an external prompt file (`THREAD_COMPLETION_PROMPT_FILE`), not from the Cog. Recording is off until you run `/thread-completion on` — the environment variables decide only whether the switch exists
 
 Run it with: `ccdb start --cogs-dir examples/ebibot/cogs/`
 

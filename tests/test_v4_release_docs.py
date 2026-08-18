@@ -43,12 +43,13 @@ def test_teams_setup_guide_covers_the_complete_relay_path() -> None:
 
 def test_v4_release_artifacts_and_versions_are_in_sync() -> None:
     project = tomllib.loads(read("pyproject.toml"))["project"]
+    current_version = project["version"]
     lock = read("uv.lock")
     changelog = read("CHANGELOG.md")
     release_notes = read("docs/releases/v4.0.0.md")
 
-    assert project["version"] == "4.0.0"
-    assert 'name = "claude-code-discord-bridge"\nversion = "4.0.0"' in lock
+    assert current_version.startswith("4.")
+    assert f'name = "claude-code-discord-bridge"\nversion = "{current_version}"' in lock
     assert "## [4.0.0] - 2026-08-11" in changelog
     assert "# Ebi Agent Chat Relay 4.0.0" in release_notes
     assert "Compatibility" in release_notes

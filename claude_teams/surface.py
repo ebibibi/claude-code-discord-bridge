@@ -515,6 +515,10 @@ class TeamsInterruptHandle:
         if self._surface._stop_action_id == self._action_id:
             self._surface._stop_action_id = None
             await self._surface._repaint()
+            # Session teardown must leave the card visibly final before its
+            # short-lived surface goes out of scope. This flush also coalesces
+            # the preceding Done/Error status repaint into the same update.
+            await self._surface._pacer.flush()
 
 
 async def _await_answer(future: asyncio.Future[Any], timeout: float | None) -> Any:

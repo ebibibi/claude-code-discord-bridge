@@ -12,11 +12,13 @@ from .claude.parser import parse_line
 from .claude.runner import ClaudeRunner
 from .claude.types import MessageType, StreamEvent, ToolCategory, ToolUseEvent
 from .cog_loader import load_custom_cogs
+from .cogs.ask_command import AskCommandCog
 from .cogs.auto_upgrade import AutoUpgradeCog, UpgradeConfig
 from .cogs.claude_chat import ClaudeChatCog
 from .cogs.collision_watch import CollisionWatchCog
 from .cogs.context_links import ContextLinksCog
 from .cogs.event_processor import EventProcessor
+from .cogs.notification_dispatch import NotificationDispatchCog
 from .cogs.run_config import RunConfig
 from .cogs.scheduler import SchedulerCog
 from .cogs.session_manage import SessionManageCog
@@ -53,6 +55,7 @@ __all__ = [
     "SessionRegistry",
     "SessionManageCog",
     "CollisionWatchCog",
+    "AskCommandCog",
     "SkillCommandCog",
     "SessionRepository",
     "SettingsRepository",
@@ -67,6 +70,7 @@ __all__ = [
     "AutoUpgradeCog",
     "UpgradeConfig",
     # Scheduling
+    "NotificationDispatchCog",
     "SchedulerCog",
     "ScheduledTaskRepository",
     "DrainAware",

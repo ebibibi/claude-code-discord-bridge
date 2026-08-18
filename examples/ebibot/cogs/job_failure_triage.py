@@ -32,6 +32,7 @@ from claude_discord.cogs.headless_backend import (
     build_headless_runner,
 )
 from claude_discord.cogs.run_config import RunConfig
+from claude_discord.thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -179,7 +180,7 @@ class JobFailureTriageCog(commands.Cog):
 
         thread = await alert_message.create_thread(
             name=f"{title_emoji} Triage: {job_name}"[:100],
-            auto_archive_duration=1440,
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
         )
 
         owner_id = os.environ.get("DISCORD_OWNER_ID", "")

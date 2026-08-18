@@ -176,6 +176,54 @@ def _make_api_server() -> MagicMock:
     return server
 
 
+@pytest.mark.asyncio
+async def test_setup_bridge_registers_notification_dispatcher(tmp_path: object) -> None:
+    """An API server means scheduled notifications must have a delivery loop.
+
+    Regression: /api/schedule accepted and stored notifications that nothing
+    ever read back, because the only send loop lived in a consumer's custom
+    Cog and pointed at a different database file.
+    """
+    from claude_discord.database.notification_repo import NotificationRepository
+
+    bot = _make_bot()
+    api_server = _make_api_server()
+    api_server.repo = MagicMock(spec=NotificationRepository)
+
+    await setup_bridge(
+        bot,
+        _make_runner(),
+        api_server=api_server,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        enable_scheduler=False,
+    )
+
+    dispatchers = [
+        call.args[0]
+        for call in bot.add_cog.call_args_list
+        if call.args[0].__class__.__name__ == "NotificationDispatchCog"
+    ]
+    assert len(dispatchers) == 1, "an API server must come with exactly one dispatcher"
+    # Sharing the object — not a matching path — is what prevents the drift.
+    assert dispatchers[0].repo is api_server.repo
+
+
+@pytest.mark.asyncio
+async def test_setup_bridge_skips_dispatcher_without_api_server(tmp_path: object) -> None:
+    """No API server means nothing writes notifications, so nothing polls."""
+    bot = _make_bot()
+
+    await setup_bridge(
+        bot,
+        _make_runner(),
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        enable_scheduler=False,
+    )
+
+    cog_names = [call.args[0].__class__.__name__ for call in bot.add_cog.call_args_list]
+    assert "NotificationDispatchCog" not in cog_names
+
+
 def test_apply_to_api_server_wires_task_and_lounge_repos(tmp_path: object) -> None:
     """apply_to_api_server should set task_repo and lounge_repo on the ApiServer."""
     from claude_discord.database.lounge_repo import LoungeRepository

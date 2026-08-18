@@ -24,6 +24,7 @@ from ..cogs._run_helper import run_claude_with_config
 from ..cogs.headless_backend import build_headless_runner
 from ..cogs.run_config import RunConfig
 from ..concurrency import SessionRegistry
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 if TYPE_CHECKING:
     from claude_code_core.backend import SessionBackend
@@ -146,7 +147,10 @@ class WebhookTriggerCog(commands.Cog):
         trigger: WebhookTrigger,
     ) -> None:
         """Execute a matched trigger via Claude Code."""
-        thread = await message.create_thread(name=prefix[:100])
+        thread = await message.create_thread(
+            name=prefix[:100],
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+        )
 
         runner = await build_headless_runner(
             self.runner,

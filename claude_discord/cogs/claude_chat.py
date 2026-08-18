@@ -43,6 +43,7 @@ from ..discord_ui.thread_context import DEFAULT_DAYS, build_recent_transcript
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.thread_renamer import suggest_title
 from ..discord_ui.views import RewindSelectView, StopView
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 from ._run_helper import run_claude_with_config
 from .prompt_builder import build_prompt_and_images, wants_file_attachment
 from .run_config import RunConfig
@@ -79,6 +80,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "model": "🤖 Model",
     "backend": "🤖 Model",
     "engine-status": "🤖 Model",
+    "ask": "🤖 Model",  # one anonymized question to an external model
     "effort": "⚡ Effort",
     "tools-show": "🔧 Advanced",
     "tools-set": "🔧 Advanced",
@@ -748,7 +750,10 @@ class ClaudeChatCog(commands.Cog):
             )
         else:
             thread_name = message.content[:100] if message.content else "Claude Chat"
-            thread = await message.create_thread(name=thread_name)
+            thread = await message.create_thread(
+                name=thread_name,
+                auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+            )
             if self._auto_rename_threads and message.content:
                 asyncio.create_task(self._background_rename_thread(thread, message.content))
             await self._run_claude(
@@ -833,7 +838,7 @@ class ClaudeChatCog(commands.Cog):
         thread = await channel.create_thread(
             name=name,
             type=discord.ChannelType.public_thread,
-            auto_archive_duration=60,
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
         )
         # Post the prompt so StatusManager has a Message to add reactions to.
         # Long prompts (e.g. an ingested Teams thread) exceed Discord's

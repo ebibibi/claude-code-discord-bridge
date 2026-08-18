@@ -38,6 +38,7 @@ from claude_discord.cogs.headless_backend import (
     build_headless_runner,
 )
 from claude_discord.cogs.run_config import RunConfig
+from claude_discord.thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,7 @@ class AlertResponderCog(commands.Cog):
         # Create a thread on the alert message
         thread = await alert_message.create_thread(
             name=f"🔍 Investigation: {alert_message.content[:50]}",
-            auto_archive_duration=1440,  # 24 hours
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
         )
 
         owner_id = os.environ.get("DISCORD_OWNER_ID", "")
