@@ -90,6 +90,32 @@ class TestStopViewButtonClick:
         assert "stopped" in embed.title.lower()
 
     @pytest.mark.asyncio
+    async def test_click_still_interrupts_when_message_deleted(self) -> None:
+        """interrupt() is called even if the message was deleted before clicking Stop."""
+        runner = _make_runner()
+        view = StopView(runner)
+        interaction = _make_interaction()
+        interaction.response.edit_message = AsyncMock(
+            side_effect=discord.NotFound(MagicMock(), "Unknown Message")
+        )
+
+        await _click(view, interaction)
+
+        runner.interrupt.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_click_no_crash_when_edit_raises_http_exception(self) -> None:
+        """stop_button does not propagate HTTPException from edit_message."""
+        runner = _make_runner()
+        view = StopView(runner)
+        interaction = _make_interaction()
+        interaction.response.edit_message = AsyncMock(
+            side_effect=discord.HTTPException(MagicMock(), "rate limited")
+        )
+
+        await _click(view, interaction)  # should not raise
+
+    @pytest.mark.asyncio
     async def test_double_click_is_noop(self) -> None:
         """A second click after the first is ignored (idempotent)."""
         runner = _make_runner()

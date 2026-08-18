@@ -23,9 +23,12 @@ from dataclasses import replace
 
 import discord
 
+from claude_code_core.frontend import Notice, NoticeLevel
+
 from ..discord_ui.ask_handler import collect_ask_answers
 from ..discord_ui.embeds import error_embed, timeout_embed
 from ..lounge import build_lounge_prompt
+from ..pr_completion_gate import GitHubPrCompletionGate, build_completion_prompt
 from .event_processor import EventProcessor
 from .run_config import RunConfig
 
@@ -36,6 +39,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _global_semaphore: asyncio.Semaphore | None = None
 _max_concurrent: int = 3
+_pr_completion_gate: GitHubPrCompletionGate | None = None
 
 
 def configure_session_limit(max_concurrent: int) -> None:
@@ -48,6 +52,12 @@ def configure_session_limit(max_concurrent: int) -> None:
     global _global_semaphore, _max_concurrent  # noqa: PLW0603
     _max_concurrent = max_concurrent
     _global_semaphore = asyncio.Semaphore(max_concurrent)
+
+
+def configure_pr_completion_gate(owner: str | None) -> None:
+    """Enable the owner-PR completion gate, or disable it with an empty owner."""
+    global _pr_completion_gate  # noqa: PLW0603
+    _pr_completion_gate = GitHubPrCompletionGate(owner) if owner else None
 
 
 # ---------------------------------------------------------------------------
@@ -119,10 +129,10 @@ def _truncate_result(content: str) -> str:
 async def _build_system_context(config: RunConfig) -> str | None:
     """Build ephemeral system context from AI Lounge and concurrency notice.
 
-    Returns a string to inject via --append-system-prompt, or None if no context
-    is available. Injecting as a system prompt (rather than prepending to the user
-    message) prevents this ephemeral metadata from accumulating in session history,
-    which would otherwise cause "Prompt is too long" errors over long conversations.
+    Returns a string to inject as backend-specific developer/system instructions, or
+    None if no context is available. Keeping it separate from the user message prevents
+    this ephemeral metadata from accumulating in session history, which would otherwise
+    cause "Prompt is too long" errors over long conversations.
     """
     parts: list[str] = []
 
@@ -130,7 +140,9 @@ async def _build_system_context(config: RunConfig) -> str | None:
     if config.lounge_repo is not None:
         try:
             recent = await config.lounge_repo.get_recent(limit=10)
-            lounge_context = build_lounge_prompt(recent, current_thread_id=config.thread.id)
+            lounge_context = build_lounge_prompt(
+                recent, current_thread_id=config.surface.thread_key
+            )
             parts.append(lounge_context)
             logger.debug("Lounge context built (%d recent message(s))", len(recent))
         except Exception:
@@ -138,19 +150,22 @@ async def _build_system_context(config: RunConfig) -> str | None:
 
     # Layer 1 + 2: Register session and build concurrency notice.
     if config.registry is not None:
-        config.registry.register(config.thread.id, config.prompt[:100], config.runner.working_dir)
-        others = config.registry.list_others(config.thread.id)
-        notice = config.registry.build_concurrency_notice(config.thread.id)
+        config.registry.register(
+            config.surface.thread_key, config.prompt[:100], config.runner.working_dir
+        )
+        others = config.registry.list_others(config.surface.thread_key)
+        notice = config.registry.build_concurrency_notice(config.surface.thread_key)
         parts.append(notice)
         logger.info(
             "Concurrency notice built for thread %d (%d other active session(s), dir=%s)",
-            config.thread.id,
+            config.surface.thread_key,
             len(others),
             config.runner.working_dir or "(default)",
         )
     else:
         logger.debug(
-            "No session registry — concurrency notice skipped for thread %d", config.thread.id
+            "No session registry — concurrency notice skipped for thread %d",
+            config.surface.thread_key,
         )
 
     # File delivery marker: always injected so Claude knows the per-thread
@@ -159,7 +174,7 @@ async def _build_system_context(config: RunConfig) -> str | None:
     from .event_processor import _attachment_marker_name
 
     wd = config.runner.working_dir or "your current working directory"
-    marker = _attachment_marker_name(config.thread.id)
+    marker = _attachment_marker_name(config.surface.thread_key)
     parts.append(
         "## File Delivery\n"
         "When you need to send files to Discord, use your Bash tool to append "
@@ -167,13 +182,16 @@ async def _build_system_context(config: RunConfig) -> str | None:
         f"  {wd}/{marker}\n"
         f"Example: `echo /absolute/path/to/file >> {wd}/{marker}`\n"
         "The bot will attach those files when this session ends.\n"
-        "Only include files the user explicitly asked to receive."
+        "When local instructions require Discord attachment for a substantial "
+        "written deliverable, save the final text as a Markdown file and append "
+        "that file path here. Otherwise, only include files the user explicitly "
+        "asked to receive."
     )
 
     # Post-compact guardrail: prevent auto-execution of "pending tasks" from summary.
     if config.post_compact_rerun:
         parts.append(_POST_COMPACT_GUARDRAIL)
-        logger.info("Post-compact guardrail injected for thread %d", config.thread.id)
+        logger.info("Post-compact guardrail injected for thread %d", config.surface.thread_key)
 
     return "\n\n".join(parts) if parts else None
 
@@ -191,12 +209,12 @@ async def _cleanup_session_worktree(config: RunConfig) -> None:
     try:
         result = await asyncio.to_thread(
             config.worktree_manager.cleanup_for_thread,
-            config.thread.id,
+            config.surface.thread_key,
         )
         if result.removed:
             logger.info(
                 "Cleaned up session worktree for thread %d: %s",
-                config.thread.id,
+                config.surface.thread_key,
                 result.path,
             )
         elif result.reason == "worktree directory does not exist":
@@ -205,20 +223,28 @@ async def _cleanup_session_worktree(config: RunConfig) -> None:
         else:
             logger.warning(
                 "Could not clean up worktree for thread %d (%s): %s",
-                config.thread.id,
+                config.surface.thread_key,
                 result.path,
                 result.reason,
             )
             # Notify the Discord thread if there are uncommitted changes
             if "uncommitted changes" in result.reason:
-                with contextlib.suppress(discord.HTTPException):
-                    await config.thread.send(
-                        f"⚠️ **Worktree not cleaned up** — `{result.path}` has uncommitted "
-                        f"changes. Please commit or stash them, then run:\n"
-                        f"```\ngit worktree remove {result.path}\n```"
+                with contextlib.suppress(Exception):
+                    await config.surface.send_notice(
+                        Notice(
+                            level=NoticeLevel.WARNING,
+                            title="Worktree not cleaned up",
+                            body=(
+                                f"`{result.path}` has uncommitted changes. Please commit or "
+                                f"stash them, then run:\n```\ngit worktree remove "
+                                f"{result.path}\n```"
+                            ),
+                        )
                     )
     except Exception:
-        logger.exception("Unexpected error during worktree cleanup for thread %d", config.thread.id)
+        logger.exception(
+            "Unexpected error during worktree cleanup for thread %d", config.surface.thread_key
+        )
 
 
 async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
@@ -232,7 +258,7 @@ async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
     if repo is None:
         logger.warning(
             "ScheduleWakeup requested in thread %d but scheduler is disabled — ignoring",
-            config.thread.id,
+            config.surface.thread_key,
         )
         return
 
@@ -247,8 +273,8 @@ async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
         prompt = _AUTONOMOUS_LOOP_PROMPT
     reason = str(wakeup.get("reason") or "").strip()
 
-    name = f"wakeup-thread-{config.thread.id}"
-    channel_id = getattr(config.thread, "parent_id", None) or config.thread.id
+    name = f"wakeup-thread-{config.surface.thread_key}"
+    channel_id = getattr(config.thread, "parent_id", None) or config.surface.thread_key
 
     try:
         # Replace any previous wakeup for this thread — last call wins.
@@ -260,21 +286,82 @@ async def _schedule_wakeup(config: RunConfig, wakeup: dict) -> None:
             channel_id=channel_id,
             working_dir=getattr(config.runner, "working_dir", None),
             run_immediately=False,
-            thread_id=config.thread.id,
+            thread_id=config.surface.thread_key,
             one_shot=True,
         )
     except Exception:
-        logger.exception("Failed to schedule wakeup task for thread %d", config.thread.id)
-        with contextlib.suppress(discord.HTTPException):
-            await config.thread.send("-# ⚠️ Wakeup could not be scheduled (scheduler error)")
+        logger.exception("Failed to schedule wakeup task for thread %d", config.surface.thread_key)
+        with contextlib.suppress(Exception):
+            await config.surface.send_notice(
+                Notice(level=NoticeLevel.WARNING, body="Wakeup could not be scheduled")
+            )
         return
 
     label = f"⏰ Wakeup scheduled in {delay}s"
     if reason:
         label += f" — {reason}"
-    logger.info("Wakeup scheduled for thread %d in %ds", config.thread.id, delay)
+    logger.info("Wakeup scheduled for thread %d in %ds", config.surface.thread_key, delay)
     with contextlib.suppress(discord.HTTPException):
-        await config.thread.send(f"-# {label}")
+        await config.surface.send_notice(Notice(level=NoticeLevel.SUBTLE, body=label))
+
+
+async def _get_pr_completion_prompt(
+    config: RunConfig,
+    *,
+    session_id: str | None,
+    final_error: str | None,
+) -> str | None:
+    """Return one automatic continuation prompt for owner PRs left open.
+
+    GitHub availability must not turn a successful model response into a failed
+    Discord turn, so lookup failures are visible but fail open. The rerun flag
+    provides a hard one-continuation limit when a PR is genuinely blocked.
+    """
+    gate = _pr_completion_gate
+    if (
+        gate is None
+        or config.pr_completion_gate_rerun
+        or session_id is None
+        or final_error is not None
+    ):
+        return None
+
+    try:
+        prs = await gate.find_for_thread(config.surface.thread_key)
+    except Exception:
+        logger.warning(
+            "PR completion gate unavailable for thread %d",
+            config.surface.thread_key,
+            exc_info=True,
+        )
+        with contextlib.suppress(Exception):
+            await config.surface.send_notice(
+                Notice(
+                    level=NoticeLevel.WARNING,
+                    title="PR completion gate unavailable",
+                    body=(
+                        "GitHub could not be checked; this turn is being returned "
+                        "without enforcement."
+                    ),
+                )
+            )
+        return None
+
+    if not prs:
+        return None
+
+    with contextlib.suppress(Exception):
+        await config.surface.send_notice(
+            Notice(
+                level=NoticeLevel.WARNING,
+                title="Open owner PR detected — continuing",
+                body=(
+                    f"{len(prs)} non-draft PR(s) from session/{config.surface.thread_key} "
+                    "are still open. The same agent will finish or report a concrete blocker."
+                ),
+            )
+        )
+    return build_completion_prompt(prs)
 
 
 async def run_claude_with_config(config: RunConfig) -> str | None:
@@ -300,7 +387,7 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
     # When system_context is present a fresh clone is created above, making the
     # original config.runner a "dead" runner with no process.  Without this
     # update the Stop button would send SIGINT to that dead runner and have no
-    # effect.  See: https://github.com/ebibibi/claude-code-discord-bridge/issues/174
+    # effect.  See: https://github.com/ebibibi/ebi-agent-chat-relay/issues/174
     if runner is not config.runner:
         if config.stop_view is not None:
             config.stop_view.update_runner(runner)
@@ -309,7 +396,7 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
         # calls interrupt() on the runner that actually owns the subprocess.
         # Without this, compact_boundary and AskUserQuestion interrupt the
         # original (process-less) runner — a no-op that leaves Claude running
-        # invisibly.  See: https://github.com/ebibibi/claude-code-discord-bridge/issues/306
+        # invisibly.  See: https://github.com/ebibibi/ebi-agent-chat-relay/issues/306
         config = replace(config, runner=runner)
 
     processor = EventProcessor(config)
@@ -317,10 +404,15 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
     # --- Session slot limiter (global semaphore) ---
     sem = _global_semaphore
     if sem is not None and sem.locked():
-        with contextlib.suppress(discord.HTTPException):
-            await config.thread.send(
-                f"\u23f3 Waiting for a free session slot\u2026 "
-                f"({_max_concurrent} max sessions running)"
+        with contextlib.suppress(Exception):
+            await config.surface.send_notice(
+                Notice(
+                    level=NoticeLevel.SUBTLE,
+                    body=(
+                        f"\u23f3 Waiting for a free session slot\u2026 "
+                        f"({_max_concurrent} max sessions running)"
+                    ),
+                )
             )
     if sem is not None:
         await sem.acquire()
@@ -331,22 +423,27 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
                 continue
             await processor.process(event)
     except Exception as exc:
-        logger.exception("Error running Claude CLI for thread %d", config.thread.id)
+        logger.exception("Error running Claude CLI for thread %d", config.surface.thread_key)
         with contextlib.suppress(Exception):
             detail = f"{type(exc).__name__}: {exc}"
-            await config.thread.send(
-                embed=error_embed(f"An unexpected error occurred.\n```\n{detail}\n```")
+            await config.surface.send_notice(
+                Notice(
+                    level=NoticeLevel.ERROR,
+                    title="Error",
+                    body=f"An unexpected error occurred.\n```\n{detail}\n```",
+                )
             )
         if config.status:
             with contextlib.suppress(Exception):
                 await config.status.set_error()
+        await _emit_result_sink(config, None, f"{type(exc).__name__}: {exc}")
         return processor.session_id
     finally:
         if sem is not None:
             sem.release()
         await processor.finalize()
         if config.registry is not None:
-            config.registry.unregister(config.thread.id)
+            config.registry.unregister(config.surface.thread_key)
         if config.worktree_manager is not None:
             await _cleanup_session_worktree(config)
 
@@ -384,7 +481,45 @@ async def run_claude_with_config(config: RunConfig) -> str | None:
             )
             return await run_claude_with_config(config.with_prompt(answer_prompt))
 
+    # A PR created by this Discord thread is an intermediate artifact, not a
+    # terminal outcome. Resume the same agent once so green owner PRs are
+    # merged and verified instead of being delegated back to the user.
+    session_id = processor.session_id or config.session_id
+    completion_prompt = await _get_pr_completion_prompt(
+        config,
+        session_id=session_id,
+        final_error=processor.final_error,
+    )
+    if completion_prompt is not None:
+        completion_config = replace(
+            config,
+            prompt=completion_prompt,
+            session_id=session_id,
+            pr_completion_gate_rerun=True,
+        )
+        return await run_claude_with_config(completion_config)
+
+    # Terminal path. The compact/ask reruns above delegate to a nested
+    # run_claude_with_config call, which reaches its own terminal return — so the
+    # sink fires exactly once, from the outermost completed run. An in-stream
+    # RESULT error (e.g. API 400/429) is reported as an error, not an empty
+    # "done", so the caller can tell a failure from an empty answer.
+    await _emit_result_sink(config, processor.final_assistant_text, processor.final_error)
     return processor.session_id
+
+
+async def _emit_result_sink(config: RunConfig, text: str | None, error: str | None) -> None:
+    """Invoke config.result_sink once with the run's terminal outcome.
+
+    A sink failure must never break the Claude run, so all exceptions are
+    suppressed and logged.
+    """
+    if config.result_sink is None:
+        return
+    try:
+        await config.result_sink(text, error)
+    except Exception:
+        logger.exception("result_sink callback failed for thread %d", config.surface.thread_key)
 
 
 async def run_claude_in_thread(

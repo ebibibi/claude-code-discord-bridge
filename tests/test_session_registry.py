@@ -154,3 +154,18 @@ class TestConcurrencyNotice:
         registry.register(1001, "my task")
         notice = registry.build_concurrency_notice(1001)
         assert "[this thread]" in notice
+
+    def test_notice_warns_cwd_not_persistent_across_messages(self) -> None:
+        """Each Discord message spawns a fresh subprocess, so the shell's
+        working directory does NOT survive between turns.
+
+        Agents that ``cd`` in one message and run a relative-path script in a
+        later message silently execute in the wrong directory. The notice must
+        warn about this and tell agents to use absolute paths.
+        """
+        registry = SessionRegistry()
+        registry.register(1001, "my task")
+        notice = registry.build_concurrency_notice(1001).lower()
+        # Warns that cwd / working directory is not preserved between messages
+        assert "cwd" in notice or "working directory" in notice
+        assert "absolute path" in notice

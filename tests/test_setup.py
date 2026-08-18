@@ -63,6 +63,48 @@ async def test_setup_bridge_registers_scheduler_when_enabled(tmp_path: object) -
 
 
 @pytest.mark.asyncio
+async def test_setup_bridge_wires_backend_settings_into_components_and_scheduler(
+    tmp_path: object,
+) -> None:
+    """Headless cogs should receive the same backend resolver as chat commands."""
+    from claude_discord.backend_factory import BackendFactory
+
+    bot = _make_bot()
+    runner = _make_runner()
+    runner.model = "sonnet"
+    factory = BackendFactory(
+        claude_command="claude",
+        codex_command="codex",
+        permission_mode="acceptEdits",
+        working_dir=None,
+        timeout_seconds=300,
+        dangerously_skip_permissions=False,
+        allowed_tools=None,
+        append_system_prompt=None,
+        effort=None,
+    )
+
+    result = await setup_bridge(
+        bot,
+        runner,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        task_db_path=str(tmp_path / "tasks.db"),  # type: ignore[operator]
+        enable_scheduler=True,
+        backend_factory=factory,
+    )
+
+    assert result.backend_factory is factory
+    assert result.backend_settings is not None
+    scheduler_cog = next(
+        call.args[0]
+        for call in bot.add_cog.call_args_list
+        if call.args[0].__class__.__name__ == "SchedulerCog"
+    )
+    assert scheduler_cog.backend_factory is factory
+    assert scheduler_cog.backend_settings is result.backend_settings
+
+
+@pytest.mark.asyncio
 async def test_setup_bridge_skips_scheduler_when_disabled(tmp_path: object) -> None:
     """setup_bridge should NOT register SchedulerCog when enable_scheduler=False."""
     bot = _make_bot()
@@ -96,6 +138,11 @@ async def test_setup_bridge_returns_components(tmp_path: object) -> None:
     assert isinstance(result, BridgeComponents)
     assert result.session_repo is not None
     assert result.session_repo.db_path == str(tmp_path / "sessions.db")  # type: ignore[operator]
+    assert result.frontend_threads is not None
+    assert result.ask_repo is not None
+    assert result.usage_repo is not None
+    assert result.frontend is not None
+    assert result.frontend.name == "multi"
 
 
 @pytest.mark.asyncio
@@ -129,6 +176,54 @@ def _make_api_server() -> MagicMock:
     return server
 
 
+@pytest.mark.asyncio
+async def test_setup_bridge_registers_notification_dispatcher(tmp_path: object) -> None:
+    """An API server means scheduled notifications must have a delivery loop.
+
+    Regression: /api/schedule accepted and stored notifications that nothing
+    ever read back, because the only send loop lived in a consumer's custom
+    Cog and pointed at a different database file.
+    """
+    from claude_discord.database.notification_repo import NotificationRepository
+
+    bot = _make_bot()
+    api_server = _make_api_server()
+    api_server.repo = MagicMock(spec=NotificationRepository)
+
+    await setup_bridge(
+        bot,
+        _make_runner(),
+        api_server=api_server,
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        enable_scheduler=False,
+    )
+
+    dispatchers = [
+        call.args[0]
+        for call in bot.add_cog.call_args_list
+        if call.args[0].__class__.__name__ == "NotificationDispatchCog"
+    ]
+    assert len(dispatchers) == 1, "an API server must come with exactly one dispatcher"
+    # Sharing the object — not a matching path — is what prevents the drift.
+    assert dispatchers[0].repo is api_server.repo
+
+
+@pytest.mark.asyncio
+async def test_setup_bridge_skips_dispatcher_without_api_server(tmp_path: object) -> None:
+    """No API server means nothing writes notifications, so nothing polls."""
+    bot = _make_bot()
+
+    await setup_bridge(
+        bot,
+        _make_runner(),
+        session_db_path=str(tmp_path / "sessions.db"),  # type: ignore[operator]
+        enable_scheduler=False,
+    )
+
+    cog_names = [call.args[0].__class__.__name__ for call in bot.add_cog.call_args_list]
+    assert "NotificationDispatchCog" not in cog_names
+
+
 def test_apply_to_api_server_wires_task_and_lounge_repos(tmp_path: object) -> None:
     """apply_to_api_server should set task_repo and lounge_repo on the ApiServer."""
     from claude_discord.database.lounge_repo import LoungeRepository
@@ -152,32 +247,24 @@ def test_apply_to_api_server_wires_task_and_lounge_repos(tmp_path: object) -> No
     assert api_server.lounge_repo is lounge_repo
 
 
-def test_apply_to_api_server_wires_run_feature() -> None:
-    """apply_to_api_server should wire run_repo, backend_factory, backend_settings."""
+def test_apply_to_api_server_wires_ingest_repo() -> None:
+    """apply_to_api_server should wire the ingest result repository."""
+    from claude_discord.database.ingest_repo import IngestResultRepository
     from claude_discord.database.repository import SessionRepository
-    from claude_discord.database.run_repo import RunRepository
 
     session_repo = MagicMock(spec=SessionRepository)
-    run_repo = MagicMock(spec=RunRepository)
-    backend_factory = MagicMock()
-    backend_settings = MagicMock()
+    ingest_repo = MagicMock(spec=IngestResultRepository)
 
     components = BridgeComponents(
         session_repo=session_repo,
-        run_repo=run_repo,
-        backend_factory=backend_factory,
-        backend_settings=backend_settings,
+        ingest_repo=ingest_repo,
     )
     api_server = _make_api_server()
-    api_server.run_repo = None
-    api_server.backend_factory = None
-    api_server.backend_settings = None
+    api_server.ingest_repo = None
 
     components.apply_to_api_server(api_server)
 
-    assert api_server.run_repo is run_repo
-    assert api_server.backend_factory is backend_factory
-    assert api_server.backend_settings is backend_settings
+    assert api_server.ingest_repo is ingest_repo
 
 
 def test_apply_to_api_server_skips_none_repos() -> None:

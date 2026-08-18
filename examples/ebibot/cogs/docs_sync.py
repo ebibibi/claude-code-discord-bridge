@@ -14,6 +14,10 @@ from __future__ import annotations
 
 import os
 
+from claude_discord.cogs.headless_backend import (
+    backend_factory_from_components,
+    backend_settings_from_components,
+)
 from claude_discord.cogs.webhook_trigger import WebhookTrigger, WebhookTriggerCog
 
 _COMMON_HEADER = """\
@@ -179,5 +183,7 @@ async def setup(bot: object, runner: object, components: object) -> None:
         runner=runner,  # type: ignore[arg-type]
         triggers=DOCS_SYNC_TRIGGERS,
         channel_ids=channel_ids or None,
+        backend_factory=backend_factory_from_components(components),
+        backend_settings=backend_settings_from_components(components),
     )
     await bot.add_cog(cog)  # type: ignore[union-attr]

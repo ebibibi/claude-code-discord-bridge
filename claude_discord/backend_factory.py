@@ -21,8 +21,18 @@ logger = logging.getLogger(__name__)
 
 # Sensible per-backend defaults (mirror the CLIs own defaults so users
 # do not need to pick a model just to try a backend).
-DEFAULT_MODEL = {"claude": "sonnet", "codex": "gpt-5.4"}
-DEFAULT_COMMAND = {"claude": "claude", "codex": "codex"}
+#
+# ``codex`` is intentionally ``None``: when no model is configured we omit
+# ``--model`` entirely so the Codex CLI uses its own default (the ``model``
+# key in ~/.codex/config.toml, currently gpt-5.6-sol). Hard-coding a version
+# here only goes stale as the Codex console default moves.
+DEFAULT_MODEL: dict[str, str | None] = {
+    "claude": "sonnet",
+    "codex": None,
+    "local": None,
+    "agui": None,
+}
+DEFAULT_COMMAND = {"claude": "claude", "codex": "codex", "local": "codex", "agui": "ag-ui"}
 
 
 class BackendFactory:
@@ -42,6 +52,8 @@ class BackendFactory:
         effort: str | None,
         api_port: int | None = None,
         api_secret: str | None = None,
+        agui_url: str | None = None,
+        agui_token: str | None = None,
     ) -> None:
         self.claude_command = claude_command or DEFAULT_COMMAND["claude"]
         self.codex_command = codex_command or DEFAULT_COMMAND["codex"]
@@ -54,15 +66,26 @@ class BackendFactory:
         self.effort = effort
         self.api_port = api_port
         self.api_secret = api_secret
+        self.agui_url = agui_url
+        self.agui_token = agui_token
 
     def command_for(self, backend: str) -> str:
         if backend == "claude":
             return self.claude_command
-        if backend == "codex":
+        if backend in ("codex", "local"):
+            # The local backend is the same CLI, pointed at a ccdb-owned
+            # CODEX_HOME that pins it to a model on your own hardware.
             return self.codex_command
+        if backend == "agui":
+            return DEFAULT_COMMAND["agui"]
         raise ValueError(f"Unknown backend: {backend!r}")
 
-    def default_model_for(self, backend: str) -> str:
+    def default_model_for(self, backend: str) -> str | None:
+        """Return the built-in default model, or ``None`` to defer to the CLI.
+
+        ``None`` (codex) means "do not pass ``--model``" so the Codex CLI uses
+        its own configured default.
+        """
         return DEFAULT_MODEL.get(backend, DEFAULT_MODEL["claude"])
 
     def build(
@@ -83,14 +106,23 @@ class BackendFactory:
             "dangerously_skip_permissions": self.dangerously_skip_permissions,
             "allowed_tools": self.allowed_tools,
         }
+        if backend == "agui":
+            if not self.agui_url:
+                raise ValueError("CCDB_AGUI_URL is required for the AG-UI backend")
+            kwargs["endpoint_url"] = self.agui_url
+            if self.agui_token:
+                kwargs["auth_token"] = self.agui_token
         if thread_id is not None:
             kwargs["thread_id"] = thread_id
-        # Only ClaudeRunner accepts these — pass via kwargs and let create_backend
-        # forward them; CodexRunner.__init__ swallows unknown kwargs via **_kwargs.
-        if self.append_system_prompt is not None:
-            kwargs["append_system_prompt"] = self.append_system_prompt
-        if self.effort is not None:
-            kwargs["effort"] = self.effort
+        # ``append_system_prompt`` and the env-level ``effort`` are Claude-only
+        # defaults. We deliberately do NOT forward them to Codex: Codex effort
+        # is resolved per-backend from BackendSettings at spawn time (and its
+        # valid values differ — e.g. Claude's "max" is not a Codex level).
+        if backend == "claude":
+            if self.append_system_prompt is not None:
+                kwargs["append_system_prompt"] = self.append_system_prompt
+            if self.effort is not None:
+                kwargs["effort"] = self.effort
         if self.api_port is not None:
             kwargs["api_port"] = self.api_port
         if self.api_secret is not None:

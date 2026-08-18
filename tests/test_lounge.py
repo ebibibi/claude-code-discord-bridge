@@ -233,6 +233,14 @@ class TestBuildLoungePrompt:
         assert "thread_id" in result
         assert "DISCORD_THREAD_ID" in result
 
+    def test_prompt_draws_the_line_between_lounge_and_apis(self) -> None:
+        """The prompt tells sessions to use the APIs for discovery/locking, not the lounge."""
+        result = build_lounge_prompt([])
+        assert "/api/sessions" in result
+        assert "/api/claims" in result
+        # And it names the lounge's own remaining job (broadcast / intent).
+        assert "BROADCAST" in result
+
     def test_this_thread_marker_for_matching_thread(self) -> None:
         """Messages from current thread are annotated with [this thread]."""
         messages = [
@@ -422,6 +430,55 @@ class TestLoungeApiEndpoints:
         call_args = channel.send.call_args[0][0]
         assert "Claude" in call_args
         assert "Hello Discord!" in call_args
+
+    async def test_post_lounge_stores_but_does_not_mirror_when_channel_unset(
+        self,
+        notif_repo: NotificationRepository,
+        lounge_repo: LoungeRepository,
+        bot: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Mirror OFF: the message is stored (AI layer intact) with no Discord send."""
+        # lounge_channel_id=None falls back to COORDINATION_CHANNEL_ID; clear it so
+        # "off" really means off even when the test process has the env var set.
+        monkeypatch.delenv("COORDINATION_CHANNEL_ID", raising=False)
+        api = ApiServer(
+            repo=notif_repo,
+            bot=bot,
+            default_channel_id=12345,
+            host="127.0.0.1",
+            port=0,
+            lounge_repo=lounge_repo,
+            lounge_channel_id=None,  # mirror off
+        )
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/lounge", json={"message": "db only", "label": "x"})
+            assert resp.status == 201
+            assert (await lounge_repo.get_recent(limit=1))[0].message == "db only"
+            bot.get_channel.return_value.send.assert_not_called()
+        finally:
+            await client.close()
+
+    async def test_deleted_mirror_channel_disables_itself(
+        self, api_client_with_lounge: TestClient, bot: MagicMock
+    ) -> None:
+        """A deleted channel disables the mirror instead of warning on every post."""
+        import discord
+
+        bot.get_channel.return_value = None
+        bot.fetch_channel = AsyncMock(
+            side_effect=discord.NotFound(MagicMock(status=404), "Unknown Channel")
+        )
+
+        first = await api_client_with_lounge.post("/api/lounge", json={"message": "one"})
+        second = await api_client_with_lounge.post("/api/lounge", json={"message": "two"})
+
+        assert first.status == 201 and second.status == 201  # posts still succeed (DB saved)
+        # The mirror gave up after the first NotFound rather than retrying.
+        assert bot.fetch_channel.await_count == 1
 
     async def test_lounge_503_when_not_configured(self, api_client_no_lounge: TestClient) -> None:
         """GET and POST return 503 when lounge_repo is not wired."""

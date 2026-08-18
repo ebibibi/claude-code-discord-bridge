@@ -32,7 +32,13 @@ import discord
 from discord.ext import commands
 
 from claude_discord.cogs._run_helper import run_claude_with_config
+from claude_discord.cogs.headless_backend import (
+    backend_factory_from_components,
+    backend_settings_from_components,
+    build_headless_runner,
+)
 from claude_discord.cogs.run_config import RunConfig
+from claude_discord.thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +132,7 @@ class AlertResponderCog(commands.Cog):
         # Create a thread on the alert message
         thread = await alert_message.create_thread(
             name=f"🔍 Investigation: {alert_message.content[:50]}",
-            auto_archive_duration=1440,  # 24 hours
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
         )
 
         owner_id = os.environ.get("DISCORD_OWNER_ID", "")
@@ -141,7 +147,13 @@ class AlertResponderCog(commands.Cog):
         registry = getattr(self.bot, "session_registry", None)
         lounge_repo = getattr(self.components, "lounge_repo", None)
 
-        cloned_runner = self.runner.clone()
+        backend_settings = backend_settings_from_components(self.components)
+        cloned_runner = await build_headless_runner(
+            self.runner,
+            factory=backend_factory_from_components(self.components),
+            settings=backend_settings,
+            thread_id=thread.id,
+        )
 
         await run_claude_with_config(
             RunConfig(
@@ -152,6 +164,7 @@ class AlertResponderCog(commands.Cog):
                 repo=session_repo,
                 registry=registry,
                 lounge_repo=lounge_repo,
+                backend_settings=backend_settings,
             )
         )
 

@@ -100,6 +100,85 @@ def collect_discord_files(
     return result
 
 
+def collect_discord_files_from_blobs(
+    blobs: list[tuple[str, bytes]],
+    max_bytes: int = _MAX_FILE_BYTES,
+) -> list[discord.File]:
+    """Build ``discord.File`` objects from in-memory ``(filename, bytes)`` pairs.
+
+    The in-memory twin of :func:`collect_discord_files`: used when the file
+    bytes are already in hand (e.g. downloaded from a remote API and forwarded
+    over ``/api/spawn``) rather than sitting on disk.
+
+    Skips blobs that exceed *max_bytes* (default: 8 MB, Discord's non-boosted
+    upload cap). The display filename is reduced to its basename so a
+    caller-supplied path can never embed directory components.
+
+    Args:
+        blobs: ``(filename, data)`` pairs to attach.
+        max_bytes: Per-file size limit.
+
+    Returns:
+        List of ``discord.File`` objects, ready to pass to ``thread.send()``.
+    """
+    result: list[discord.File] = []
+
+    for filename, data in blobs:
+        if len(data) > max_bytes:
+            logger.info(
+                "Skipping blob exceeding size limit (%d > %d bytes): %s",
+                len(data),
+                max_bytes,
+                filename,
+            )
+            continue
+        display_name = Path(filename).name or "attachment"
+        result.append(discord.File(io.BytesIO(data), filename=display_name))
+
+    return result
+
+
+async def send_file_blobs(
+    thread: discord.Thread,
+    blobs: list[tuple[str, bytes]],
+    content: str | None = "-# 📎 Files attached",
+) -> None:
+    """Send in-memory ``(filename, bytes)`` attachments to *thread* in batches.
+
+    The in-memory twin of :func:`send_files`. Sends in batches of up to 10
+    (Discord API limit); any Discord error is suppressed so a network hiccup
+    never propagates to the caller. Does nothing when *blobs* is empty or every
+    blob fails qualification (oversized).
+
+    Args:
+        thread: Discord thread to post attachments to.
+        blobs: ``(filename, data)`` pairs to send.
+        content: Message text for the first batch (subsequent batches send no
+            text). Pass ``None`` to attach files with no accompanying message.
+    """
+    if not blobs:
+        return
+
+    files = collect_discord_files_from_blobs(blobs)
+    if not files:
+        return
+
+    for i in range(0, len(files), _MAX_FILES_PER_MESSAGE):
+        batch = files[i : i + _MAX_FILES_PER_MESSAGE]
+        try:
+            await thread.send(
+                content=content if i == 0 else None,
+                files=batch,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to send blob attachment batch %d/%d to Discord",
+                i // _MAX_FILES_PER_MESSAGE + 1,
+                -(-len(files) // _MAX_FILES_PER_MESSAGE),
+                exc_info=True,
+            )
+
+
 async def send_files(
     thread: discord.Thread,
     file_paths: list[str],

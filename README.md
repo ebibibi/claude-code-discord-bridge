@@ -1,17 +1,55 @@
-# Claude & Codex Discord Bridge
+# Ebi Agent Chat Relay
 
-*Package name: `claude-code-discord-bridge` (kebab-case)*
+*Formerly Claude Code Discord Bridge, then Claude & Codex Discord Bridge. Every existing
+identifier still works: the package is `claude-code-discord-bridge` (kebab-case), the
+command is `ccdb`, and `ccdb` remains the short name used throughout this document.*
 
-[![CI](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/claude-code-discord-bridge/actions/workflows/codeql.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![CI](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/ci.yml/badge.svg)](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/codeql.yml/badge.svg)](https://github.com/ebibibi/ebi-agent-chat-relay/actions/workflows/codeql.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Use Claude Code _or_ OpenAI Codex on your phone. Multiple threads. All at once. Real development included.**
+**Run coding agents from Discord or Microsoft Teams. Choose Claude Code, OpenAI Codex,
+a local model, or any compatible AG-UI agent behind the same conversation.**
 
-Open Claude Code or OpenAI Codex from your smartphone's Discord app, spin up multiple threads, and run parallel development sessions — all without touching a keyboard. Each Discord thread becomes a fully isolated AI session. Work on a feature in one thread, review a PR in another, and run a background task in a third — simultaneously, even mixing backends per thread. The bridge handles all the coordination so sessions never clobber each other.
+Ebi Agent Chat Relay turns each Discord thread or Teams conversation into an isolated,
+persistent agent session. Work on a feature in one conversation, review a PR in another, and run
+a background task in a third — simultaneously. Discord can mix backends per thread; Teams uses the
+configured/global backend in v4. The relay handles coordination so sessions do not clobber each
+other.
 
-**Use your existing subscriptions. No API key wrangling.** ccdb runs on top of the official CLIs — Claude Code (included with your [Claude Pro/Max subscription](https://claude.ai/pricing)) and OpenAI Codex (included with [ChatGPT Plus/Pro/Business](https://chatgpt.com)). Switch backends with `/backend` or set a per-thread override — your team gets both AIs through Discord at predictable cost.
+**Why the name changed.** This started as a bridge between one AI and one chat app. It is now a
+relay with two production frontends and four backend choices. Three of the four words in the old
+name had stopped being true. See [ADR-0001](docs/adr/0001-adopt-ebi-agent-chat-relay.md) for the
+decision and [the rename plan](docs/RENAME_PLAN.md) for the compatibility-preserving transition.
+
+**Use your existing subscriptions, your own infrastructure, or a remote agent.** ccdb can run the
+official Claude Code and Codex CLIs, a Codex-compatible local endpoint, or an AG-UI HTTP/SSE
+agent. Discord exposes runtime `/backend` switching; Teams uses the configured backend through the
+same factory in v4.
+
+## What's new in v4
+
+Version 4 makes two independent choices explicit: **where people talk** and **which agent does the
+work**. Any supported frontend can use any supported backend.
+
+### Frontend × backend
+
+| | Claude Code | OpenAI Codex | Local | AG-UI |
+|---|---:|---:|---:|---:|
+| Discord | ✅ | ✅ | ✅ | ✅ |
+| Microsoft Teams | ✅ | ✅ | ✅ | ✅ |
+
+- **Discord** remains the zero-migration default. Existing deployments start exactly as before.
+- **Microsoft Teams** is production-ready through a small public receiver and an outbound-only
+  `ActivityPuller` on the private session host. Discord and Teams can run together in one process
+  with `CCDB_FRONTENDS=discord,teams`.
+- **AG-UI** connects either chat surface to an HTTP/SSE agent implementing the Agent–User
+  Interaction Protocol. Claude Code, Codex, and the guarded local backend remain available.
+
+Start with the [backend guide](docs/backends.md). For Teams, follow the complete
+[Microsoft Teams setup guide](docs/teams-setup.md), then use the deeper
+[surface behavior](docs/teams.md) and [relay security model](docs/teams-relay.md) references.
 
 **[日本語](docs/ja/README.md)** | **[简体中文](docs/zh-CN/README.md)** | **[한국어](docs/ko/README.md)** | **[Español](docs/es/README.md)** | **[Português](docs/pt-BR/README.md)** | **[Français](docs/fr/README.md)**
 
@@ -23,13 +61,13 @@ Open Claude Code or OpenAI Codex from your smartphone's Discord app, spin up mul
 
 ## The Big Idea: Parallel Sessions Without Fear
 
-When you send tasks to Claude Code or OpenAI Codex in separate Discord threads, the bridge does four things automatically — regardless of which backend you picked:
+When you send tasks to Claude Code or OpenAI Codex in separate Discord threads, the relay does four things automatically — regardless of which backend you picked:
 
 1. **Concurrency notice injection** — Every session's system prompt includes mandatory instructions: create a git worktree, work only inside it, never touch the main working directory directly.
 
 2. **Active session registry** — Each running session knows about the others. If two sessions are about to touch the same repo, they can coordinate rather than conflict.
 
-3. **AI Lounge** — A session-to-session "breakroom" injected into every prompt. Before starting, each session reads recent lounge messages to see what other sessions are doing. Before disruptive operations (force push, bot restart, DB drop), sessions check the lounge first so they don't stomp on each other's work.
+3. **AI Lounge** — A session-to-session "breakroom" injected into every prompt. Before starting, each session reads recent lounge messages to see what other sessions are doing, and claims the repo, issue or file it is about to touch (see [Resource Claims](#resource-claims)) so a second session is turned away before it duplicates the work. Before disruptive operations (force push, bot restart, DB drop), sessions check the lounge first so they don't stomp on each other's work.
 
 4. **Backend-agnostic surface** — The same Discord UI, slash commands, scheduler, API, and Lounge work the same way whether a thread runs Claude or Codex. Mix backends across threads if you want — e.g. Claude for refactors, Codex for code review — using `/backend` per thread.
 
@@ -90,7 +128,7 @@ Already use Claude Code CLI directly? Sync your existing terminal sessions into 
 
 A shared "breakroom" channel where all concurrent sessions announce themselves, read each other's updates, and coordinate before disruptive operations.
 
-Each Claude session receives the lounge context automatically via `--append-system-prompt` — injected as ephemeral system context rather than as part of the conversation history. This prevents the context from accumulating across turns, which would otherwise cause "Prompt is too long" errors in long-running sessions. The injected context includes: recent messages from other sessions, plus the rule to check before doing anything destructive.
+Each session receives the lounge context automatically as ephemeral system/developer instructions (`--append-system-prompt` for Claude, `developer_instructions` for Codex), rather than as part of the conversation history. This prevents the context from accumulating across turns, which would otherwise cause "Prompt is too long" errors in long-running sessions. The injected context includes recent messages from other sessions plus the rule to check before doing anything destructive.
 
 ```bash
 # Sessions post their intentions before starting:
@@ -103,6 +141,91 @@ curl "$CCDB_API_URL/api/lounge"
 ```
 
 The lounge channel doubles as a human-visible activity feed — open it in Discord to see at a glance what every active Claude session is currently doing.
+
+**Lounge vs. the coordination APIs.** Since the cross-session endpoints below landed, the lounge is no longer the place to *discover* who is running, read another thread, or lock a resource — `GET /api/sessions`, `GET /api/threads/{id}/messages` and `POST /api/claims` do that precisely and even surface sessions that never posted. The lounge keeps what no structured call carries: **broadcast announcements with no single target** ("restarting the bot", "cut release v3.2.0") and **intent announced before acting**. Treat it as the room's announcements, not its database.
+
+**The Discord mirror is optional (on/off).** The AI-to-AI layer is the DB-backed lounge that is injected into every session's prompt; mirroring it into a Discord channel is a separate, purely human-facing convenience. It is controlled by one setting:
+
+- **On** — set `COORDINATION_CHANNEL_ID` (or `lounge_channel_id`) to a channel, and lounge messages are echoed there for a human to watch.
+- **Off** — leave it unset. The lounge and every coordination API keep working exactly the same; you simply don't get the Discord feed. If the configured channel is later deleted, the mirror notices and disables itself for the rest of the process (the DB lounge is never affected).
+
+So a deployment whose humans don't read the channel can run mirror-off and lose nothing.
+
+### Cross-Session Observability
+
+A lounge note tells a session *that* another thread exists. These two read-only endpoints let it go and look — so two sessions that started on the same task can discover the overlap instead of both charging ahead.
+
+```bash
+# Who else is alive, where are they working, what did they last announce?
+curl "$CCDB_API_URL/api/sessions?exclude_thread=$DISCORD_THREAD_ID"
+
+# Read that thread's actual conversation
+curl "$CCDB_API_URL/api/threads/1529338965000192110/messages?limit=30"
+```
+
+`/api/sessions` merges three sources: the `sessions` table (created_at, working dir, backend), the in-memory registry (what each live session is doing *right now*), and each thread's latest lounge note. A session appears with `"state": "running"` while a turn is in flight — including sessions that never posted to the lounge at all, which is exactly when this matters. A saved conversation without an in-flight turn appears as `"state": "history"`; this means it is available to resume, not that an agent is waiting for work or user input. Sessions have no Discord token of their own, so the bot performs the read and the endpoints stay on the localhost control plane.
+
+### Resource Claims
+
+Observability tells a session that a collision *happened*. A claim prevents it — no reading, no negotiating, no LLM round trip. A session claims what it is about to work on; the next session asking for the same thing is refused before it does any work.
+
+```bash
+# Before starting: claim it
+curl -X POST "$CCDB_API_URL/api/claims" \
+  -H "Content-Type: application/json" \
+  -d '{"resource": "repo:ccdb#issue-123", "thread_id": "'$DISCORD_THREAD_ID'", "note": "fixing the parser"}'
+# 201 {"status": "acquired", ...}
+
+# A second session asking for the same resource:
+# 409 {"status": "held", "claim": {"thread_id": ..., "note": "fixing the parser",
+#      "holder_state": "running", "holder_thread_name": "..."}}
+
+# When done
+curl -X DELETE "$CCDB_API_URL/api/claims?resource=repo:ccdb%23issue-123&thread_id=$DISCORD_THREAD_ID"
+```
+
+Claims are **advisory** — nothing enforces them at the git or filesystem level — and every claim carries a TTL (default 2h, max 24h) so a session that dies cannot pin a resource forever. The 409 body reports whether the holder is still running, which is how a caller decides whether to wait, work on something else, or take over with `force=true`. Resource names are free-form and normalized (case and whitespace), so `repo:ccdb` and `Repo: CCDB` are the same claim.
+
+The lounge prompt tells every session to claim before starting and to release when finished.
+
+### Session-to-Session Relay
+
+Observability lets a session see a peer; a claim keeps them apart. When two sessions have already collided, they need to actually talk — and one of them needs to stop.
+
+```bash
+curl -X POST "$CCDB_API_URL/api/threads/<their_thread_id>/message" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "I started this at 13:02 on branch fix/parser and already pushed 3 commits.",
+       "from_thread": "'$DISCORD_THREAD_ID'", "mode": "queue", "hop": 0}'
+```
+
+`on_message` ignores anything a bot wrote — that guard is what stops the bot from talking to itself — so relays go through this endpoint instead, the same way `/api/spawn` does.
+
+- **`mode: "queue"`** (default) waits for the receiver's current turn to finish.
+- **`mode: "interrupt"`** SIGINTs the turn in flight, so "stop now" lands within seconds. It can cost the receiver uncommitted work, so it is reserved for real conflicts.
+- The relayed text is **posted into the thread** before it reaches Claude, so the humans watching see the whole AI-to-AI exchange. A relay is never a back channel.
+- Every message is **wrapped in a marker** naming the sending thread and stating that it is not from the human — an unmarked instruction would be obeyed as if the owner had written it.
+
+Loops are the real risk (two sessions answering each other burn tokens and interrupt each other indefinitely), so a guard bounds every chain: **max 2 hops**, a 60s cooldown per thread pair, 5 relays per sender per 10 minutes, and no self-sends. Refusals come back as 429 with the reason.
+
+The lounge prompt also gives sessions a tie-break rule so the conversation converges instead of ending in mutual politeness: whoever has commits or a PR beats whoever is still investigating; otherwise the earlier session continues; ties go to the lower thread ID. Whoever stands down pushes its branch first and hands over what it learned.
+
+### Automatic Collision Detection
+
+The lounge and claims both depend on a session *saying* something. This catches the overlaps nobody announced, from what the sessions actually did: if two live sessions write to the same file within 15 minutes, they are working on the same thing whether or not either mentioned it.
+
+`EventProcessor` records the path of every write-type tool call (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`); `CollisionWatchCog` compares those sets across live sessions once a minute.
+
+> Why file paths and not working directories: on a single-user host every session tends to start in the same home directory, so `working_dir` equality flags every pair and means nothing. A shared *edited file* is almost never a coincidence. Reads are deliberately ignored — two sessions reading the same file is normal and would drown the signal.
+
+When an overlap is found, the watcher posts:
+
+- a line in the **AI Lounge**, which is injected into every session's next turn at no token cost and without interrupting anything, and
+- a message in **each colliding thread**, naming the peer, the shared files, and the endpoints that resolve it.
+
+It never relays into a running session — preempting a turn on a mere suspicion would cost more than the collision. Escalating is the sessions' decision, using the relay endpoint above. Each pair is announced at most once every 30 minutes, because a warning repeated every minute is a warning everyone learns to ignore.
+
+Enabled automatically; it stays dormant until two sessions actually overlap.
 
 ### Programmatic Session Creation
 
@@ -133,36 +256,99 @@ This is useful for notification-style workflows (e.g. daily briefings, CI alerts
 
 Claude subprocesses receive `DISCORD_THREAD_ID` as an environment variable, so a running session can spawn child sessions to parallelize work.
 
-### Headless One-Shot Runs (`/api/run`)
+### Authenticated External Ingest with Result Retrieval (`/api/ingest`)
 
-`POST /api/run` runs an AI engine **once** and returns the result via polling — the non-interactive, no-Discord sibling of `/api/spawn`. Use it from a browser extension, a script, or any external system that wants "send a prompt, get the generated text back" without a Discord thread.
+`POST /api/ingest` is the **authenticated, attachment-aware spawn** for untrusted external clients (browser extensions, mobile shortcuts, webhooks). Unlike `/api/spawn` (trusted, localhost), it requires a dedicated `ingest_token` (set `CCDB_INGEST_TOKEN`; independent of `api_secret`) and can carry base64 file attachments that are written to `{working_dir}/ingest/{thread_id}/` so the spawned session can read them. It creates a real Discord thread, so the full interaction stays observable.
 
-It is **engine-neutral**: pick `claude`, `codex`, or whatever the bot's current backend is. The endpoint has no engine-specific branches — `create_backend` resolves the runner behind the shared `SessionBackend` protocol, so new backends work without touching `/api/run`.
+The session is **interactive** (a real Discord thread you can keep replying in) — but you can still get its final answer back programmatically. When result retrieval is configured (auto-wired via `setup_bridge()`), the response includes a `result_id`, and `GET /api/ingest/{result_id}` polls for the session's final reply. The same final reply is also attached to the Discord thread as `ccdb-answer.md`, so integrations can treat the attachment as the canonical answer payload. This is the round-trip pattern: post a thread + attachments → wait → read the answer file or poll result → write it back to your own system (e.g. a Teams thread), while Discord keeps the history.
 
 ```bash
-# Dispatch a run (returns immediately with a run_id)
-curl -X POST "$CCDB_API_URL/api/run" \
+# Post work (optionally with attachments); returns immediately
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "Summarize the latest release notes", "backend": "claude"}'
-# → {"run_id": "ab12…", "status": "running", "backend": "claude", "model": "sonnet"}
+  -d '{"content": "Summarize this thread and draft a reply",
+       "attachments": [{"filename": "thread.txt", "data": "<base64>"}]}'
+# → {"status": "spawned", "thread_id": "…", "result_id": "ab12…", "attachments_saved": 1}
 
-# Poll for the result
-curl "$CCDB_API_URL/api/run/ab12…"
-# → {"status": "done", "result": "…", "backend": "claude", "model": "sonnet", "error": null}
+# Poll for the final reply
+curl "$CCDB_API_URL/api/ingest/ab12…" -H "Authorization: Bearer $CCDB_INGEST_TOKEN"
+# → {"status": "done", "result": "…", "error": null, "thread_id": "…", "thread_name": "…"}
 ```
 
-Request body fields:
+The endpoint is opt-in: with no `ingest_token` configured, `POST` responds `503`. When result retrieval is unavailable, `POST` simply omits `result_id` and `GET /api/ingest/{id}` returns `503` — the spawn behaviour is otherwise unchanged. The request body and attachments are **not** persisted in the result store (only status, the final text, and the thread id); results are capped at 200 rows.
 
-| Field | Required | Default | Notes |
-|-------|----------|---------|-------|
-| `prompt` | ✅ | — | Instruction for the AI (≤ 64 KB). |
-| `backend` | | bot's current backend | `claude` \| `codex` \| … (validated against the known backends). |
-| `model` | | backend default | e.g. `sonnet`, `gpt-5.4`. |
-| `skill` | | — | Skill to apply (`^[\w-]+$`); woven into the prompt so it stays engine-neutral. |
-| `cwd` | | configured working dir | Working directory for the run. |
-| `system_prompt` | | — | Extra system prompt appended for the run. |
+#### Zip bundles are expanded on arrival
 
-Runs are dispatched as background jobs (long skill-backed runs can take minutes), so the POST never blocks. Results are stored in SQLite under `run_id`; the prompt itself is **not** persisted. Like every non-health endpoint, `/api/run` requires the Bearer token when `api_secret` is set.
+A client can pack a whole thread's files into one `.zip` to stay under the 20-attachment / 50 MB request caps: ccdb extracts it into a sibling `<name>_files/` directory and gives the session the member paths instead of the archive, so the prompt stays paths-only and the session reads what it needs. Extraction is bounded (5000 members, 200 MB uncompressed) and skips any member that would escape its directory.
+
+The archive is replaced **only** when extraction actually produced files. `zipfile.is_zipfile()` matches an end-of-central-directory record near the *end* of a file — it does not require the file to *start* like an archive — so a large opaque binary (a Windows `.evtx` log, a memory dump, a packet capture) can be taken for an empty archive by chance. Such a file, and a genuinely empty zip, is kept exactly as it arrived rather than "expanded" into nothing and deleted; a refused or malformed archive is likewise left untouched. Nothing is dropped on the way in.
+
+#### Verified attachment delivery (`attachments_manifest`)
+
+An attachment that goes missing on the client side used to be invisible: ccdb saved what it was given and reported a count nobody could check, so a session answered as though it had a file it never received. Send a **manifest** and ccdb verifies the delivery instead of assuming it — one entry per attachment you found upstream, with `status` telling ccdb whether its bytes are in this request:
+
+```bash
+curl -X POST "$CCDB_API_URL/api/ingest" \
+  -H "Authorization: Bearer $CCDB_INGEST_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content": "Draft a reply",
+       "attachments": [{"filename": "bundle.zip", "data": "<base64>"}],
+       "attachments_manifest": [
+         {"name": "shot.png",  "status": "embedded", "sha256": "…", "message": "返信 11"},
+         {"name": "debug.log", "status": "linked", "url": "https://…", "message": "返信 12",
+          "reason": "SharePoint download returned 403"}
+       ]}'
+# → {"status": "spawned", …, "attachments": {"verified": true, "complete": false,
+#      "missing": [], "not_delivered": [{"name": "debug.log", "message": "返信 12", …}]}}
+```
+
+| `status` | Meaning |
+|---|---|
+| `embedded` (default) | The bytes are in this request — ccdb expects to find a matching file |
+| `linked` | Only a URL was obtained (no host permission, auth wall, …) |
+| `skipped` | Deliberately not sent (size cap, filtered out) |
+| `failed` | Capture or download failed |
+
+ccdb matches each `embedded` entry to a delivered file by **sha256 first**, then exact name, then the `4_image.png` index prefix a bundler adds for colliding names, then size — consuming each file at most once, so two attachments named `image.png` can't both claim the one file that arrived. Anything unaccounted for is surfaced four ways: a ⚠️ block at the **top of the session prompt** naming the missing files and telling the session not to invent their contents (with an extra callout when the loss is on the newest message), an `ATTACHMENTS-REPORT.md` ledger written next to the files, the `attachments` verdict in the response above, and a `WARNING` in the log. Supplying `message` also groups the prompt's path list by upstream message and marks the newest group as the one to read first.
+
+Set `CCDB_INGEST_REQUIRE_COMPLETE=1` (or `ingest_require_complete=True`) to **refuse** a lossy ingest with `409` rather than start a session on partial evidence — appropriate where the attachments *are* the request. Omit the manifest entirely and nothing changes: the ingest is reported as `verified: false`, never as verified-complete.
+
+#### Running per-thread summaries for long ingest threads (`/api/ingest/summary`)
+
+An ingest client that keeps replying in one **upstream** thread for months (notably the Teams browser extension) would otherwise have to re-export the entire history on every run — ccdb's "Thread = Session" model spawns a *fresh* Discord thread + Claude session per ingest and remembers nothing about the upstream thread. Opt into a compact **running summary** keyed by a client-supplied stable `summary_key` (e.g. the upstream thread's root message id), stored in the new `thread_summaries` table, and the client can send only the **diff** while the session still gets full historical context:
+
+1. Before exporting, the client calls `GET /api/ingest/summary?key=…` (external, ingest-token gated) to read the stored `summary` + `marker`, and bounds its export to messages newer than `marker`.
+2. `POST /api/ingest` accepts `summary_key` + `latest_marker`; ccdb injects the stored summary into the prompt as context and asks the session to save an updated one.
+3. The session calls `POST /api/ingest/summary` (internal control plane, localhost — same trust model as `/api/tasks`) with its own `result_id` and the new `summary`; ccdb resolves the key and advances the `marker` **from the ingest row**, so the read position only moves forward when a summary is actually saved (a failed session re-exports the same diff, never skips messages).
+
+`DELETE /api/ingest/summary?key=…` forces a full re-summary. The marker is opaque to ccdb and never handled by the session, so it cannot drift. Fully backward-compatible and Zero-Config: omit `summary_key` and ingest behaves exactly as before. The external listener exposes only the `GET` (read) route; writing a summary is a localhost-only action. `ingest_results` gains `summary_key`/`pending_marker` columns (auto-migrated on existing DBs).
+
+#### Mirroring an upstream thread as raw files (`/api/teams/sync`)
+
+The running summary above keeps a *distillation* of an upstream thread. When you want the **raw conversation** on disk instead — so a session can read what was actually said, and so you can check an answer against it — use the sync pair. It stores one file per message and asks the client to keep **no sync state at all**:
+
+1. `POST /api/teams/sync/plan` — the client sends the id + content hash of every message it can see (no bodies, so a 1000-reply thread costs tens of KB). ccdb answers with `want_messages` / `want_attachments`: the subset it is missing or holds at a different hash, plus `newest_have_mid` for the client to stop scrolling early.
+2. `POST /api/teams/sync/push` — the client uploads exactly that subset, with attachment bytes as base64.
+
+A *changed* hash and a *never-seen* id are the same question, so following an upstream **edit** is not a separate feature — it falls out of the same comparison, and the superseded version is preserved under `_history/` rather than overwritten.
+
+```
+{title}--{root_mid}/
+  thread.json      identity, coverage, unresolved attachment gaps
+  chain.jsonl      append-only order + revision journal
+  README.md        how a session should read this folder
+  messages/{mid}.md          one message, YAML frontmatter (author, timestamp, prev, hash, edited, deleted)
+  messages/{mid}/…           that message's attachments
+  _history/{mid}.{hash}.md   superseded versions
+```
+
+`next` is deliberately **not** stored: writing it would mean rewriting an existing file on every new reply. Order lives in `chain.jsonl`, and because the identity is the upstream Unix-ms message id, filenames sort chronologically on their own.
+
+The directory is the single source of truth — `plan` is answered by reading it. Delete a message file and the next sync fetches it again; an interrupted push completes on the next one; pressing the button twice is a no-op. An attachment that could not be stored is **never** reported as success: it is listed in `thread.json`, in the folder's `README.md`, in the push response, and it keeps appearing in `want_attachments` until its bytes actually arrive.
+
+Threads are filed one folder per company: `{root}/{company}/{title}--{root_mid}/`. A client may send `thread.org`, but the authority is `orgs.json` at the sync root — a hand-editable `team GUID → company` map that wins over the client, so a correction made there sticks. A team it does not know yet is learned from the first label a client sends; a thread with no company stays at the root. The company is a label, never part of the identity (`{team}/{root_mid}`), so re-filing never re-uploads anything — and a thread you move into a company folder by hand keeps syncing, which is how an existing flat vault is migrated.
+
+Threads live under `{working_dir}/teams` by default, beside the `ingest/` tree — set `CCDB_TEAMS_VAULT_ROOT` (or `teams_vault_root=`) to keep them somewhere else, such as a notes vault you already read in an editor. Both routes use the same ingest bearer token as `/api/ingest`, are available on the external listener, and spawn nothing.
 
 ### Startup Resume
 
@@ -172,35 +358,48 @@ If the bot restarts mid-session, interrupted Claude sessions are automatically r
 - **Automatic (any shutdown)** — `ClaudeChatCog.cog_unload()` marks all mid-run sessions whenever the bot shuts down via any mechanism (`systemctl stop`, `bot.close()`, SIGTERM, etc.).
 - **Manual** — Any session can call `POST /api/mark-resume` directly.
 
-### Backend Switching — Claude / Codex on Demand
+### Backend Switching — Claude / Codex / AG-UI on Demand
 
-ccdb 3.0 introduces two slash commands that change which AI handles the next session, with no bot restart:
+ccdb 3.0 introduces three slash commands that change which AI handles the next session, with no bot restart:
 
-- `/backend [name] [scope]` — show or switch backend. `name` is `claude` or `codex`. `scope` is `thread` (this thread only) or `global` (server-wide default). When you omit `scope`, the command auto-resolves: in a thread it scopes to that thread, otherwise it sets the global default.
-- `/model [name] [scope]` — show or switch the model used by the **current** backend. Each backend remembers its own model preference, so flipping backend back and forth keeps your favoured models intact.
+- `/backend [name] [scope]` — show or switch backend. `name` is `claude`, `codex`, `local`, or `agui`. `scope` is `thread` (this thread only) or `global` (server-wide default). When you omit `scope`, the command auto-resolves: in a thread it scopes to that thread, otherwise it sets the global default.
+- `/model [name] [scope]` — show or switch the model used by the **current** backend. Each backend remembers its own model preference, so flipping backend back and forth keeps your favoured models intact. Leave a backend's model unset to defer to that CLI's own default (e.g. Codex uses the `model` in `~/.codex/config.toml`, so ccdb tracks the console default instead of pinning a version).
+  The `name` autocomplete is **discovered live**: ccdb asks the Anthropic models endpoint (using the credentials the Claude Code CLI already has) which models your account can see, so a model released this morning shows up in the dropdown without a ccdb upgrade. Aliases (`opus`, `sonnet`, …) are labelled with the model they currently resolve to. Offline, unauthenticated, or on Bedrock/Vertex/Foundry it silently falls back to a small static list; set `CCDB_MODEL_DISCOVERY=0` to always use that list. Codex suggestions stay static (the Codex CLI exposes no model listing) — any id you type still works.
+- `/effort [level] [scope]` — show or switch the **reasoning effort** used by the current backend. Valid levels are backend-specific: Claude accepts `low/medium/high/max`; Codex accepts `minimal/low/medium/high/xhigh` (mapped to the CLI's `model_reasoning_effort`). Leave it unset to defer to the CLI default.
 
-Both commands persist to SQLite via `SettingsRepository`, so the choice survives bot restarts. Calling `/backend` with no arguments prints the current global default plus any thread override.
+All three commands persist to SQLite via `SettingsRepository`, so the choice survives bot restarts. Calling them with no arguments prints the current global default plus any thread override.
+
+**What happens to a thread that already has a session?** Session IDs are not interoperable between the two CLIs — handing a Codex rollout ID to `claude --resume` (or a Claude UUID to `codex exec resume`) fails at the CLI level. ccdb therefore performs a **file-backed conversation handoff** for both thread-scoped and global switches:
+
+1. It keeps the old session ID long enough to locate that backend's local JSONL (`~/.claude/projects` or `~/.codex/sessions`).
+2. It extracts a bounded transcript of user and assistant text. System/developer instructions, hidden reasoning, tool calls/results, and image payloads are excluded.
+3. It starts a native session in the new backend and prepends that transcript to the first new user message. The new session ID then replaces the old mapping normally.
+
+If the local JSONL is missing or unreadable, ccdb safely degrades to a fresh session and logs the missing handoff. Records written before ccdb tracked backend ownership keep the legacy resume behaviour because their source backend cannot be identified reliably.
 
 Visual cues so you never forget which one you're talking to:
 
 - **Claude sessions** open with a blurple embed titled "🤖 Claude Code session started".
 - **Codex sessions** open with an OpenAI-teal embed titled "🌀 OpenAI Codex session started".
-- The completion embed prepends a `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.4` chip alongside the usual duration / cost / token / context metrics.
+- The completion embed prepends a `🧠 Claude · sonnet` / `🧠 Codex · gpt-5.6-sol` chip alongside the usual duration / cost / token / context metrics. (When a backend's model is left at the CLI default, the chip shows just the backend name.)
 
 Concrete example:
 
 ```text
 /backend codex                        # global → codex (next new sessions use codex)
 /model gpt-5-codex                    # global → codex uses gpt-5-codex
+/effort xhigh                          # global → codex reasons at xhigh effort
                                        # …open a thread, send a message…
 /backend claude scope:thread          # this thread only → switch back to claude
+/backend agui scope:thread            # this thread only → configured remote AG-UI agent
 /model opus scope:thread              # this thread only → claude/opus
-                                       # other threads keep the global codex+gpt-5-codex default
+/effort max scope:thread              # this thread only → claude reasons at max
+                                       # other threads keep the global codex defaults
 ```
 
 Behind the scenes:
 
-- `BackendFactory` — captures the static configuration at boot (per-backend command path, permission mode, working dir, allowed tools, timeout, append-system-prompt, effort, api_port, api_secret) and builds a fresh `ClaudeRunner` or `CodexRunner` on demand. `api_port` is wired automatically by `setup_bridge` after the REST API server starts, so factory-built runners always have `CCDB_API_URL` injected into their subprocess environment.
+- `BackendFactory` — captures the static configuration at boot (per-backend command path or AG-UI endpoint, permission mode, working dir, allowed tools, timeout, append-system-prompt, effort, api_port, api_secret) and builds a fresh `ClaudeRunner`, `CodexRunner`, or `AgUiBackend` on demand. `api_port` is wired automatically by `setup_bridge` after the REST API server starts, so factory-built CLI runners always have `CCDB_API_URL` injected into their subprocess environment.
 - `BackendSettings` — thin wrapper over `SettingsRepository` that resolves the active backend with **thread > global > env** precedence and persists writes from the slash commands.
 - `SessionBackend` Protocol — the abstract interface that both runners satisfy. Internal plumbing (cogs, embeds, views, scheduler, webhook trigger) takes a `SessionBackend`, never one concrete runner class.
 
@@ -215,8 +414,11 @@ Behind the scenes:
 #### 🔗 Session Basics
 - **Chat-only mode** — When `CHAT_ONLY_CHANNEL_IDS` includes a channel, only Claude's text responses are shown; tool embeds, thinking blocks, session start/complete embeds, and todo lists are hidden. Permission requests and `AskUserQuestion` are always shown. Ideal for public channels where non-technical users are watching.
 - **Thread = Session** — 1:1 mapping between Discord thread and Claude Code session
+- **Threads stay visible for a week** — every thread ccdb creates asks Discord for its maximum auto-archive window (7 days), so a conversation you are still working on keeps its place in the channel's thread list instead of dropping out of the sidebar an hour after the last reply
 - **Goal tracking** — `/goal <condition>` sets a completion condition; Claude keeps working until the condition is met. Omit the condition to check status; pass `clear` to cancel
 - **Session persistence** — Resume conversations across messages via `--resume`
+- **Cross-backend conversation handoff** — Switching a live thread between Claude and Codex seeds the new native session from a bounded, text-only reading of the previous backend's local JSONL; no manual summary or copy/paste required
+- **Automatic Codex resume recovery** — If a resumed Codex session repeatedly loses its WebSocket before producing output, ccdb starts a replacement session with a bounded, text-only transcript of the prior conversation; image and tool payloads are excluded
 - **Concurrent sessions** — Multiple parallel sessions with configurable limit
 - **Stop without clearing** — `/stop` halts a session while preserving it for resume
 - **Session interrupt** — Sending a new message to an active thread sends SIGINT to the running session and starts fresh with the new instruction; no manual `/stop` needed
@@ -248,7 +450,7 @@ Behind the scenes:
 
 #### 🔌 Input & Skills
 - **Attachment support** — Text files auto-appended to prompt (up to 5 files, 200 KB each / 500 KB total; oversized files are truncated with a notice rather than skipped); images sent as Discord CDN URLs via `--input-format stream-json` (up to 4 × 5 MB); long pasted messages that Discord auto-converts to file attachments (without `content_type`) are handled via extension-based detection
-- **On-demand file delivery** — Ask Claude to "send me" or "attach" a file and it writes the path to `.ccdb-attachments`; the bot reads it and delivers the file as a Discord attachment when the session completes
+- **On-demand file delivery** — Ask Claude to "send me" or "attach" a file and it writes the path to `.ccdb-attachments`; the bot reads it and delivers the file as a Discord attachment when the session completes. Local instructions can also require substantial written deliverables to be saved as Markdown and attached.
 - **Skill execution** — `/skill` command with autocomplete, optional args, in-thread resume; skills from installed plugins are also auto-discovered
 - **Hot reload** — New skills added to `~/.claude/skills/` are picked up automatically (60s refresh, no restart)
 
@@ -256,7 +458,11 @@ Behind the scenes:
 - **Worktree instructions auto-injected** — Every session prompted to use `git worktree` before touching any file
 - **Automatic worktree cleanup** — Session worktrees (`wt-{thread_id}`) are removed automatically at session end and on bot startup; dirty worktrees are never auto-removed (safety invariant)
 - **Active session registry** — In-memory registry; each session sees what the others are doing
-- **AI Lounge** — Shared "breakroom" channel; context injected via `--append-system-prompt` (ephemeral, never accumulates in history) so long sessions never hit "Prompt is too long"; sessions post intentions, read each other's status, and check before disruptive operations; humans see it as a live activity feed
+- **AI Lounge** — Shared "breakroom" channel; context injected as backend-specific system/developer instructions (ephemeral, never accumulates in history) so long sessions never hit "Prompt is too long"; sessions post intentions, read each other's status, and check before disruptive operations; humans see it as a live activity feed
+- **Cross-session observability** — `GET /api/sessions` lists every session (live and stored) with its state, working dir and latest lounge note; `GET /api/threads/{thread_id}/messages` reads another thread's conversation. Read-only, so a session can look before it edits — including at sessions that never posted to the lounge
+- **Resource claims** — `POST /api/claims` reserves a repo, issue or file before work starts; a second session asking for the same resource gets 409 with the holder's thread, note and live state. Advisory and TTL-bound (default 2h, max 24h), so a dead session cannot pin a resource forever
+- **Session-to-session relay** — `POST /api/threads/{thread_id}/message` lets one session speak to another when they have already collided; `queue` waits for the receiver's turn, `interrupt` SIGINTs it. Every relay is posted into the thread (never a back channel), wrapped in a marker so it is not mistaken for the human, and bounded by hop/cooldown/rate limits so two sessions cannot loop
+- **Automatic collision detection** — `CollisionWatchCog` compares the files live sessions actually wrote (recorded from `Write`/`Edit`/`MultiEdit`/`NotebookEdit`) once a minute; two sessions writing the same file within 15 minutes are announced in the AI Lounge and in both threads. Catches the overlaps nobody announced; one alert per pair per 30 minutes, and it never interrupts a running turn
 - **Coordination channel** — `COORDINATION_CHANNEL_ID` env var is used as the default fallback for the AI Lounge channel (no separate bot-side lifecycle events)
 
 ### Scheduled Tasks
@@ -277,6 +483,7 @@ Behind the scenes:
 - **Built-in help** — `/help` shows all available slash commands and basic usage (ephemeral, only visible to the caller)
 - **Session sync** — Import CLI sessions as Discord threads (`/sync-sessions`); `/sync-settings` to view or change sync preferences (thread style, time window, minimum results)
 - **Session list** — `/sessions` with filtering by origin (Discord / CLI / all) and time window
+- **Thread search** — `/search <query>` finds a past thread by keyword, matching the persistent per-thread summary (the opening prompt) and working directory; renders hits as a scannable embed with a Discord deep-link that reopens even an archived (sidebar-hidden) thread; optional `origin` filter (Discord / CLI). Add `body:True` to also grep the full local Claude transcripts (`~/.claude/projects`), so keywords that appear only mid-conversation are found too — each body hit shows the matching snippet with a `💬` badge, and a transcript with no Discord thread offers a `claude --resume <id>` hint instead of a link. The same lookup is exposed as `GET /api/search` (add `body=1`) for other sessions and skills. No AI tokens — a `LIKE` query over data ccdb already keeps, plus a safe `grep` (never `shell=True`) over the transcripts on disk
 - **Session resume** — `/resume` shows a select menu of recent sessions (up to 25) and resumes the selected one in a new thread; optional `query` parameter for keyword search (matches summary and working directory); optional `filter=orphaned` to show only sessions from deleted threads; works from any channel or thread — always creates a new thread in the configured main channel
 - **Resume info** — `/resume-info` shows the CLI command to continue the current session in a terminal (thread-only)
 - **Clear session** — `/clear` resets the Claude Code session for the current thread, starting fresh without creating a new thread
@@ -299,6 +506,10 @@ Behind the scenes:
 - **Secret isolation** — Bot token stripped from subprocess environment
 - **User authorization** — `allowed_user_ids` restricts who can invoke Claude
 - **Log injection prevention** — User-provided API values are sanitized (newlines stripped) before writing to logs
+- **Local-model backend** (optional) — `/backend local` runs a thread against a model on your own hardware. ccdb owns a separate CLI home with the update check and analytics disabled, because a "local" run otherwise still contacts the vendor; it refuses to start if those settings are missing — see [docs/local-backend.md](docs/local-backend.md)
+- **Remote AG-UI backend** (optional) — `/backend agui` connects the existing Discord/Teams session machinery to any HTTP/SSE AG-UI agent while preserving ccdb's session ledger, rendering, cancellation, and operational controls — see [docs/agui-backend.md](docs/agui-backend.md)
+- **`/ask` — explicit escalation** (optional) — sends one anonymized, self-contained question to a strong external model with no project context, no files and no tools, then restores your real names in the answer; the isolation is verified before every spawn — see [docs/escalation.md](docs/escalation.md)
+- **Anonymization gateway** (optional) — Replaces organisation-identifying terms with stable aliases before the prompt reaches Claude or Codex, and restores them in the answer. A local model checks the result for replacement misses and, by default, blocks the send when it finds one. Off until you write a rules file — see [docs/anonymization.md](docs/anonymization.md)
 
 ---
 
@@ -306,7 +517,7 @@ Behind the scenes:
 
 **Prerequisites:**
 
-- Python 3.10+
+- Python 3.12+
 - At least one of:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — installed and authenticated (`claude login`). Recommended for Anthropic Pro/Max subscribers.
   - [OpenAI Codex CLI](https://github.com/openai/codex) — `npm install -g @openai/codex` then `codex login`. Uses your existing ChatGPT Plus/Pro/Business subscription.
@@ -328,11 +539,11 @@ No cloning or `.env` editing required — the wizard does it for you:
 
 ```bash
 # With uvx (no install needed):
-uvx --from "git+https://github.com/ebibibi/claude-code-discord-bridge.git" ccdb setup
+uvx --from "git+https://github.com/ebibibi/ebi-agent-chat-relay.git" ccdb setup
 
 # Or after cloning:
-git clone https://github.com/ebibibi/claude-code-discord-bridge.git
-cd claude-code-discord-bridge
+git clone https://github.com/ebibibi/ebi-agent-chat-relay.git
+cd ebi-agent-chat-relay
 uv run ccdb setup
 ```
 
@@ -413,6 +624,21 @@ The script detects the repository root dynamically (via `readlink -f` on `$0`), 
 
 The script requires the `DISCORD_WEBHOOK_URL` variable in `.env` for failure notifications (optional — the script works without it).
 
+#### Toolchain PATH — set it in `.env`
+
+systemd starts a unit with a minimal default `PATH` (typically `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`) and never sources `~/.bashrc` or `~/.profile`. The bot inherits that `PATH`, and so does every Claude/Codex session it spawns — sessions run with the bot's environment minus the stripped secrets.
+
+The result is confusing: a build that works in your terminal fails inside a Discord session, or silently runs against an older system-wide binary, because tools installed under `~/.local/bin` or `~/.npm-global/bin` are invisible to the service.
+
+Since the service loads `.env` via `EnvironmentFile=`, setting `PATH` there fixes the bot and every session at once:
+
+```bash
+# .env — match your interactive shell's PATH
+PATH=/home/you/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+```
+
+Restart the service (`sudo systemctl restart mybot.service`), then confirm from a Discord session by asking Claude to run `which node && node --version`.
+
 ### Custom Cogs (Extend Without Forking)
 
 Add your own features by dropping Python files into a directory — no fork, no subclass, no package needed:
@@ -453,6 +679,8 @@ See [`examples/ebibot/`](examples/ebibot/) for a full real-world example with re
 | `AutoUpgradeCog` | Webhook-triggered package upgrade |
 | `DocsSyncCog` | Automated documentation sync on push |
 | `AlertResponderCog` | Generic alert monitoring — forwards alerts from monitoring systems to Discord and triggers a Claude Code investigation session |
+| `JobFailureTriageCog` | Auto-investigates scheduler job failures posted as webhook embeds |
+| `ThreadCompletionCog` | Treats "the user deleted the thread" as "that work is finished" — batches deletions and files a work record from the surviving transcripts. Off until `/thread-completion on` |
 
 ---
 
@@ -461,7 +689,7 @@ See [`examples/ebibot/`](examples/ebibot/) for a full real-world example with re
 If you already have a discord.py bot, add ccdb as a package instead:
 
 ```bash
-uv add git+https://github.com/ebibibi/claude-code-discord-bridge.git
+uv add git+https://github.com/ebibibi/ebi-agent-chat-relay.git
 ```
 
 Create a `bot.py`:
@@ -524,27 +752,54 @@ await setup_bridge(
 
 Each channel is fully independent — messages in any of the configured channels spawn a new Claude session thread, and `/skill` commands work across all of them.  `claude_channel_id` is kept for backward compatibility and is used as the fallback thread-creation target when the `/skill` command is invoked outside a configured channel.
 
-#### Mention-Only Channels
+#### Where the Bot Listens — No-Mention Channels vs. @Mentions
 
-To make the bot respond **only when @mentioned** in specific channels (useful for shared channels where you don't want the bot to react to every message):
+`claude_channel_ids` is a list of channels that need **no @mention**: everything posted there, and in any thread under them, goes straight to Claude. Everywhere else in the guild the bot answers **only when someone @mentions it**.
+
+So the configuration describes where ccdb speaks *freely*, not where it exists. A channel nobody thought about is quiet by construction, and the bot is still reachable by name from anywhere without a config change.
 
 ```python
 await setup_bridge(
     bot,
     runner,
-    claude_channel_ids={111, 222},
-    mention_only_channel_ids={222},  # bot ignores messages in #222 unless @mentioned
+    claude_channel_ids={111},          # #111: no mention needed, every message runs Claude
     allowed_user_ids={int(os.environ["DISCORD_OWNER_ID"])},
 )
+# Anywhere else in the guild: "@YourBot what do you think?" starts a session; silence otherwise.
 ```
 
-Or via environment variable (comma-separated channel IDs):
+Claude engages when either of these holds:
+
+- the message is in a **no-mention channel** (or a thread under it) — this is the session flow: a channel message opens a thread, replies in that thread continue its session, or
+- the bot is **@mentioned in that message** — *every* message, everywhere else, including in threads ccdb opened itself. Owning a thread is not standing consent: people keep talking to each other in those threads, and a run nobody asked for is noise.
+
+**A mention is answered in place.** No thread is created: a mention in a channel is answered in that channel, a mention in a thread is answered in that thread. Spinning off a thread would move the answer away from the discussion that prompted it and leave a session running where nobody is reading. If a session already belongs to that channel or thread it is resumed, so a follow-up mention continues the same work.
+
+Direct messages are never picked up by the mention path, and the per-user gate (`allowed_user_ids`) still applies first everywhere.
+
+To restore the old strict behaviour — the bot exists *only* in the configured channels and a mention elsewhere does nothing — turn the mention path off:
+
+```
+CCDB_MENTION_ANYWHERE=false
+```
+
+##### Reading the room before answering
+
+A mention usually lands in the middle of a conversation Claude has not seen. Before answering, ccdb prepends a transcript of the **last 7 days of that exact channel or thread** so the reply is about what was actually being discussed. Reading the whole thread would be the obvious move and the wrong one — a months-old thread is a large, mostly irrelevant token bill — so the window is bounded three ways: by age, by message count (200), and by total size (12,000 characters, trimmed from the oldest end so the turns being replied to always survive).
+
+```
+CCDB_THREAD_CONTEXT_DAYS=7   # 0 disables the transcript entirely
+```
+
+Inside the no-mention channels the transcript is only used for threads ccdb did not create — in its own session threads it saw every turn already, so re-sending them would just burn tokens.
+
+##### Mention-only channels (legacy)
+
+`mention_only_channel_ids` carves a channel back out of the no-mention set. With the mention path on, simply *not listing* a channel has the same effect, so this is only useful when a parent channel is listed and one child should be excluded.
 
 ```
 MENTION_ONLY_CHANNEL_IDS=222,333
 ```
-
-Thread replies are not affected — once a session thread is open, all replies are handled normally regardless of mentions.
 
 #### Inline-Reply Channels
 
@@ -598,11 +853,15 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 |----------|-------------|---------|
 | `DISCORD_BOT_TOKEN` | Your Discord bot token | (required) |
 | `DISCORD_CHANNEL_ID` | Channel ID for Claude chat | (required) |
-| `CCDB_BACKEND` | CLI backend to use: `claude` (Claude Code CLI) or `codex` (OpenAI Codex CLI) | `claude` |
+| `CCDB_BACKEND` | Backend to use: `claude`, `codex`, `local`, or `agui` | `claude` |
 | `CCDB_COMMAND` | Path or name of the CLI binary (overrides `CLAUDE_COMMAND`). Used by the initial runner picked from `CCDB_BACKEND`; superseded by the two per-backend variables below when `/backend` switches at runtime. | _(auto: `claude` or `codex`)_ |
 | `CCDB_CLAUDE_COMMAND` | Explicit path to the Claude CLI binary. Used by `BackendFactory` whenever `/backend claude` is active, regardless of the initial `CCDB_BACKEND`. Falls back to `CLAUDE_COMMAND`, then `claude` (PATH). | (optional) |
 | `CCDB_CODEX_COMMAND` | Explicit path to the OpenAI Codex CLI binary. Required when running the bot under systemd (default service PATH does not include `~/.npm-global/bin`). Falls back to `codex` (PATH). | (optional) |
+| `CCDB_AGUI_URL` | Exact HTTP(S) run endpoint for `/backend agui`. Redirects are rejected. | (required for `agui`) |
+| `CCDB_AGUI_TOKEN` | Optional bearer token for the AG-UI endpoint. Stripped from Claude/Codex subprocess environments. | (optional) |
+| `PATH` | Binary search path for the bot **and every CLI session it spawns** — sessions inherit the bot's environment. Set it in `.env` when running under systemd, which starts units with a minimal PATH and never reads `~/.bashrc` / `~/.profile`. See [Toolchain PATH](#toolchain-path--set-it-in-env). | (inherited from the parent process) |
 | `CCDB_MODEL` | Model to use (overrides `CLAUDE_MODEL`) | `sonnet` |
+| `CCDB_MODEL_DISCOVERY` | Set to `0` to stop the `/model` autocomplete from asking the Anthropic models endpoint which models your credentials can see, and always use the static suggestion list instead. Discovery is read-only, reuses the Claude Code CLI's own auth, and already falls back on its own when offline, unauthenticated, or on Bedrock/Vertex/Foundry | `1` |
 | `CCDB_PERMISSION_MODE` | Permission mode for CLI (overrides `CLAUDE_PERMISSION_MODE`) | `acceptEdits` |
 | `CCDB_DANGEROUSLY_SKIP_PERMISSIONS` | Skip all permission checks — overrides `CLAUDE_DANGEROUSLY_SKIP_PERMISSIONS` | `false` |
 | `CCDB_WORKING_DIR` | Working directory for CLI (overrides `CLAUDE_WORKING_DIR`) | current dir |
@@ -615,13 +874,16 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CLAUDE_WORKING_DIR` | Working directory for Claude (legacy — prefer `CCDB_WORKING_DIR`) | current dir |
 | `MAX_CONCURRENT_SESSIONS` | Max parallel Claude CLI sessions across all code paths (chat, skills, scheduler, webhooks) | `3` |
 | `SESSION_TIMEOUT_SECONDS` | Session inactivity timeout | `300` |
+| `CCDB_PR_COMPLETION_OWNER` | GitHub owner whose non-draft `session/<thread_id>` PRs trigger one automatic completion continuation. Requires authenticated `gh`; disabled when empty. | (optional) |
 | `DISCORD_OWNER_ID` | User ID to @-mention when Claude needs input | (optional) |
 | `COORDINATION_CHANNEL_ID` | Channel ID used as default fallback for AI Lounge channel | (optional) |
-| `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot only responds when @mentioned | (optional) |
+| `CCDB_MENTION_ANYWHERE` | When true, an @mention summons Claude in any guild channel or thread; set `false` to listen only in the configured channels | `true` |
+| `CCDB_THREAD_CONTEXT_DAYS` | Days of the surrounding channel or thread's history prepended to the prompt when a mention wakes Claude there (`0` disables) | `7` |
+| `MENTION_ONLY_CHANNEL_IDS` | Comma-separated channel IDs carved back out of the no-mention set (legacy; not listing a channel now has the same effect) | (optional) |
 | `INLINE_REPLY_CHANNEL_IDS` | Comma-separated channel IDs where the bot replies inline (no thread created) | (optional) |
 | `CHAT_ONLY_CHANNEL_IDS` | Comma-separated channel IDs in chat-only mode — only Claude's text responses are shown; all technical embeds (tools, thinking, session info, todos) are hidden | (optional) |
 | `WORKTREE_BASE_DIR` | Base directory to scan for session worktrees (enables automatic cleanup) | (optional) |
-| `CLI_SESSIONS_PATH` | Path to `~/.claude/projects` for CLI session discovery (enables `/sync-sessions`) | (optional) |
+| `CLI_SESSIONS_PATH` | Path to `~/.claude/projects` for CLI session discovery (enables `/sync-sessions`) and transcript body search (`/search body:True`, `GET /api/search?body=1`). Defaults to the standard `~/.claude/projects`, so body search stays Zero-Config wherever Claude Code has run | (optional) |
 | `CUSTOM_COGS_DIR` | Directory containing custom Cog files to load at startup (see [Custom Cogs](#custom-cogs-extend-without-forking)) | (optional) |
 | `CLAUDE_ALLOWED_TOOLS` | Comma-separated list of allowed tools for Claude CLI (legacy — prefer `CCDB_ALLOWED_TOOLS`) | (optional) |
 | `CLAUDE_CHANNEL_IDS` | Additional channel IDs (comma-separated) for multi-channel setup (legacy — prefer `CCDB_CHANNEL_IDS`) | (optional) |
@@ -631,6 +893,9 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CCDB_LOG_FILE` | Path to a log file. When set, a rotating file handler (10 MB × 5 backups) is added alongside the default stdout handler. Useful for monitoring and alerting. | (optional) |
 | `API_HOST` | REST API bind address | `127.0.0.1` |
 | `API_PORT` | REST API port (enables REST API when set) | (optional) |
+| `CCDB_INGEST_TOKEN` | Bearer token for `POST /api/ingest` (independent of `api_secret`); unset ⇒ the endpoint responds `503` | (optional) |
+| `CCDB_INGEST_REQUIRE_COMPLETE` | Set to `1` to reject an ingest with `409` when its `attachments_manifest` proves attachments went missing, instead of starting a session on partial evidence | `0` |
+| `CCDB_TEAMS_VAULT_ROOT` | Directory where `POST /api/teams/sync` mirrors upstream threads (one file per message). Gated by `CCDB_INGEST_TOKEN` | `{working_dir}/teams` |
 
 ### Permission Modes — What Works in `-p` Mode
 
@@ -841,7 +1106,7 @@ Session marking is fully opt-in — it only activates when `setup_bridge()` has 
 Optional REST API for notifications and task management. Requires aiohttp:
 
 ```bash
-uv add "claude-code-discord-bridge[api]"
+uv sync --extra api
 ```
 
 ### Endpoints
@@ -858,9 +1123,23 @@ uv add "claude-code-discord-bridge[api]"
 | DELETE | `/api/tasks/{id}` | Remove a task |
 | PATCH | `/api/tasks/{id}` | Update a task (enable/disable, change schedule) |
 | POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply |
+| POST | `/api/ingest` | Authenticated external spawn (browser extension / webhook) with base64 attachments; returns a `result_id` when result retrieval is configured |
+| GET | `/api/ingest/{result_id}` | Poll the spawned session's final reply (`status`/`result`/`error`/`thread_id`) |
+| GET | `/api/ingest/summary` | Read the running summary + `marker` for a long ingest thread by `key` (ingest-token gated) so the client can export only the diff |
+| POST | `/api/ingest/summary` | Save an updated running summary (`result_id` + `summary`) from the session — localhost control plane; ccdb advances the `marker` from the ingest row |
+| DELETE | `/api/ingest/summary` | Clear the stored summary for `key`, forcing a full re-summary on the next ingest |
+| POST | `/api/teams/sync/plan` | Ask what an upstream thread's mirror is missing — send ids + hashes, get back `want_messages`/`want_attachments`/`newest_have_mid` (ingest-token gated) |
+| POST | `/api/teams/sync/push` | Store the wanted messages as one file each under the vault, with attachments and an append-only `chain.jsonl` |
 | POST | `/api/mark-resume` | Mark a thread for automatic resume on next bot startup |
 | GET | `/api/lounge` | Read recent AI Lounge messages |
 | POST | `/api/lounge` | Post a message to the AI Lounge (with optional `label`) |
+| GET | `/api/sessions` | List every session — live and stored — with state, working dir and latest lounge note (`state=running`, `exclude_thread`, `limit`) |
+| GET | `/api/search` | Find a past thread by keyword — `LIKE` over summary and working dir; add `body=1` to also grep local Claude transcripts (each hit then carries a `snippet` and `source`); returns each hit with a Discord `deep_link` (`q` required, optional `origin`, `limit` max 50) |
+| GET | `/api/threads/{thread_id}/messages` | Read another thread's conversation, oldest first (`limit`) |
+| POST | `/api/claims` | Claim a resource before working on it — 201 when acquired, 409 with the holder when taken |
+| GET | `/api/claims` | List live claims (optional `resource` filter) |
+| DELETE | `/api/claims` | Release a claim (`resource`, `thread_id`, optional `force=true`) |
+| POST | `/api/threads/{thread_id}/message` | Relay a message from one session to another (`text`, `from_thread`, `mode`, `hop`) |
 
 ```bash
 # Send notification (embed format, default)
@@ -898,6 +1177,53 @@ curl -X POST http://localhost:8080/api/tasks \
 
 ---
 
+## Microsoft Teams
+
+Teams is a production **sibling** frontend, not a port. `claude_discord` and
+`claude_teams` each implement the vocabulary in `claude_code_core.frontend`,
+neither imports the other, and the same conformance contract runs against both —
+which is what stops "the Teams side is missing something" from being found by a
+user months later.
+
+```bash
+uv sync --extra teams
+python -m claude_teams manifest --out dist/teams-app.zip
+```
+
+The normal launcher runs Discord and Teams concurrently with
+`CCDB_FRONTENDS=discord,teams`. The public receiver verifies Bot Framework tokens and enqueues
+activities; the private `ActivityPuller` consumes them outbound, sends each prompt through the same
+session runner Discord uses, and posts the result back to Teams. The session host does not need an
+inbound Teams listener.
+
+The Teams experience is not a port of the Discord one. An answer that Discord
+fragments into fifteen messages arrives as **one**, and the column of embeds
+Discord posts per tool call becomes **a single card that keeps up to date** —
+because Teams allows 1,800 operations per hour per conversation, and the
+Discord design would spend a long session's whole budget on scrollback.
+
+Prompts are answerable: a card press arrives as an invoke, is checked against
+the conversation it was posted in, and resolves the session waiting on it. An
+unanswered permission request denies, and so does one whose card could not be
+posted — a prompt nobody could see must not be safer to ignore than one nobody
+answered.
+
+The Teams surface supports personal-chat file consent through a one-time upload URL — whose host is
+checked against Microsoft's own domains before a byte moves. Channel file delivery is not
+supported, and the private queue relay does not yet bridge the file-consent invoke. The conformance
+contract runs twice because of the surface-level channel gap: a personal chat passes all 18 checks,
+a channel fails exactly one, and the test asserts which.
+
+Unlike Discord, Teams needs a **public HTTPS endpoint**, an Entra application, an Azure Bot,
+an installable Teams app package, and a queue between the public and private sides. The values are
+tenant-specific, so no one-size-fits-all checked-in manifest can be safe or correct.
+
+Follow the [end-to-end Teams setup guide](docs/teams-setup.md) from registration through the first
+Teams → agent → Teams round trip. See [Teams surface behavior](docs/teams.md) for capability details
+and [the relay security model](docs/teams-relay.md) for the trust boundary and measured operation.
+
+---
+
 ## Architecture
 
 ```
@@ -909,6 +1235,9 @@ claude_code_core/          # Shared core library (backend-agnostic)
   types.py                 # Type definitions for SDK messages
   models.py                # SQLite schema
   session_repo.py          # Session CRUD
+  thread_search.py         # /search orchestration — summary + body merge, dedupe by thread
+  transcript_search.py     # grep/scan of ~/.claude/projects transcripts + snippet extraction;
+                           # find_transcript() locates one session's file without knowing its cwd
   lounge_repo.py           # AI Lounge message CRUD
   rewind.py                # Session rewind helpers
 claude_discord/
@@ -918,19 +1247,25 @@ claude_discord/
   cog_loader.py            # Dynamic custom Cog loader (CUSTOM_COGS_DIR)
   bot.py                   # Discord Bot class
   protocols.py             # Shared protocols (DrainAware)
+  frontend.py              # DiscordFrontend — resolve/create a conversation by key
+  stores.py                # build_session_stores() — every repo, no frontend
   concurrency.py           # Worktree instructions + active session registry
+  collision.py             # File-write tracking + collision rules (pure, clock-injected)
   lounge.py                # AI Lounge prompt builder
+  session_view.py          # Cross-session views for GET /api/sessions (pure merge logic)
+  relay.py                 # RelayGuard + relay prompt wrapper (hop/cooldown/rate limits)
   session_sync.py          # CLI session discovery and import
   worktree.py              # WorktreeManager — safe git worktree lifecycle
   cogs/
     claude_chat.py         # Interactive chat (thread creation, message handling)
     skill_command.py       # /skill slash command with autocomplete
-    session_manage.py      # /sessions, /sync-sessions, /resume, /resume-info, /sync-settings
+    session_manage.py      # /sessions, /search, /sync-sessions, /resume, /resume-info, /sync-settings
     session_sync.py        # Thread-creation and message-posting logic for sync-sessions
     prompt_builder.py      # build_prompt_and_images() — pure function, no Cog/Bot state
     scheduler.py           # Periodic Claude Code task executor
     webhook_trigger.py     # Webhook → Claude Code task execution (CI/CD)
     auto_upgrade.py        # Webhook → package upgrade + drain-aware restart
+    collision_watch.py     # Announces sessions writing the same files (60s loop)
     event_processor.py     # EventProcessor — state machine for stream-json events
     run_config.py          # RunConfig dataclass — bundles all CLI execution params
     _run_helper.py         # Thin orchestration layer (run_claude_with_config + shim)
@@ -945,14 +1280,17 @@ claude_discord/
     ask_repo.py            # Pending AskUserQuestion CRUD
     notification_repo.py   # Scheduled notification CRUD
     lounge_repo.py         # AI Lounge message CRUD
+    claims_repo.py         # Advisory resource claim CRUD (TTL-bound)
     resume_repo.py         # Startup resume CRUD (pending resumes across bot restarts)
     settings_repo.py       # Per-guild settings
+    frontend_thread_repo.py  # ThreadKey → where the conversation lives
     inbox_repo.py          # Thread inbox CRUD (THREAD_INBOX_ENABLED)
   discord_ui/
     status.py              # Emoji reaction manager (debounced)
     chunker.py             # Fence- and table-aware message splitting
     embeds.py              # Discord embed builders
     views.py               # Stop button and shared UI components
+    prompt_views.py        # ChoiceView / FormModal — renders the protocol's prompts
     mentions.py            # user_mention_kwargs() — notify requester when Claude pauses for input
     ask_bus.py             # Event bus for AskUserQuestion communication
     ask_view.py            # Buttons/Select Menus for AskUserQuestion
@@ -960,14 +1298,14 @@ claude_discord/
     streaming_manager.py   # StreamingMessageManager — debounced in-place message edits
     tool_timer.py          # LiveToolTimer — elapsed time counter for long-running tools
     thread_dashboard.py    # Live pinned embed showing session states
-    plan_view.py           # Approve/Cancel buttons for Plan Mode (ExitPlanMode)
-    permission_view.py     # Allow/Deny buttons for tool permission requests
-    elicitation_view.py    # Discord UI for MCP elicitation (Modal form or URL button)
     file_sender.py         # File delivery via .ccdb-attachments
     inbox_classifier.py    # classify() — lightweight claude -p call to label sessions
     thread_renamer.py      # suggest_title() — background claude -p call for auto thread naming
   ext/
     api_server.py          # REST API (optional, requires aiohttp)
+    ingest_manifest.py     # Reconciles attachments_manifest against delivered files
+    teams_sync.py          # have/want negotiation behind /api/teams/sync (plan + push)
+    teams_store.py         # TeamsVaultStore — one file per message, chain.jsonl, _history/
   utils/
     logger.py              # Logging setup
 examples/
@@ -996,7 +1334,7 @@ examples/
 uv run pytest tests/ -v --cov=claude_discord
 ```
 
-1365+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, and backend factory.
+1690+ tests covering parser, chunker, repository, runner, streaming, webhook triggers, auto-upgrade (including `/upgrade` slash command, thread-invocation, and approval button), REST API, AskUserQuestion UI, thread dashboard, scheduled tasks, session sync, AI Lounge, cross-session observability, resource claims, session-to-session relay, startup resume, model switching, compact detection, TodoWrite progress embeds, custom Cog loader, permission/elicitation/plan-mode event parsing, thread inbox classification, per-thread lock behavior, SessionBackend protocol, CodexRunner, backend factory, and cross-backend session ownership.
 
 ---
 
@@ -1024,6 +1362,8 @@ The project started on 2026-02-18 and continues to evolve through iterative conv
 - **AutoUpgradeCog** — Self-updating via GitHub webhook + systemctl restart
 - **DocsSyncCog** — Auto-translate documentation on push via webhook
 - **AlertResponderCog** — Generic alert-monitoring Cog; watches a configurable source and posts severity-annotated notifications to Discord
+- **JobFailureTriageCog** — Picks up scheduler job-failure embeds and starts a triage session
+- **ThreadCompletionCog** — Deleting a thread means the work is done; deletions are batched and filed as a written record built from the session transcript, since the thread's messages are already gone. What that record says and where it goes comes from an external prompt file (`THREAD_COMPLETION_PROMPT_FILE`), not from the Cog. Recording is off until you run `/thread-completion on` — the environment variables decide only whether the switch exists
 
 Run it with: `ccdb start --cogs-dir examples/ebibot/cogs/`
 

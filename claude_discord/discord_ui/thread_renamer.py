@@ -110,8 +110,7 @@ async def suggest_title(
         )
         try:
             stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_SECONDS)
-        except (TimeoutError, asyncio.TimeoutError):
-            # asyncio.TimeoutError != builtins.TimeoutError on Python 3.10; catch both.
+        except TimeoutError:
             proc.kill()
             await proc.communicate()
             logger.warning("thread title renamer timed out after %ds", _TIMEOUT_SECONDS)

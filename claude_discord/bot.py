@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 
 from .claude.types import AskOption, AskQuestion
+from .collision import FileActivityTracker
 from .concurrency import SessionRegistry
 from .discord_ui.ask_bus import ask_bus
 from .discord_ui.ask_view import AskView
@@ -46,6 +47,9 @@ class ClaudeDiscordBot(commands.Bot):
         self.channel_id = channel_id
         self.owner_id = owner_id
         self.session_registry = SessionRegistry()
+        # Which files each live session writes — CollisionWatchCog compares
+        # these to spot two sessions editing the same file.
+        self.file_activity = FileActivityTracker()
         # Optional repo for AskUserQuestion restart recovery
         self.ask_repo: PendingAskRepository | None = ask_repo
         # Populated after on_ready when the channel is resolved

@@ -17,6 +17,8 @@ The bridge's security goal is:
 | Flag injection via prompts | `--` separator prevents `-p`, `--resume` etc. in prompt text |
 | Session hijacking via crafted IDs | Strict regex validation: `^[a-f0-9\-]+$` |
 | Skill name injection | Strict regex validation: `^[\w-]+$` |
+| Path traversal via ingest attachments | Client filenames reduced to a safe basename, then re-checked against the ingest root inside the function that makes each filesystem call (`_contained_path`, and the same test written out in `_unique_path`) |
+| Zip slip via ingest archives | Each archive member is resolved and refused if it escapes the extraction directory or the ingest root |
 | Secrets leaking to Claude subprocess | `_STRIPPED_ENV_KEYS` removes `DISCORD_BOT_TOKEN`, `CLAUDECODE`, etc. from subprocess env |
 | Claude reading Discord secrets via Bash tool | Environment stripping prevents `echo $DISCORD_BOT_TOKEN` in Claude's Bash |
 | Nesting detection bypass | `CLAUDECODE` env var stripped — subprocess won't think it's already inside Claude Code |
@@ -72,6 +74,42 @@ if not re.match(r"^[\w-]+$", name):
 ```
 
 Skill names are passed to Claude Code as `/{name}`. The regex ensures only alphanumeric characters, underscores, and hyphens are allowed.
+
+### Ingest Attachment Paths (api_server.py)
+
+`POST /api/ingest` accepts base64 attachments from untrusted external clients and writes them to disk under an ingest root, so both the filename and any zip member name are attacker-controlled. Two independent guards apply.
+
+First, the filename is reduced to a safe basename:
+
+```python
+name = os.path.basename(str(raw or "")).strip()
+name = _UNSAFE_FILENAME_RE.sub("_", name).lstrip(".")
+return name or f"attachment_{index}"
+```
+
+This strips directory components, replaces anything outside `[\w.\-]`, and drops leading dots so an attachment can't masquerade as a dotfile.
+
+Second, containment is re-established immediately before the filesystem call:
+
+```python
+root = os.path.realpath(str(self._ingest_root()))
+resolved = os.path.realpath(str(path))
+if resolved != root and not resolved.startswith(root + os.sep):
+    return None
+```
+
+Why both:
+- The basename sanitiser lives far from the `open()` calls it protects. The containment test re-checks *at the sink*, so every path ccdb opens, stats or writes under the ingest tree is verified — a future refactor can't silently bypass it
+- Returning `None` is a refusal, not a fallback path: callers skip the file rather than write it somewhere else
+- `_unique_path` builds its candidate list up front and re-checks *every* derived variant (`name_2.ext`, `name_3.ext`, …) before touching it, because those names are built from the same untrusted input
+- Running out of candidates is a refusal too. After 1000 same-named files `_unique_path` returns `None` rather than falling back to a `uuid`-suffixed name: 1000 identical filenames in one request is not a real export, and a random name nothing else can predict is worse than a clear error. A direct attachment becomes a `400`; a zip member is skipped
+- Comparing against `root + os.sep` — not bare `root` — is what stops a sibling directory like `ingest-evil` from passing a prefix test against `ingest`
+- The check is deliberately spelled `os.path.realpath` + `startswith` rather than `Path.resolve()` + `relative_to()`. The two are equivalent, but only the former is recognised as a path sanitiser by CodeQL; with the pathlib spelling the hardening was invisible to the very tool meant to verify it
+- For the same reason the test is *written out* in `_unique_path` instead of delegating to `_contained_path`. The two are identical, but a guard that lives behind a call boundary does not propagate for static analysis: with the delegated version CodeQL still reported both `exists()` calls as live path injections. Keeping the `realpath` + prefix test in the same function as the filesystem call it protects makes the guarantee local — to a reader and to the analyser alike. `_contained_path` remains for the paths handed to `hash_files()`, where the delegation *is* recognised
+
+Zip attachments are extracted member by member, and a member is skipped if it resolves outside the extraction directory or fails the ingest-root check.
+
+Extraction never destroys the upload it came from. The original is deleted only once extraction has actually produced files: `zipfile.is_zipfile()` matches an end-of-central-directory record near the *end* of a file, so a large opaque binary — a Windows `.evtx` log, a dump, a capture — can carry a well-formed empty EOCD by chance and be read as an archive it isn't. Expanding such a file yields zero members, and unlinking it then destroyed the attachment while `attachments_saved` still reported success. A zip that yields nothing (empty, refused, or malformed) is kept as it arrived — replacing a file with nothing is never an improvement.
 
 ## Environment Isolation
 
@@ -165,11 +203,13 @@ Key principles:
 
 ## Security Audit Checklist
 
-Before merging changes to `runner.py`, `_run_helper.py`, or any Cog:
+Before merging changes to `runner.py`, `_run_helper.py`, `ext/api_server.py`, or any Cog:
 
 - [ ] No `shell=True` in any subprocess call
 - [ ] `--` separator present before user-supplied arguments
 - [ ] All external input validated (session IDs, skill names, channel IDs)
+- [ ] Any new filesystem write under the ingest root goes through `_contained_path` / `_unique_path`
+- [ ] Containment checks stay in the function that makes the filesystem call — don't "clean up" an inline guard into a helper, it stops propagating for CodeQL
 - [ ] `_STRIPPED_ENV_KEYS` covers any new secret variables
 - [ ] No string formatting in SQL queries (use `?` placeholders)
 - [ ] `allowed_user_ids` check present in any new message handler

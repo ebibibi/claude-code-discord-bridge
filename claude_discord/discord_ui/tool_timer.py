@@ -11,6 +11,7 @@ import contextlib
 import logging
 import time
 
+import aiohttp
 import discord
 
 from ..claude.types import ToolUseEvent
@@ -49,14 +50,14 @@ class LiveToolTimer:
     async def _loop(self) -> None:
         try:
             # Show 0s immediately so the user sees the timer as soon as the tool starts.
-            with contextlib.suppress(discord.HTTPException):
+            with contextlib.suppress(discord.HTTPException, aiohttp.ClientConnectionError):
                 await self._msg.edit(
                     embed=tool_use_embed(self._tool, in_progress=True, elapsed_s=0)
                 )
             while True:
                 await asyncio.sleep(TOOL_TIMER_INTERVAL)
                 elapsed = int(time.monotonic() - self._start)
-                with contextlib.suppress(discord.HTTPException):
+                with contextlib.suppress(discord.HTTPException, aiohttp.ClientConnectionError):
                     await self._msg.edit(
                         embed=tool_use_embed(self._tool, in_progress=True, elapsed_s=elapsed)
                     )

@@ -66,7 +66,7 @@ PATH="/home/ebi/.local/bin:$PATH" git commit -m "release: v1.4.0 [release]"
 git push -u origin release/v1.4.0
 
 gh pr create \
-  --repo ebibibi/claude-code-discord-bridge \
+  --repo ebibibi/ebi-agent-chat-relay \
   --base main \
   --title "release: v1.4.0 [release]" \
   --body "Release v1.4.0
@@ -82,7 +82,7 @@ See CHANGELOG.md for details."
 auto-approve により PR が自動マージされ、タグ `v1.4.0` と GitHub Release が作成される:
 
 ```bash
-gh release view v1.4.0 --repo ebibibi/claude-code-discord-bridge
+gh release view v1.4.0 --repo ebibibi/ebi-agent-chat-relay
 ```
 
 ---
@@ -108,4 +108,4 @@ PR マージ（auto-approve.yml）
 | 状況 | 原因 | 対処 |
 |------|------|------|
 | v1.4.1 になってしまった | PR タイトルに `[release]` がなかった | タグを削除して再度 release PR を作る |
-| タグが既に存在するエラー | 同じバージョンでタグを作ろうとした | タグを削除: `gh api repos/ebibibi/claude-code-discord-bridge/git/refs/tags/v1.4.0 --method DELETE` |
+| タグが既に存在するエラー | 同じバージョンでタグを作ろうとした | タグを削除: `gh api repos/ebibibi/ebi-agent-chat-relay/git/refs/tags/v1.4.0 --method DELETE` |

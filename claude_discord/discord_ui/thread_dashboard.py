@@ -9,7 +9,7 @@ When THREAD_INBOX_ENABLED is set, the dashboard also shows a persistent
 inbox section (📬) that survives bot restarts and surfaces threads where
 the user owes a reply.
 
-Issue: https://github.com/ebibibi/claude-code-discord-bridge/issues/67
+Issue: https://github.com/ebibibi/ebi-agent-chat-relay/issues/67
 """
 
 from __future__ import annotations

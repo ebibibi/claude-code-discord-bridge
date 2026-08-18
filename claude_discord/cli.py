@@ -6,7 +6,7 @@ Usage:
     ccdb         — show help
 
 Install via:
-    uvx --from git+https://github.com/ebibibi/claude-code-discord-bridge ccdb setup
+    uvx --from git+https://github.com/ebibibi/ebi-agent-chat-relay ccdb setup
 """
 
 from __future__ import annotations
@@ -119,6 +119,7 @@ def write_env(
         "",
         "MAX_CONCURRENT_SESSIONS=3",
         "SESSION_TIMEOUT_SECONDS=300",
+        "# CCDB_PR_COMPLETION_OWNER=your-github-login",
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

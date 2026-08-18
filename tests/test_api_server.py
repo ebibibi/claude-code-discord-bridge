@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from claude_discord.database.notification_repo import NotificationRepository
 from claude_discord.ext.api_server import ApiServer
+from claude_discord.thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 
 @pytest.fixture
@@ -71,6 +72,29 @@ class TestHealth:
         data = await resp.json()
         assert data["status"] == "ok"
         assert "timestamp" in data
+
+    @pytest.mark.asyncio
+    async def test_health_reports_no_overdue_when_clean(self, client: TestClient) -> None:
+        resp = await client.get("/api/health")
+        assert (await resp.json())["overdue_notifications"] == 0
+
+    @pytest.mark.asyncio
+    async def test_health_counts_overdue_notifications(
+        self, client: TestClient, repo: NotificationRepository
+    ) -> None:
+        """A notification long past its time is the symptom of a dead dispatcher.
+
+        The previous outage was invisible precisely because every endpoint kept
+        answering normally while nothing was delivered, so the health check now
+        reports the backlog instead of a bare "ok".
+        """
+        await repo.create(message="取り残された", scheduled_at="2020-01-01T09:00:00")
+        await repo.create(message="まだ先", scheduled_at="2099-01-01T09:00:00")
+
+        data = await (await client.get("/api/health")).json()
+
+        assert data["overdue_notifications"] == 1
+        assert data["status"] == "degraded"
 
 
 class TestNotify:
@@ -302,7 +326,9 @@ class TestNotifyThread:
         data = await resp.json()
         assert data["status"] == "sent"
         assert data["thread_id"] == "111222333"
-        channel.create_thread.assert_called_once_with(name="PR Review")
+        channel.create_thread.assert_called_once_with(
+            name="PR Review", auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES
+        )
         thread.send.assert_called_once_with("PR #42 needs review")
         # Channel.send should NOT be called — message goes to thread
         channel.send.assert_not_called()
@@ -323,7 +349,9 @@ class TestNotifyThread:
             },
         )
         assert resp.status == 200
-        channel.create_thread.assert_called_once_with(name="Summary Thread")
+        channel.create_thread.assert_called_once_with(
+            name="Summary Thread", auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES
+        )
         call_kwargs = thread.send.call_args.kwargs
         assert "embed" in call_kwargs
         channel.send.assert_not_called()
@@ -371,6 +399,36 @@ class TestNotifyThread:
         data = await resp.json()
         assert data["thread_id"] == "111222333"
         assert data["thread_name"] == "PR Review"
+
+    @pytest.mark.asyncio
+    async def test_notify_blank_thread_name_sends_to_channel(
+        self, thread_client: TestClient, bot_with_thread: MagicMock
+    ) -> None:
+        """Whitespace-only thread_name is treated as absent, avoiding Discord 400s."""
+        channel = bot_with_thread.get_channel.return_value
+        resp = await thread_client.post(
+            "/api/notify",
+            json={"message": "No thread please", "thread_name": "   "},
+        )
+        assert resp.status == 200
+        channel.create_thread.assert_not_called()
+        channel.send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_notify_thread_name_is_trimmed_and_limited_to_discord_max(
+        self, thread_client: TestClient, bot_with_thread: MagicMock
+    ) -> None:
+        """Thread names are normalized before passing them to Discord."""
+        channel = bot_with_thread.get_channel.return_value
+        raw_name = f"  {'a' * 120}  "
+        resp = await thread_client.post(
+            "/api/notify",
+            json={"message": "Long title", "thread_name": raw_name},
+        )
+        assert resp.status == 200
+        channel.create_thread.assert_called_once_with(
+            name="a" * 100, auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES
+        )
 
 
 class TestSchedule:
@@ -642,6 +700,92 @@ class TestSpawn:
         assert kwargs.get("auto_start") is True
 
     @pytest.mark.asyncio
+    async def test_spawn_accepts_payload_over_1mb(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        """A >1MB attachment body must not be 413'd (aiohttp's default body limit
+        is 1MB; ApiServer raises client_max_size for base64 payloads)."""
+        import base64
+
+        blob = b"\x00" * (2 * 1024 * 1024)  # 2 MB → ~2.7 MB base64
+        resp = await spawn_client.post(
+            "/api/spawn",
+            json={
+                "prompt": "big attachment",
+                "attachments": [{"filename": "big.bin", "data": base64.b64encode(blob).decode()}],
+            },
+        )
+        assert resp.status == 201
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs["attachments"][0][1] == blob
+
+    @pytest.mark.asyncio
+    async def test_spawn_decodes_attachments_and_passes_to_cog(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        import base64
+
+        blob = b"%PDF-1.4 hello"
+        resp = await spawn_client.post(
+            "/api/spawn",
+            json={
+                "prompt": "Issue with attachment",
+                "attachments": [{"filename": "spec.pdf", "data": base64.b64encode(blob).decode()}],
+            },
+        )
+        assert resp.status == 201
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("attachments") == [("spec.pdf", blob)]
+
+    @pytest.mark.asyncio
+    async def test_spawn_without_attachments_passes_none(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post("/api/spawn", json={"prompt": "No files"})
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        assert kwargs.get("attachments") is None
+
+    @pytest.mark.asyncio
+    async def test_spawn_invalid_base64_attachment_returns_400(
+        self, spawn_client: TestClient
+    ) -> None:
+        resp = await spawn_client.post(
+            "/api/spawn",
+            json={
+                "prompt": "Bad file",
+                "attachments": [{"filename": "x.bin", "data": "not!!base64!!"}],
+            },
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_spawn_attachments_must_be_a_list(self, spawn_client: TestClient) -> None:
+        resp = await spawn_client.post(
+            "/api/spawn",
+            json={"prompt": "x", "attachments": {"filename": "a"}},
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_spawn_sanitizes_attachment_filename(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        import base64
+
+        await spawn_client.post(
+            "/api/spawn",
+            json={
+                "prompt": "traversal",
+                "attachments": [
+                    {"filename": "../../etc/passwd", "data": base64.b64encode(b"x").decode()}
+                ],
+            },
+        )
+        kwargs = mock_cog.spawn_session.call_args.kwargs
+        name = kwargs["attachments"][0][0]
+        assert "/" not in name and ".." not in name
+
+    @pytest.mark.asyncio
     async def test_spawn_auto_start_false_passed_to_cog(
         self, spawn_client: TestClient, mock_cog: MagicMock
     ) -> None:
@@ -745,3 +889,855 @@ class TestMarkResume:
             headers={"Content-Type": "application/json"},
         )
         assert resp.status == 400
+
+
+class TestIngest:
+    """Tests for POST /api/ingest — authenticated external spawn with attachments."""
+
+    INGEST_TOKEN = "ingest-secret-xyz"
+    AUTH = {"Authorization": f"Bearer {INGEST_TOKEN}"}
+
+    @pytest.fixture
+    def mock_cog(self) -> MagicMock:
+        thread = MagicMock()
+        thread.id = 111222333
+        thread.name = "Ingested thread"
+        cog = MagicMock()
+        cog.spawn_session = AsyncMock(return_value=thread)
+        return cog
+
+    @pytest.fixture
+    def bot_with_text_channel(self, mock_cog: MagicMock) -> MagicMock:
+        import discord
+
+        b = MagicMock()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        b.get_channel.return_value = channel
+        b.cogs = {"ClaudeChatCog": mock_cog}
+        return b
+
+    @pytest.fixture
+    async def ingest_client(
+        self,
+        repo: NotificationRepository,
+        bot_with_text_channel: MagicMock,
+        tmp_path,
+    ) -> TestClient:
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+        )
+        api._ingest_tmp = str(tmp_path)  # expose for assertions
+        server = TestServer(api.app)
+        client = TestClient(server)
+        client._api = api  # type: ignore[attr-defined]
+        await client.start_server()
+        yield client
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_ingest_disabled_without_token(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock
+    ) -> None:
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, default_channel_id=12345)
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/ingest", json={"content": "hi"}, headers=self.AUTH)
+            assert resp.status == 503
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_ingest_missing_auth_returns_401(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post("/api/ingest", json={"content": "hi"})
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_ingest_wrong_token_returns_401(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={"content": "hi"},
+            headers={"Authorization": "Bearer nope"},
+        )
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_ingest_returns_201_with_thread_info(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest", json={"content": "Teams thread body"}, headers=self.AUTH
+        )
+        assert resp.status == 201
+        data = await resp.json()
+        assert data["status"] == "spawned"
+        assert data["thread_id"] == "111222333"
+        assert data["attachments_saved"] == 0
+
+    @pytest.mark.asyncio
+    async def test_ingest_missing_content_returns_400(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post("/api/ingest", json={}, headers=self.AUTH)
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_ingest_accepts_prompt_alias(
+        self, ingest_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest", json={"prompt": "Via alias"}, headers=self.AUTH
+        )
+        assert resp.status == 201
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert prompt == "Via alias"
+
+    @pytest.mark.asyncio
+    async def test_ingest_saves_attachment_and_references_path(
+        self, ingest_client: TestClient, mock_cog: MagicMock, tmp_path
+    ) -> None:
+        import base64
+
+        payload = base64.b64encode(b"hello file").decode()
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "See attached",
+                "attachments": [{"filename": "report.txt", "data": payload}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        data = await resp.json()
+        assert data["attachments_saved"] == 1
+
+        # File written under {working_dir}/ingest/**/report.txt with correct bytes
+        matches = list(tmp_path.glob("ingest/*/report.txt"))
+        assert len(matches) == 1
+        assert matches[0].read_bytes() == b"hello file"
+
+        # Saved path is referenced in the prompt passed to spawn_session
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert "report.txt" in prompt
+        assert str(matches[0]) in prompt
+
+    @pytest.mark.asyncio
+    async def test_ingest_rejects_path_traversal_filename(
+        self, ingest_client: TestClient, tmp_path
+    ) -> None:
+        import base64
+
+        payload = base64.b64encode(b"x").decode()
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "evil",
+                "attachments": [{"filename": "../../etc/passwd", "data": payload}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        # Nothing written outside the ingest dir; basename sanitised to "passwd"
+        assert list(tmp_path.glob("ingest/*/passwd"))
+        assert not list(tmp_path.glob("**/etc/passwd"))
+
+    @pytest.mark.asyncio
+    async def test_ingest_invalid_base64_returns_400(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={"content": "x", "attachments": [{"filename": "a.bin", "data": "!!!notb64"}]},
+            headers=self.AUTH,
+        )
+        assert resp.status == 400
+
+    @staticmethod
+    def _make_zip(members: dict[str, bytes]) -> str:
+        """Build an in-memory zip from {arcname: bytes} and return base64."""
+        import base64
+        import io
+        import zipfile
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name, blob in members.items():
+                zf.writestr(name, blob)
+        return base64.b64encode(buf.getvalue()).decode()
+
+    @pytest.mark.asyncio
+    async def test_ingest_extracts_zip_bundle_and_lists_extracted_files(
+        self, ingest_client: TestClient, mock_cog: MagicMock, tmp_path
+    ) -> None:
+        zip_b64 = self._make_zip({"a.txt": b"alpha", "docs/b.md": b"# beta"})
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "See bundle",
+                "attachments": [{"filename": "bundle.zip", "data": zip_b64}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+
+        # Zip is expanded on disk; its members exist with correct bytes.
+        a = list(tmp_path.glob("ingest/*/**/a.txt"))
+        b = list(tmp_path.glob("ingest/*/**/b.md"))
+        assert len(a) == 1 and a[0].read_bytes() == b"alpha"
+        assert len(b) == 1 and b[0].read_bytes() == b"# beta"
+
+        # The zip archive itself is removed after extraction.
+        assert not list(tmp_path.glob("ingest/*/bundle.zip"))
+
+        # Prompt references the extracted files (paths only), not the zip name.
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert "a.txt" in prompt
+        assert "b.md" in prompt
+        assert "bundle.zip" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_ingest_zip_extraction_blocks_zip_slip(
+        self, ingest_client: TestClient, tmp_path
+    ) -> None:
+        zip_b64 = self._make_zip({"../../evil.txt": b"pwned", "ok.txt": b"safe"})
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "evil zip",
+                "attachments": [{"filename": "bundle.zip", "data": zip_b64}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        # Nothing escapes the ingest dir.
+        assert not list(tmp_path.glob("**/evil.txt"))
+
+    @pytest.mark.asyncio
+    async def test_two_attachments_with_the_same_name_both_survive(
+        self, ingest_client: TestClient, tmp_path
+    ) -> None:
+        # Teams names every pasted screenshot "image.png". Writing both to the
+        # same path left one file where two were sent, and the saved count still
+        # said 2 — a loss indistinguishable from success.
+        import base64
+
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "two shots",
+                "attachments": [
+                    {"filename": "image.png", "data": base64.b64encode(b"first").decode()},
+                    {"filename": "image.png", "data": base64.b64encode(b"second").decode()},
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        files = sorted(p.read_bytes() for p in tmp_path.glob("ingest/*/image*.png"))
+        assert files == [b"first", b"second"]
+
+    @pytest.mark.asyncio
+    async def test_zip_members_with_the_same_name_both_survive(
+        self, ingest_client: TestClient, tmp_path
+    ) -> None:
+        import base64
+        import io
+        import zipfile
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("image.png", b"first")
+            zf.writestr("image.png", b"second")
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "dup members",
+                "attachments": [
+                    {
+                        "filename": "b.zip",
+                        "data": base64.b64encode(buf.getvalue()).decode(),
+                    }
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        files = sorted(p.read_bytes() for p in tmp_path.glob("ingest/*/**/image*.png"))
+        assert files == [b"first", b"second"]
+
+    def test_unique_path_refuses_a_path_outside_the_ingest_root(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path
+    ) -> None:
+        # Containment is re-established at the filesystem call itself, not only
+        # by the basename sanitiser far upstream.
+        from pathlib import Path
+
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, working_dir=str(tmp_path))
+        assert api._unique_path(Path("/etc/passwd")) is None
+        assert api._unique_path(tmp_path / "ingest" / ".." / ".." / "escape.txt") is None
+        inside = api._unique_path(tmp_path / "ingest" / "req" / "ok.txt")
+        assert inside is not None and str(inside).startswith(str((tmp_path / "ingest").resolve()))
+
+    def test_unique_path_walks_past_existing_collisions(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path
+    ) -> None:
+        # The disambiguation loop is what stops a same-named attachment from
+        # overwriting an earlier one, so it has to keep stepping past every name
+        # already taken — not just the first.
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, working_dir=str(tmp_path))
+        dest = tmp_path / "ingest" / "req"
+        dest.mkdir(parents=True)
+        (dest / "image.png").write_bytes(b"a")
+        (dest / "image_2.png").write_bytes(b"b")
+        got = api._unique_path(dest / "image.png")
+        assert got is not None and got.name == "image_3.png"
+
+    def test_unique_path_refuses_rather_than_inventing_a_name_when_exhausted(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path, monkeypatch
+    ) -> None:
+        # Every candidate taken → refuse (the caller turns this into a 400)
+        # rather than fall back to a random name nothing else can predict.
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, working_dir=str(tmp_path))
+        (tmp_path / "ingest").mkdir()
+        monkeypatch.setattr(os.path, "exists", lambda _p: True)
+        assert api._unique_path(tmp_path / "ingest" / "image.png") is None
+
+    def test_contained_path_rejects_a_sibling_with_the_root_as_a_name_prefix(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path
+    ) -> None:
+        # "/…/ingest-evil" starts with "/…/ingest" as a *string* but is not
+        # inside it. The guard compares against root + os.sep for this reason.
+        api = ApiServer(repo=repo, bot=bot_with_text_channel, working_dir=str(tmp_path))
+        (tmp_path / "ingest").mkdir()
+        sibling = tmp_path / "ingest-evil"
+        sibling.mkdir()
+        assert api._contained_path(sibling / "loot.txt") is None
+        assert api._contained_path(tmp_path / "ingest" / "ok.txt") is not None
+
+    @pytest.mark.asyncio
+    async def test_manifest_shortfall_warns_the_session_and_the_caller(
+        self, ingest_client: TestClient, mock_cog: MagicMock, tmp_path
+    ) -> None:
+        import base64
+
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "See attached",
+                "attachments": [
+                    {"filename": "shot.png", "data": base64.b64encode(b"png").decode()}
+                ],
+                "attachments_manifest": [
+                    {"name": "shot.png", "message": "返信 1"},
+                    {
+                        "name": "MEHJdebug.log",
+                        "status": "linked",
+                        "message": "返信 2",
+                        "reason": "SharePoint download failed",
+                    },
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        data = await resp.json()
+
+        # The caller — the only party that can re-send — is told what is missing.
+        assert data["attachments"]["verified"] is True
+        assert data["attachments"]["complete"] is False
+        assert data["attachments"]["not_delivered"][0]["name"] == "MEHJdebug.log"
+
+        # The session is told before it is asked to do anything.
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert "MEHJdebug.log" in prompt
+        assert "返信 2" in prompt
+        assert prompt.index("⚠️") < prompt.index("See attached")
+
+        # And the ledger is written next to the files.
+        report = list(tmp_path.glob("ingest/*/ATTACHMENTS-REPORT.md"))
+        assert len(report) == 1
+        assert "MEHJdebug.log" in report[0].read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_complete_manifest_adds_no_warning(
+        self, ingest_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        import base64
+
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={
+                "content": "See attached",
+                "attachments": [
+                    {"filename": "shot.png", "data": base64.b64encode(b"png").decode()}
+                ],
+                "attachments_manifest": [{"name": "shot.png", "message": "返信 1"}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        assert (await resp.json())["attachments"]["complete"] is True
+        _channel, prompt = mock_cog.spawn_session.call_args.args
+        assert "⚠️" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_ingest_without_a_manifest_still_works_unverified(
+        self, ingest_client: TestClient
+    ) -> None:
+        # Zero-Config: an older client that knows nothing about manifests must
+        # keep working, and must not be reported as verified-complete.
+        resp = await ingest_client.post(
+            "/api/ingest", json={"content": "no manifest"}, headers=self.AUTH
+        )
+        assert resp.status == 201
+        attachments = (await resp.json())["attachments"]
+        assert attachments["verified"] is False
+        assert attachments["complete"] is None
+
+    @pytest.mark.asyncio
+    async def test_malformed_manifest_returns_400(self, ingest_client: TestClient) -> None:
+        resp = await ingest_client.post(
+            "/api/ingest",
+            json={"content": "x", "attachments_manifest": "not-a-list"},
+            headers=self.AUTH,
+        )
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_strict_mode_refuses_a_lossy_ingest(
+        self,
+        repo: NotificationRepository,
+        bot_with_text_channel: MagicMock,
+        mock_cog: MagicMock,
+        tmp_path,
+    ) -> None:
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+            ingest_require_complete=True,
+        )
+        client = TestClient(TestServer(api.app))
+        await client.start_server()
+        try:
+            resp = await client.post(
+                "/api/ingest",
+                json={
+                    "content": "x",
+                    "attachments_manifest": [{"name": "gone.log", "status": "failed"}],
+                },
+                headers=self.AUTH,
+            )
+            assert resp.status == 409
+            assert (await resp.json())["attachments"]["not_delivered"][0]["name"] == "gone.log"
+            # No session was started on partial evidence.
+            mock_cog.spawn_session.assert_not_called()
+        finally:
+            await client.close()
+
+
+class TestIngestResult:
+    """Tests for /api/ingest result capture + GET /api/ingest/{result_id}."""
+
+    INGEST_TOKEN = "ingest-secret-xyz"
+    AUTH = {"Authorization": f"Bearer {INGEST_TOKEN}"}
+
+    @pytest.fixture
+    def mock_cog(self) -> MagicMock:
+        thread = MagicMock()
+        thread.id = 111222333
+        thread.name = "Ingested thread"
+        cog = MagicMock()
+        cog.spawn_session = AsyncMock(return_value=thread)
+        return cog
+
+    @pytest.fixture
+    def bot_with_text_channel(self, mock_cog: MagicMock) -> MagicMock:
+        import discord
+
+        b = MagicMock()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        b.get_channel.return_value = channel
+        b.cogs = {"ClaudeChatCog": mock_cog}
+        return b
+
+    @pytest.fixture
+    async def ingest_repo(self):
+        from claude_discord.database.ingest_repo import IngestResultRepository
+
+        fd, path = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        r = IngestResultRepository(path)
+        await r.init_db()
+        yield r
+        os.unlink(path)
+
+    @pytest.fixture
+    async def result_client(
+        self,
+        repo: NotificationRepository,
+        bot_with_text_channel: MagicMock,
+        ingest_repo,
+        tmp_path,
+    ) -> TestClient:
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+            ingest_repo=ingest_repo,
+        )
+        server = TestServer(api.app)
+        client = TestClient(server)
+        client._api = api  # type: ignore[attr-defined]
+        await client.start_server()
+        yield client
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_post_returns_result_id_when_repo_configured(
+        self, result_client: TestClient
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        assert resp.status == 201
+        data = await resp.json()
+        assert "result_id" in data
+        assert len(data["result_id"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_get_result_running_then_done(
+        self, result_client: TestClient, ingest_repo
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        result_id = (await resp.json())["result_id"]
+
+        # Immediately after spawn, the result is still being produced.
+        poll = await result_client.get(f"/api/ingest/{result_id}", headers=self.AUTH)
+        assert poll.status == 200
+        running = await poll.json()
+        assert running["status"] == "running"
+        assert running["thread_id"] == "111222333"
+
+        # Simulate the session finishing and firing the result sink.
+        await ingest_repo.set_result(result_id, "the generated answer")
+
+        poll2 = await result_client.get(f"/api/ingest/{result_id}", headers=self.AUTH)
+        done = await poll2.json()
+        assert done["status"] == "done"
+        assert done["result"] == "the generated answer"
+
+    @pytest.mark.asyncio
+    async def test_sink_passed_to_spawn_writes_result(
+        self, result_client: TestClient, mock_cog: MagicMock, ingest_repo
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        result_id = (await resp.json())["result_id"]
+
+        # The handler must pass a result_sink to spawn_session.
+        sink = mock_cog.spawn_session.call_args.kwargs["result_sink"]
+        assert sink is not None
+
+        # Invoking the sink (as the real session would) persists the answer.
+        await sink("answer via sink", None)
+        rec = await ingest_repo.get(result_id)
+        assert rec["status"] == "done"
+        assert rec["result"] == "answer via sink"
+
+        # Error path routes to set_error.
+        await sink(None, "kaboom")
+        rec2 = await ingest_repo.get(result_id)
+        assert rec2["status"] == "error"
+        assert rec2["error"] == "kaboom"
+
+    @pytest.mark.asyncio
+    async def test_sink_attaches_answer_markdown_to_thread(
+        self, result_client: TestClient, mock_cog: MagicMock, ingest_repo
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        result_id = (await resp.json())["result_id"]
+        sink = mock_cog.spawn_session.call_args.kwargs["result_sink"]
+
+        with patch(
+            "claude_discord.ext.api_server.send_file_blobs",
+            new_callable=AsyncMock,
+        ) as send_file_blobs:
+            await sink("answer via sink", None)
+
+        rec = await ingest_repo.get(result_id)
+        assert rec["result"] == "answer via sink"
+        send_file_blobs.assert_awaited_once()
+        thread, blobs = send_file_blobs.await_args.args[:2]
+        assert thread.id == 111222333
+        assert blobs == [("ccdb-answer.md", b"answer via sink")]
+
+    @pytest.mark.asyncio
+    async def test_sink_does_not_attach_on_error(
+        self, result_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        resp = await result_client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+        assert resp.status == 201
+        sink = mock_cog.spawn_session.call_args.kwargs["result_sink"]
+
+        with patch(
+            "claude_discord.ext.api_server.send_file_blobs",
+            new_callable=AsyncMock,
+        ) as send_file_blobs:
+            await sink(None, "kaboom")
+
+        send_file_blobs.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_unknown_result_404(self, result_client: TestClient) -> None:
+        resp = await result_client.get("/api/ingest/does-not-exist", headers=self.AUTH)
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_get_result_requires_auth(self, result_client: TestClient) -> None:
+        resp = await result_client.get("/api/ingest/anything")
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_get_result_wrong_token_401(self, result_client: TestClient) -> None:
+        resp = await result_client.get(
+            "/api/ingest/anything", headers={"Authorization": "Bearer nope"}
+        )
+        assert resp.status == 401
+
+    @pytest.mark.asyncio
+    async def test_no_result_id_without_repo(
+        self,
+        repo: NotificationRepository,
+        bot_with_text_channel: MagicMock,
+        tmp_path,
+    ) -> None:
+        # No ingest_repo wired → endpoint still works, just no result retrieval.
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+        )
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/ingest", json={"content": "hello"}, headers=self.AUTH)
+            data = await resp.json()
+            assert "result_id" not in data
+            # GET returns 503 when retrieval isn't configured.
+            poll = await client.get("/api/ingest/whatever", headers=self.AUTH)
+            assert poll.status == 503
+        finally:
+            await client.close()
+
+    @pytest.mark.asyncio
+    async def test_ingest_pings_and_joins_owner(
+        self, repo: NotificationRepository, ingest_repo, tmp_path
+    ) -> None:
+        """An ingest session auto-joins + @mentions the bot owner on start, and
+        pings them again on completion so a long-running result is delivered
+        asynchronously over Discord (no foreground poller needed)."""
+        import discord
+
+        thread = MagicMock()
+        thread.id = 111222333
+        thread.name = "MEHJ thread"
+        thread.send = AsyncMock()
+        thread.add_user = AsyncMock()
+
+        cog = MagicMock()
+        cog.spawn_session = AsyncMock(return_value=thread)
+
+        bot = MagicMock()
+        bot.owner_id = 999  # configured owner → should be mentioned/added
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        bot.get_channel.return_value = channel
+        bot.cogs = {"ClaudeChatCog": cog}
+
+        api = ApiServer(
+            repo=repo,
+            bot=bot,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+            ingest_repo=ingest_repo,
+        )
+        server = TestServer(api.app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.post("/api/ingest", json={"content": "hi"}, headers=self.AUTH)
+            assert resp.status == 201
+
+            # Owner auto-joined the thread.
+            thread.add_user.assert_awaited()
+
+            # Start ping mentions the owner.
+            contents = [c.kwargs.get("content", "") for c in thread.send.call_args_list]
+            assert any("<@999>" in s and "開始" in s for s in contents)
+
+            # Completion: invoking the captured sink pings the owner again.
+            sink = cog.spawn_session.call_args.kwargs["result_sink"]
+            await sink("the answer", None)
+            contents = [c.kwargs.get("content", "") for c in thread.send.call_args_list]
+            assert any("<@999>" in s and "回答ができました" in s for s in contents)
+        finally:
+            await client.close()
+
+
+class TestBinaryAttachmentMisdetectedAsZip:
+    """A binary attachment must survive being mistaken for a zip archive.
+
+    ``zipfile.is_zipfile()`` looks for the end-of-central-directory signature
+    (``PK\\x05\\x06``) near the end of the file — it does not require the file to
+    *start* like a zip. Any binary can contain those four bytes by chance, and
+    Windows event logs (.evtx), memory dumps and packet captures are exactly the
+    kind of large opaque blobs where that happens.
+
+    When it did, the expander treated the file as an archive, "extracted" its
+    zero members, and then deleted the original — destroying the attachment and
+    reporting ``attachments_saved: 0``. Reproduced against the live endpoint
+    with a real 1.1 MB Admin.evtx before this was fixed.
+    """
+
+    INGEST_TOKEN = "ingest-secret-xyz"
+    AUTH = {"Authorization": f"Bearer {INGEST_TOKEN}"}
+
+    @pytest.fixture
+    def mock_cog(self) -> MagicMock:
+        thread = MagicMock()
+        thread.id = 111222333
+        thread.name = "Ingested thread"
+        cog = MagicMock()
+        cog.spawn_session = AsyncMock(return_value=thread)
+        return cog
+
+    @pytest.fixture
+    def bot_with_text_channel(self, mock_cog: MagicMock) -> MagicMock:
+        import discord
+
+        b = MagicMock()
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.send = AsyncMock()
+        b.get_channel.return_value = channel
+        b.cogs = {"ClaudeChatCog": mock_cog}
+        return b
+
+    @pytest.fixture
+    async def client(
+        self, repo: NotificationRepository, bot_with_text_channel: MagicMock, tmp_path
+    ) -> TestClient:
+        api = ApiServer(
+            repo=repo,
+            bot=bot_with_text_channel,
+            default_channel_id=12345,
+            ingest_token=self.INGEST_TOKEN,
+            working_dir=str(tmp_path),
+        )
+        c = TestClient(TestServer(api.app))
+        await c.start_server()
+        yield c
+        await c.close()
+
+    @staticmethod
+    def _evtx_containing_eocd() -> bytes:
+        """A .evtx-shaped blob ending in a well-formed, empty EOCD record.
+
+        Built deterministically rather than by scribbling the signature into
+        random bytes: ``is_zipfile`` also validates the trailing comment-length
+        field, so a random blob only trips it some of the time and the test
+        would be flaky. This is the worst realistic case — a binary that any
+        zip reader agrees is an archive containing nothing.
+        """
+        import struct
+
+        eocd = b"PK\x05\x06" + struct.pack("<HHHHIIH", 0, 0, 0, 0, 0, 0, 0)
+        return b"ElfFile\x00" + bytes(200_000) + eocd
+
+    @pytest.mark.asyncio
+    async def test_binary_that_looks_like_a_zip_is_not_deleted(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        import base64
+        import hashlib
+
+        raw = self._evtx_containing_eocd()
+        resp = await client.post(
+            "/api/ingest",
+            json={
+                "content": "see log",
+                "attachments": [{"filename": "Admin.evtx", "data": base64.b64encode(raw).decode()}],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        assert (await resp.json())["attachments_saved"] == 1
+
+        found = list(tmp_path.glob("ingest/*/Admin.evtx"))
+        assert len(found) == 1, "the attachment must still exist on disk"
+        assert hashlib.sha256(found[0].read_bytes()).hexdigest() == (
+            hashlib.sha256(raw).hexdigest()
+        ), "and must be byte-for-byte intact"
+
+    @pytest.mark.asyncio
+    async def test_a_genuinely_empty_zip_is_kept_rather_than_deleted(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        # Nothing to replace it with, so removing it would leave the session
+        # with strictly less than it was sent.
+        import base64
+        import io
+        import zipfile as zf
+
+        buf = io.BytesIO()
+        with zf.ZipFile(buf, "w"):
+            pass
+        resp = await client.post(
+            "/api/ingest",
+            json={
+                "content": "empty bundle",
+                "attachments": [
+                    {"filename": "b.zip", "data": base64.b64encode(buf.getvalue()).decode()}
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        assert list(tmp_path.glob("ingest/*/b.zip"))
+
+    @pytest.mark.asyncio
+    async def test_a_real_bundle_is_still_expanded_and_the_zip_removed(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        # The behaviour that must not regress.
+        import base64
+        import io
+        import zipfile as zf
+
+        buf = io.BytesIO()
+        with zf.ZipFile(buf, "w") as z:
+            z.writestr("Admin.evtx", b"ElfFile\x00payload")
+        resp = await client.post(
+            "/api/ingest",
+            json={
+                "content": "bundle",
+                "attachments": [
+                    {
+                        "filename": "teams-attachments.zip",
+                        "data": base64.b64encode(buf.getvalue()).decode(),
+                    }
+                ],
+            },
+            headers=self.AUTH,
+        )
+        assert resp.status == 201
+        member = list(tmp_path.glob("ingest/*/**/Admin.evtx"))
+        assert len(member) == 1
+        assert member[0].read_bytes() == b"ElfFile\x00payload"
+        assert not list(tmp_path.glob("ingest/*/teams-attachments.zip"))

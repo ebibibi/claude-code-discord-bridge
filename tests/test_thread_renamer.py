@@ -307,7 +307,6 @@ class TestSuggestTitleErrors:
         version, leaving the subprocess alive. This test reproduces that scenario by
         raising asyncio.TimeoutError directly from the mock communicate coroutine.
         """
-        import asyncio as _asyncio
 
         proc = _make_proc(b"")
         call_count = 0
@@ -316,7 +315,7 @@ class TestSuggestTitleErrors:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise _asyncio.TimeoutError()
+                raise TimeoutError()
             return b"", b""
 
         proc.communicate = _asyncio_timeout_on_first_call

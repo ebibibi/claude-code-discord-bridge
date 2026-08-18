@@ -117,8 +117,9 @@ class TestBuildRunnerBackendResolution:
         )
         # The thread override pins backend=codex, so we should get a CodexRunner.
         assert isinstance(runner, CodexRunner)
-        # No stored model for codex → factory default "gpt-5.4"
-        assert runner.model == "gpt-5.4"
+        # No stored model for codex → defer to the Codex CLI's own default
+        # (omit --model) rather than pinning a stale version.
+        assert runner.model is None
 
     async def test_other_thread_keeps_global(self) -> None:
         repo = await _new_settings_repo()
@@ -178,7 +179,7 @@ class TestBuildRunnerModelResolution:
         cog = _cog(factory=_factory(), settings=settings)
         # User previously did /model-set opus while on claude. That value is
         # passed as `model_override`. When the thread's backend is codex we
-        # must IGNORE it and fall back to the factory default.
+        # must IGNORE it and defer to the Codex CLI's own default (model=None).
         runner = await cog._build_runner_for_thread(
             thread_id=7,
             model_override="opus",
@@ -188,9 +189,7 @@ class TestBuildRunnerModelResolution:
             effort_override=None,
         )
         assert isinstance(runner, CodexRunner)
-        assert runner.model == "gpt-5.4", (
-            "Claude model 'opus' must not leak through to a Codex spawn"
-        )
+        assert runner.model is None, "Claude model 'opus' must not leak through to a Codex spawn"
 
     async def test_legacy_model_override_is_used_for_claude(self) -> None:
         repo = await _new_settings_repo()
@@ -294,7 +293,75 @@ class TestBuildRunnerPerCallOverrides:
             working_dir_override=None,
             effort_override="high",
         )
-        # CodexRunner does not have an effort attribute — must not raise,
-        # and the attribute must not be set (or be None) on a fresh codex runner.
+        # The legacy claude effort_override must NOT leak onto a Codex spawn
+        # (Codex effort levels differ from Claude's).
         assert isinstance(runner, CodexRunner)
-        assert not hasattr(runner, "effort") or getattr(runner, "effort", None) is None
+        assert getattr(runner, "effort", None) is None
+
+
+class TestBuildRunnerPerBackendEffort:
+    """Per-backend effort from BackendSettings is applied at spawn time."""
+
+    async def test_codex_effort_from_settings_applied(self) -> None:
+        repo = await _new_settings_repo()
+        settings = BackendSettings(
+            repo,
+            env_backend="claude",
+            env_model_for_claude="sonnet",
+            env_model_for_codex="",
+        )
+        await settings.set_backend("codex", thread_id=21)
+        await settings.set_effort("codex", "xhigh", thread_id=21)
+        cog = _cog(factory=_factory(), settings=settings)
+        runner = await cog._build_runner_for_thread(
+            thread_id=21,
+            model_override=None,
+            tools_override=None,
+            fork_session=False,
+            working_dir_override=None,
+            effort_override=None,
+        )
+        assert isinstance(runner, CodexRunner)
+        assert runner.effort == "xhigh"
+        assert "model_reasoning_effort=xhigh" in runner._build_args("hi", session_id=None)
+
+    async def test_claude_effort_from_settings_overrides_legacy(self) -> None:
+        repo = await _new_settings_repo()
+        settings = BackendSettings(
+            repo,
+            env_backend="claude",
+            env_model_for_claude="sonnet",
+            env_model_for_codex="",
+        )
+        await settings.set_effort("claude", "max")
+        cog = _cog(factory=_factory(), settings=settings)
+        runner = await cog._build_runner_for_thread(
+            thread_id=1,
+            model_override=None,
+            tools_override=None,
+            fork_session=False,
+            working_dir_override=None,
+            effort_override="low",  # legacy /effort-set value, lower precedence
+        )
+        assert isinstance(runner, ClaudeRunner)
+        assert runner.effort == "max"
+
+    async def test_claude_legacy_effort_still_applies_when_no_setting(self) -> None:
+        repo = await _new_settings_repo()
+        settings = BackendSettings(
+            repo,
+            env_backend="claude",
+            env_model_for_claude="sonnet",
+            env_model_for_codex="",
+        )
+        cog = _cog(factory=_factory(), settings=settings)
+        runner = await cog._build_runner_for_thread(
+            thread_id=1,
+            model_override=None,
+            tools_override=None,
+            fork_session=False,
+            working_dir_override=None,
+            effort_override="high",
+        )
+        assert isinstance(runner, ClaudeRunner)
+        assert runner.effort == "high"

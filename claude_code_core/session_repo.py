@@ -32,6 +32,7 @@ class SessionRecord:
     last_used_at: str
     context_window: int | None = None
     context_used: int | None = None
+    backend: str | None = None
 
 
 class SessionRepository:
@@ -61,21 +62,28 @@ class SessionRepository:
         model: str | None = None,
         origin: str = "discord",
         summary: str | None = None,
+        backend: str | None = None,
     ) -> SessionRecord:
-        """Create or update a session mapping."""
+        """Create or update a session mapping.
+
+        ``backend`` records which CLI minted ``session_id``. Session stores are
+        not interoperable across backends, so callers must know who owns an ID
+        before passing it to ``--resume`` / ``codex exec resume``.
+        """
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 """INSERT INTO sessions
-                     (thread_id, session_id, working_dir, model, origin, summary)
-                   VALUES (?, ?, ?, ?, ?, ?)
+                     (thread_id, session_id, working_dir, model, origin, summary, backend)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(thread_id) DO UPDATE SET
                      session_id = excluded.session_id,
                      working_dir = COALESCE(excluded.working_dir, sessions.working_dir),
                      model = COALESCE(excluded.model, sessions.model),
                      origin = COALESCE(excluded.origin, sessions.origin),
                      summary = COALESCE(excluded.summary, sessions.summary),
+                     backend = COALESCE(excluded.backend, sessions.backend),
                      last_used_at = datetime('now', 'localtime')""",
-                (thread_id, session_id, working_dir, model, origin, summary),
+                (thread_id, session_id, working_dir, model, origin, summary, backend),
             )
             await db.commit()
 

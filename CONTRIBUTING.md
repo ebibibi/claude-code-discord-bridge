@@ -22,7 +22,7 @@ main (always releasable)
    ```
 3. **Make your changes** — write code, add tests
 4. **Push** your branch and **open a PR** against `main`
-5. **CI runs automatically** — tests + lint on Python 3.10/3.11/3.12, plus CodeQL security scanning
+5. **CI runs automatically** — tests + lint on Python 3.12/3.13, plus CodeQL security scanning
 6. Once CI passes and the PR is reviewed, it gets **merged to main**
 
 ### Branch Naming
@@ -35,8 +35,8 @@ main (always releasable)
 ## Development Setup
 
 ```bash
-git clone https://github.com/ebibibi/claude-code-discord-bridge.git
-cd claude-code-discord-bridge
+git clone https://github.com/ebibibi/ebi-agent-chat-relay.git
+cd ebi-agent-chat-relay
 uv sync --dev
 make setup   # register git hooks (one-time per clone)
 ```
@@ -61,12 +61,50 @@ All tests must pass before submitting a PR.
 - **Formatter**: `ruff format`
 - **Linter**: `ruff check`
 - **Type hints**: Required on all function signatures
-- **Python**: 3.10+ (use `from __future__ import annotations` for modern syntax)
+- **Python**: 3.12+ (use `from __future__ import annotations` for modern syntax)
 
 ```bash
 uv run ruff check claude_discord/
 uv run ruff format claude_discord/
 ```
+
+## Creating Discord Threads
+
+Every `create_thread()` call must pass the shared auto-archive window:
+
+```python
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
+
+thread = await channel.create_thread(
+    name=name,
+    auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+)
+```
+
+Discord fixes the window when the thread is created and defaults to a short one. An archived
+thread leaves the channel's thread list, so a conversation the user still considers open looks
+deleted. `tests/test_thread_policy.py` scans both `claude_discord/` and the example Cogs in
+`examples/ebibot/cogs/`, and fails when a call site omits the keyword or hardcodes a number
+instead of using the constant. The rule is about Discord's behaviour, not about which package the
+call lives in, so a custom Cog is held to it too.
+
+## Personal Detail Stays Out of Shipped Source
+
+This repository is public, and `examples/ebibot/` is a real instance's configuration — which makes
+it the place where personal detail leaks in. A docstring explaining *why* a Cog exists is the most
+natural thing in the world to write, and the natural way to write it is to name the person whose
+workflow it serves.
+
+`tests/test_no_personal_identifiers.py` scans `claude_discord/`, `claude_code_core/`,
+`claude_teams/` and `examples/`, and fails when shipped source names a real person. The check is
+deliberately narrow — names, not topics. A broad "no Japanese" rule, or a list of tools someone
+might use, produces false positives that get suppressed, and a suppressed guard is not a guard.
+
+When a feature genuinely needs one person's conventions, point at them from outside the repository
+rather than embedding them. `ThreadCompletionCog` is the reference pattern: the Cog keeps the
+generic half (batching, session and transcript resolution, the manifest) and reads the
+instance-specific instructions from the file named by `THREAD_COMPLETION_PROMPT_FILE`. An
+unreadable path falls back to a generic prompt rather than dropping the work.
 
 ## Project Structure
 

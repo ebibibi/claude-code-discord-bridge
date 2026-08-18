@@ -49,24 +49,61 @@ class SessionBackend(Protocol):
 def create_backend(
     *,
     backend: str = "claude",
-    model: str,
+    model: str | None = None,
     **kwargs: object,
 ) -> SessionBackend:
     """Create a backend runner by name.
 
     Args:
-        backend: "claude" or "codex".
-        model: Model identifier (e.g. "sonnet", "o4-mini").
+        backend: "claude", "codex", "local", or "agui".
+        model: Model identifier (e.g. "sonnet", "o4-mini"). ``None`` lets the
+            backend pick its own default — Codex omits ``--model`` and defers
+            to its CLI config.
         **kwargs: Forwarded to the runner constructor.
     """
     if backend == "claude":
         from .runner import ClaudeRunner
 
-        return ClaudeRunner(model=model, **kwargs)  # type: ignore[arg-type]
-
-    if backend == "codex":
+        runner: SessionBackend = ClaudeRunner(model=model, **kwargs)  # type: ignore[arg-type]
+    elif backend == "codex":
         from .codex_runner import CodexRunner
 
-        return CodexRunner(model=model, **kwargs)  # type: ignore[arg-type]
+        runner = CodexRunner(model=model, **kwargs)  # type: ignore[arg-type]
+    elif backend == "local":
+        from .local_backend import LocalCodexRunner
 
-    raise ValueError(f"Unknown backend: {backend!r}")
+        runner = LocalCodexRunner(model=model, **kwargs)  # type: ignore[arg-type]
+    elif backend == "agui":
+        from .agui_backend import AgUiBackend
+
+        runner = AgUiBackend(model=model, **kwargs)  # type: ignore[arg-type]
+    else:
+        raise ValueError(f"Unknown backend: {backend!r}")
+
+    return _apply_privacy_gateway(runner, backend=backend, thread_id=kwargs.get("thread_id"))
+
+
+def _apply_privacy_gateway(
+    runner: SessionBackend,
+    *,
+    backend: str,
+    thread_id: object = None,
+) -> SessionBackend:
+    """Wrap ``runner`` with the anonymization gateway when one is configured.
+
+    Auto-discovery keeps this zero-config: with no rules file the gateway is
+    ``None`` and the runner is returned untouched.
+    """
+    from .privacy import AnonymizingBackend, PrivacyConfig, get_gateway
+
+    config = PrivacyConfig.from_env()
+    if not config.wraps_backends:
+        # Default scope is "escalation": the agent runs on a model the operator
+        # controls, so anonymizing its traffic buys nothing and would make the
+        # local model reason about aliases instead of real names. The gateway
+        # still guards the deliberate hop out (see escalation.py).
+        return runner
+    gateway = get_gateway(config)
+    if gateway is None:
+        return runner
+    return AnonymizingBackend(runner, gateway, backend=backend, thread_id=thread_id)

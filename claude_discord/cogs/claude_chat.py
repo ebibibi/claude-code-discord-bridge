@@ -15,6 +15,7 @@ import contextlib
 import logging
 import os
 import tempfile
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 import discord
@@ -24,20 +25,25 @@ from discord.ext import commands
 from claude_code_core.backend import SessionBackend
 
 from ..backend_factory import BackendFactory
-from ..backend_settings import BackendSettings
+from ..backend_settings import BackendSettings, session_is_resumable
 from ..claude.rewind import find_session_jsonl, parse_user_turns
 from ..claude.types import ImageData
 from ..concurrency import SessionRegistry
+from ..cross_backend_handoff import ConversationHistoryReader, build_handoff_prompt
 from ..database.ask_repo import PendingAskRepository
 from ..database.lounge_repo import LoungeRepository
-from ..database.repository import SessionRepository
+from ..database.repository import SessionRecord, SessionRepository
 from ..database.resume_repo import PendingResumeRepository
 from ..database.settings_repo import SettingsRepository
+from ..discord_ui.chunker import chunk_message
 from ..discord_ui.embeds import stopped_embed
+from ..discord_ui.file_sender import send_file_blobs
 from ..discord_ui.status import StatusManager
+from ..discord_ui.thread_context import DEFAULT_DAYS, build_recent_transcript
 from ..discord_ui.thread_dashboard import ThreadState, ThreadStatusDashboard
 from ..discord_ui.thread_renamer import suggest_title
 from ..discord_ui.views import RewindSelectView, StopView
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 from ._run_helper import run_claude_with_config
 from .prompt_builder import build_prompt_and_images, wants_file_attachment
 from .run_config import RunConfig
@@ -66,17 +72,16 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "context": "📌 Session",
     "usage": "📌 Session",
     "sessions": "📌 Session",
+    "search": "📌 Session",
     "resume": "📌 Session",
     "resume-info": "📌 Session",
     "sync-sessions": "📌 Session",
     "sync-settings": "📌 Session",
-    "model-show": "🤖 Model",
-    "model-set": "🤖 Model",
     "model": "🤖 Model",
     "backend": "🤖 Model",
-    "effort-show": "⚡ Effort",
-    "effort-set": "⚡ Effort",
-    "effort-clear": "⚡ Effort",
+    "engine-status": "🤖 Model",
+    "ask": "🤖 Model",  # one anonymized question to an external model
+    "effort": "⚡ Effort",
     "tools-show": "🔧 Advanced",
     "tools-set": "🔧 Advanced",
     "tools-reset": "🔧 Advanced",
@@ -112,8 +117,11 @@ class ClaudeChatCog(commands.Cog):
         chat_only_channel_ids: set[int] | None = None,
         auto_rename_threads: bool = False,
         monitor_all_channels: bool = False,
+        mention_anywhere: bool = True,
+        thread_context_days: int = DEFAULT_DAYS,
         factory: BackendFactory | None = None,
         backend_settings: BackendSettings | None = None,
+        conversation_history: ConversationHistoryReader | None = None,
     ) -> None:
         self.bot = bot
         self.repo = repo
@@ -123,6 +131,7 @@ class ClaudeChatCog(commands.Cog):
         # When either is None, we fall back to self.runner.clone() (legacy).
         self._factory = factory
         self._backend_settings = backend_settings
+        self._conversation_history = conversation_history or ConversationHistoryReader()
         self._max_concurrent = max_concurrent
         self._allowed_user_ids = allowed_user_ids
         # When True, skip channel-ID filtering and accept all guild channels.
@@ -134,9 +143,16 @@ class ClaudeChatCog(commands.Cog):
         else:
             bid = getattr(bot, "channel_id", None)
             self._channel_ids: set[int] = {bid} if bid else set()
-        # Channels where the bot only responds when explicitly @mentioned.
-        # Thread replies are not affected (already in an active session).
+        # Channels carved out of the no-mention scope above (legacy knob: with
+        # mention_anywhere on, simply *not listing* a channel has the same effect).
         self._mention_only_channel_ids: set[int] = mention_only_channel_ids or set()
+        # When True, an @mention reaches the bot in any guild channel or thread,
+        # not just the configured ones.  This is what makes channel_ids a list of
+        # places that need no mention rather than a list of places ccdb exists in.
+        self._mention_anywhere = mention_anywhere
+        # How many days of a foreign thread's history to feed Claude when a
+        # mention wakes it there.  0 disables the transcript.
+        self._thread_context_days = thread_context_days
         # Channels where the bot replies directly (no thread created).
         self._inline_reply_channel_ids: set[int] = inline_reply_channel_ids or set()
         # Channels where only text responses are shown (no tool embeds, thinking, etc.).
@@ -232,40 +248,49 @@ class ClaudeChatCog(commands.Cog):
         if self._allowed_user_ids is not None and message.author.id not in self._allowed_user_ids:
             return
 
-        # Determine whether this channel/thread is a valid target.
-        # When monitor_all_channels is True, accept any guild text/forum channel.
-        is_target_channel = message.channel.id in self._channel_ids
-        is_target_thread = (
-            isinstance(message.channel, discord.Thread)
-            and message.channel.parent_id in self._channel_ids
-        )
-
-        if (
-            self._monitor_all_channels
-            and not is_target_channel
-            and not is_target_thread
-            and hasattr(message.channel, "guild")
-            and message.channel.guild is not None
-        ):
+        # Inside a no-mention channel (or a thread under it) everything is for
+        # Claude, and the session model applies: a channel message opens a
+        # thread, a thread message continues that thread's session.
+        if self._is_no_mention_scope(message.channel):
             if isinstance(message.channel, discord.Thread):
-                is_target_thread = True
+                await self._handle_thread_reply(message)
             else:
-                is_target_channel = True
-
-        # Check if message is in one of the configured channels (new conversation)
-        if is_target_channel:
-            # In mention-only channels, only respond when the bot is @mentioned
-            if (
-                message.channel.id in self._mention_only_channel_ids
-                and self.bot.user not in message.mentions
-            ):
-                return
-            await self._handle_new_conversation(message)
+                await self._handle_new_conversation(message)
             return
 
-        # Check if message is in a thread under one of the configured channels
-        if is_target_thread:
-            await self._handle_thread_reply(message)
+        # Everywhere else: answer only when summoned, and answer *there*.
+        if self._is_summoned(message):
+            await self._handle_mention(message)
+
+    def _is_no_mention_scope(self, channel: discord.abc.MessageableChannel) -> bool:
+        """Return whether *channel* is one ccdb was invited to speak in freely.
+
+        A "no-mention" scope is a configured channel (or any thread under it):
+        everything posted there is for Claude, so no @mention is required.
+        ``monitor_all_channels`` widens this to the whole guild; a channel
+        listed in ``mention_only_channel_ids`` is carved back out of it.
+        """
+        root = channel.parent_id if isinstance(channel, discord.Thread) else channel.id
+        if root in self._mention_only_channel_ids:
+            return False
+        if root in self._channel_ids:
+            return True
+        return self._monitor_all_channels and getattr(channel, "guild", None) is not None
+
+    def _is_summoned(self, message: discord.Message) -> bool:
+        """Return whether this message explicitly @mentions the bot.
+
+        Outside the no-mention channels this is the *only* way in — including in
+        threads ccdb created itself.  Owning a thread is not standing consent:
+        people keep talking in these threads to each other, and a run they did
+        not ask for is noise at best.  Every run out here is summoned by name.
+        """
+        if not self._mention_anywhere:
+            return False
+        # A mention only carries a channel policy inside a guild — stay out of DMs.
+        if getattr(message, "guild", None) is None:
+            return False
+        return self.bot.user is not None and self.bot.user in message.mentions
 
     async def _build_runner_for_thread(
         self,
@@ -304,13 +329,14 @@ class ClaudeChatCog(commands.Cog):
         # Model resolution order:
         # 1. Explicit /model command value for THIS backend (thread > global).
         #    Env fallback is NOT considered yet — see step 3.
-        # 2. Legacy /model-set value (passed in as ``model_override``).
+        # 2. Legacy ``claude_model`` setting value (passed in as
+        #    ``model_override``) — left over from the removed /model-set command.
         #    Honoured only when the current backend is claude. Passing a
         #    Claude model id to Codex would cause `codex exec` to fail
         #    with an unknown model error.
-        # 3. Env-derived per-backend default, then the factory's hard-coded
-        #    default (sonnet for claude, gpt-5.4 for codex). Returned as
-        #    None here so factory.build() picks the right one.
+        # 3. Env-derived per-backend default, then the factory's backend default
+        #    (sonnet for claude, CLI default for codex). Returned as None here
+        #    so factory.build() picks the right one.
         explicit_model = await self._backend_settings.explicit_model(backend, thread_id)
         model: str | None
         if explicit_model:
@@ -330,13 +356,24 @@ class ClaudeChatCog(commands.Cog):
 
         # Apply per-call overrides that the factory does not know about.
         # Both ClaudeRunner and CodexRunner allow attribute assignment for
-        # these fields; effort/fork are Claude-specific and gated by hasattr.
+        # these fields; effort/fork are gated by hasattr.
         if tools_override is not None:
             runner.allowed_tools = tools_override
         if working_dir_override is not None:
             runner.working_dir = working_dir_override
-        if effort_override is not None and hasattr(runner, "effort"):
-            runner.effort = effort_override  # type: ignore[attr-defined]
+
+        # Effort resolution is per-backend:
+        #   1. BackendSettings effort for THIS backend (thread > global) — set
+        #      via the backend-aware /effort command. Works for both backends.
+        #   2. Legacy ``claude_effort`` setting value (``effort_override``),
+        #      left over from the removed /effort-set command — Claude only;
+        #      Codex effort levels differ ("max" is not a Codex level).
+        effective_effort = await self._backend_settings.current_effort(backend, thread_id)
+        if effective_effort is None and backend == "claude":
+            effective_effort = effort_override
+        if effective_effort is not None and hasattr(runner, "effort"):
+            runner.effort = effective_effort  # type: ignore[attr-defined]
+
         if fork_session and hasattr(runner, "fork_session"):
             runner.fork_session = True  # type: ignore[attr-defined]
 
@@ -647,6 +684,53 @@ class ClaudeChatCog(commands.Cog):
             f"🔀 Forked! Continue in {new_thread.mention} — this thread is unchanged."
         )
 
+    async def _handle_mention(self, message: discord.Message) -> None:
+        """Answer an @mention **in the place it was written** — never in a new thread.
+
+        This is deliberately not the session flow.  A mention outside the
+        no-mention channels is someone in a conversation turning to Claude for
+        an answer, so spinning off a thread would move the answer away from the
+        discussion that prompted it and leave a session running somewhere nobody
+        is reading.  Instead ccdb reads the recent history of that exact channel
+        or thread, answers there, and goes quiet again until the next mention.
+        """
+        channel = message.channel
+        if not isinstance(channel, (discord.Thread, discord.TextChannel)):
+            return  # voice/DM/forum-root: nothing sensible to reply into
+        prompt, images = await self._build_prompt_and_images(message)
+
+        if self._thread_context_days > 0:
+            transcript = await build_recent_transcript(
+                channel,
+                days=self._thread_context_days,
+                exclude_message_id=message.id,
+            )
+            if transcript:
+                prompt = f"{transcript}\n\n---\n\n{prompt}"
+
+        # Nothing to send — ignore silently (e.g. unsupported attachment only).
+        if not prompt and not images:
+            return
+
+        # Resume whatever session already belongs to this place, so a follow-up
+        # mention continues the same work rather than starting from scratch.
+        record = await self.repo.get(channel.id)
+        session_id = record.session_id if record else None
+        if record is not None and session_id:
+            session_id = await self._session_id_for_current_backend(channel, record)
+
+        root_id = channel.parent_id if isinstance(channel, discord.Thread) else channel.id
+        await self._run_claude(
+            message,
+            channel,
+            prompt,
+            session_id=session_id,
+            images=images,
+            working_dir_override=record.working_dir if record else None,
+            chat_only=(root_id or 0) in self._chat_only_channel_ids,
+            interrupt_existing=True,
+        )
+
     async def _handle_new_conversation(self, message: discord.Message) -> None:
         """Start a Claude Code session, creating a thread unless inline-reply mode is active."""
         prompt, images = await self._build_prompt_and_images(message)
@@ -671,7 +755,10 @@ class ClaudeChatCog(commands.Cog):
             )
         else:
             thread_name = message.content[:100] if message.content else "Claude Chat"
-            thread = await message.create_thread(name=thread_name)
+            thread = await message.create_thread(
+                name=thread_name,
+                auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+            )
             if self._auto_rename_threads and message.content:
                 asyncio.create_task(self._background_rename_thread(thread, message.content))
             await self._run_claude(
@@ -713,6 +800,8 @@ class ClaudeChatCog(commands.Cog):
         session_id: str | None = None,
         fork: bool = False,
         auto_start: bool = True,
+        result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None,
+        attachments: list[tuple[str, bytes]] | None = None,
     ) -> discord.Thread:
         """Create a new thread and optionally start a Claude Code session.
 
@@ -735,6 +824,17 @@ class ClaudeChatCog(commands.Cog):
                         When ``False``, only the thread and seed message are
                         created — a Claude session will start when a user
                         replies in the thread.  Defaults to ``True``.
+            result_sink: Optional callback invoked once with
+                        ``(final_assistant_text, error)`` when the spawned
+                        session reaches its terminal state. Lets an external
+                        caller (e.g. /api/ingest) retrieve the final reply.
+                        Only wired when ``auto_start`` is True (otherwise no
+                        session runs and no result would ever be produced).
+            attachments: Optional ``(filename, bytes)`` pairs to post into the
+                        new thread as Discord file attachments, right after the
+                        seed prompt. Lets a programmatic caller (e.g. a Forgejo
+                        Issue watcher via ``/api/spawn``) surface the original
+                        attachments so they're viewable in the thread.
 
         Returns:
             The newly created :class:`discord.Thread`.
@@ -743,17 +843,86 @@ class ClaudeChatCog(commands.Cog):
         thread = await channel.create_thread(
             name=name,
             type=discord.ChannelType.public_thread,
-            auto_archive_duration=60,
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
         )
         # Post the prompt so StatusManager has a Message to add reactions to.
-        seed_message = await thread.send(prompt)
+        # Long prompts (e.g. an ingested Teams thread) exceed Discord's
+        # per-message limit, so chunk the seed for display. The full prompt is
+        # still passed to _run_claude below (the CLI has no such limit), so
+        # chunking only affects what's shown in the thread, never what Claude
+        # receives. The last chunk becomes the status-reaction anchor.
+        chunks = chunk_message(prompt) or [prompt]
+        seed_message = await thread.send(chunks[0])
+        for chunk in chunks[1:]:
+            seed_message = await thread.send(chunk)
+        # Surface any caller-provided attachments in the thread so they're
+        # viewable alongside the prompt (e.g. files attached to a Forgejo Issue).
+        if attachments:
+            await send_file_blobs(thread, attachments)
         if auto_start:
             # Run Claude in the background so /api/spawn returns immediately.
             # The caller gets the thread reference without waiting for Claude to finish.
             asyncio.create_task(
-                self._run_claude(seed_message, thread, prompt, session_id=session_id, fork=fork)
+                self._run_claude(
+                    seed_message,
+                    thread,
+                    prompt,
+                    session_id=session_id,
+                    fork=fork,
+                    result_sink=result_sink,
+                )
             )
         return thread
+
+    async def deliver_relayed_message(
+        self,
+        thread: discord.Thread,
+        text: str,
+        *,
+        interrupt: bool,
+    ) -> None:
+        """Feed a message from another session into this thread's Claude session.
+
+        The API-initiated equivalent of a human reply, and the sibling of
+        ``spawn_session``: ``on_message`` drops anything a bot wrote, so a
+        relayed message would never reach Claude through the normal path.
+
+        The text is posted into the thread first, so the humans watching see the
+        AI-to-AI exchange — a relay must never become a back channel.
+
+        Args:
+            thread: The receiving thread.
+            text: Already-wrapped message (see ``relay.build_relay_prompt``).
+            interrupt: When True, SIGINT the turn in flight so a "stop, I have
+                this" reaches Claude within seconds. When False, wait for the
+                current turn to finish — the right default, because a message
+                that preempts a turn can cost the receiver uncommitted work.
+        """
+        chunks = chunk_message(text) or [text]
+        seed_message = await thread.send(chunks[0])
+        for chunk in chunks[1:]:
+            seed_message = await thread.send(chunk)
+
+        record = await self.repo.get(thread.id)
+        session_id = record.session_id if record else None
+        if record is not None and session_id:
+            session_id = await self._session_id_for_current_backend(thread, record)
+
+        chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
+        # _run_claude serializes per thread: with interrupt=False it queues
+        # behind the current turn, with interrupt=True it preempts it. Either
+        # way eviction + registration is atomic under the per-thread lock, so a
+        # relayed message can never spawn a second parallel process here.
+        await self._run_claude(
+            seed_message,
+            thread,
+            text,
+            session_id=session_id,
+            working_dir_override=record.working_dir if record else None,
+            chat_only=chat_only,
+            interrupt_existing=interrupt,
+            interrupt_notice="-# ⚡ Interrupted by another session's message...",
+        )
 
     async def cog_unload(self) -> None:
         """Mark all mid-run Claude sessions for auto-resume on the next bot startup.
@@ -900,14 +1069,29 @@ class ClaudeChatCog(commands.Cog):
 
         record = await self.repo.get(thread.id)
         session_id = record.session_id if record else None
+        if record is not None and session_id:
+            session_id = await self._session_id_for_current_backend(thread, record)
         prompt, images = await self._build_prompt_and_images(message)
 
-        # When there is no session record, this is the first human reply in a
-        # thread created via /api/spawn with auto_start=false.  The seed
-        # message (posted by the bot) contains important context (e.g. the
-        # goodmorning summary) that Claude needs to see.  Fetch it and prepend
-        # to the prompt so Claude starts with full context.
-        if record is None:
+        # Threads ccdb did not create are conversations it has only partly seen:
+        # a mention wakes it into the middle of a discussion whose earlier turns
+        # (and any human chatter since its last run) never reached the session.
+        # Prepend a bounded transcript so the answer is about what was actually
+        # being discussed.  Threads the bot owns are skipped — it saw every turn
+        # there, so re-sending them would only burn tokens.
+        bot_owned = self.bot.user is not None and thread.owner_id == self.bot.user.id
+        if not bot_owned and self._thread_context_days > 0:
+            transcript = await build_recent_transcript(
+                thread,
+                days=self._thread_context_days,
+                exclude_message_id=message.id,
+            )
+            if transcript:
+                prompt = f"{transcript}\n\n---\n\n{prompt}"
+        elif record is None:
+            # First human reply in a thread created via /api/spawn with
+            # auto_start=false.  The seed message (posted by the bot) carries
+            # context (e.g. the goodmorning summary) that Claude needs to see.
             seed_context = await self._fetch_seed_context(thread)
             if seed_context:
                 prompt = f"{seed_context}\n\n---\n\n{prompt}"
@@ -930,19 +1114,12 @@ class ClaudeChatCog(commands.Cog):
                 if isinstance(_dashboard, ThreadStatusDashboard):
                     await _dashboard.refresh_inbox(_inbox_repo)
 
-        lock = self._thread_locks.setdefault(thread.id, asyncio.Lock())
-        async with lock:
-            existing_runner = self._active_runners.get(thread.id)
-            existing_task = self._active_tasks.get(thread.id)
-            if existing_runner is not None:
-                await thread.send("-# ⚡ Interrupted. Starting with new instruction...")
-                await existing_runner.interrupt()
-                if existing_task is not None and not existing_task.done():
-                    with contextlib.suppress(Exception):
-                        await existing_task
-
         # Determine chat_only from the parent channel of this thread.
         chat_only = (thread.parent_id or 0) in self._chat_only_channel_ids
+        # A human reply preempts whatever is running in this thread. _run_claude
+        # is the single serialization point: it interrupts the in-flight run and
+        # registers the replacement atomically under the per-thread lock, so two
+        # fast replies can never spawn parallel CLI processes.
         await self._run_claude(
             message,
             thread,
@@ -951,6 +1128,90 @@ class ClaudeChatCog(commands.Cog):
             images=images,
             working_dir_override=record.working_dir if record else None,
             chat_only=chat_only,
+            interrupt_existing=True,
+        )
+
+    async def _session_id_for_current_backend(
+        self, thread: discord.Thread | discord.TextChannel, record: SessionRecord
+    ) -> str | None:
+        """Return the stored session ID, or ``None`` when the backend changed.
+
+        *thread* is whatever the session is keyed on — a thread, or the channel
+        itself for the in-place mention flow.
+
+        A global ``/backend`` switch does not touch per-thread session records
+        (only a thread-scoped switch does), so a thread can end up holding a
+        Codex rollout ID while the active backend is Claude.  Resuming it makes
+        the CLI exit instantly with "No conversation found with session ID" and
+        the thread looks dead.  Detect the mismatch and start fresh instead.
+        """
+        if self._backend_settings is None:
+            return record.session_id
+
+        current = await self._backend_settings.current_backend(thread.id)
+        if session_is_resumable(record.backend, current):
+            return record.session_id
+
+        logger.info(
+            "Thread %d session %s was created by %s but the active backend is %s "
+            "— starting a fresh session instead of resuming",
+            thread.id,
+            record.session_id,
+            record.backend,
+            current,
+        )
+        with contextlib.suppress(discord.HTTPException):
+            await thread.send(
+                f"-# 🔀 Backend changed (`{record.backend}` → `{current}`). "
+                f"`{current}` cannot resume a `{record.backend}` session, "
+                "so its file-backed conversation history will be carried into a fresh session."
+            )
+        return None
+
+    async def _prepare_cross_backend_handoff(
+        self,
+        thread: discord.Thread | discord.TextChannel,
+        prompt: str,
+        session_id: str | None,
+    ) -> tuple[str | None, str]:
+        """Replace an incompatible native resume with a text transcript handoff."""
+        if self._backend_settings is None:
+            return session_id, prompt
+
+        record = await self.repo.get(thread.id)
+        if record is None or not record.backend or not record.session_id:
+            return session_id, prompt
+        current = await self._backend_settings.current_backend(thread.id)
+        if session_is_resumable(record.backend, current):
+            return session_id, prompt
+
+        transcript = await asyncio.to_thread(
+            self._conversation_history.read,
+            record.backend,
+            record.session_id,
+        )
+        if not transcript:
+            logger.warning(
+                "No file-backed transcript found for cross-backend handoff: "
+                "thread=%d backend=%s session=%s",
+                thread.id,
+                record.backend,
+                record.session_id,
+            )
+            return None, prompt
+
+        logger.info(
+            "Injecting cross-backend transcript: thread=%d %s->%s chars=%d",
+            thread.id,
+            record.backend,
+            current,
+            len(transcript),
+        )
+        return None, build_handoff_prompt(
+            source_backend=record.backend,
+            target_backend=current,
+            transcript=transcript,
+            current_prompt=prompt,
         )
 
     async def _build_prompt_and_images(
@@ -991,6 +1252,43 @@ class ClaudeChatCog(commands.Cog):
             logger.debug("Failed to fetch seed message for thread %d", thread.id, exc_info=True)
             return None
 
+    async def _evict_active_run(
+        self,
+        thread: discord.Thread | discord.TextChannel,
+        *,
+        interrupt: bool,
+        notice: str,
+    ) -> None:
+        """Clear the thread's active run so the caller can register a new one.
+
+        Must be called while holding ``self._thread_locks[thread.id]``. When
+        ``interrupt`` is True the in-flight runner is SIGINT'd (the ``notice`` is
+        posted first); otherwise we simply wait for it to finish — queue
+        semantics. Either way we await the run's task so its cleanup (its own
+        ``finally``) completes before the caller registers a replacement, which
+        is what keeps at most one runner per thread.
+
+        No deadlock: a task is only in ``_active_tasks`` after it finished its
+        own phase 1 and released the lock, so it never blocks on the lock we
+        hold here.
+        """
+        existing_runner = self._active_runners.get(thread.id)
+        if existing_runner is None:
+            return
+        existing_task = self._active_tasks.get(thread.id)
+        if interrupt:
+            with contextlib.suppress(discord.HTTPException):
+                await thread.send(notice)
+            with contextlib.suppress(Exception):
+                await existing_runner.interrupt()
+        if (
+            existing_task is not None
+            and existing_task is not asyncio.current_task()
+            and not existing_task.done()
+        ):
+            with contextlib.suppress(Exception):
+                await existing_task
+
     async def _run_claude(
         self,
         user_message: discord.Message,
@@ -1001,63 +1299,99 @@ class ClaudeChatCog(commands.Cog):
         fork: bool = False,
         working_dir_override: str | None = None,
         chat_only: bool = False,
+        result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None,
+        interrupt_existing: bool = False,
+        interrupt_notice: str = "-# ⚡ Interrupted. Starting with new instruction...",
     ) -> None:
-        """Execute Claude Code CLI and stream results to the thread."""
+        """Execute Claude Code CLI and stream results to the thread.
+
+        This is the single serialization point for a thread: at most one Claude
+        run may be active per thread at any time. Under the thread's per-thread
+        lock it evicts whatever run is already in flight — interrupting it when
+        ``interrupt_existing`` is set, otherwise waiting for it to finish (queue
+        semantics) — then builds and *registers* the new runner, and only then
+        releases the lock and starts the subprocess.
+
+        Registering the runner under the *same* lock that checks for an existing
+        one is what closes the race: without it, two near-simultaneous messages
+        both pass the "nothing is running" check during the awaits below (model
+        lookup, runner build) and both spawn parallel CLI processes in the same
+        thread. The subprocess itself runs *outside* the lock so a later message
+        can still interrupt this run.
+        """
+        session_id, prompt = await self._prepare_cross_backend_handoff(
+            thread,
+            prompt,
+            session_id,
+        )
         dashboard = self._get_dashboard()
         description = prompt[:100].replace("\n", " ")
 
-        # Register the current asyncio Task so _handle_thread_reply can
-        # await it after sending SIGINT to the runner.
         current_task = asyncio.current_task()
-        if current_task is not None:
-            self._active_tasks[thread.id] = current_task
+        lock = self._thread_locks.setdefault(thread.id, asyncio.Lock())
 
-        # Mark thread as PROCESSING when Claude starts
-        if dashboard is not None:
-            await dashboard.set_state(
-                thread.id,
-                ThreadState.PROCESSING,
-                description,
-                thread=thread,
+        # --- Phase 1: atomically take the thread's single run slot -----------
+        # Everything from evicting the previous run through registering this one
+        # happens under the lock, so no concurrent _run_claude can observe an
+        # empty slot and spawn a parallel process.
+        async with lock:
+            await self._evict_active_run(
+                thread, interrupt=interrupt_existing, notice=interrupt_notice
             )
 
-        model_override = await self._get_current_model()
-        effective_model = model_override or self.runner.model
+            # Mark thread as PROCESSING when Claude starts
+            if dashboard is not None:
+                await dashboard.set_state(
+                    thread.id,
+                    ThreadState.PROCESSING,
+                    description,
+                    thread=thread,
+                )
 
-        async def _notify_stall() -> None:
-            threshold = status._stall_hard
-            await thread.send(
-                f"-# \u26a0\ufe0f No activity for {threshold}s — could be extended thinking "
-                "or context compression. Will resume automatically."
+            model_override = await self._get_current_model()
+            effective_model = model_override or self.runner.model
+
+            async def _notify_stall() -> None:
+                threshold = status._stall_hard
+                await thread.send(
+                    f"-# ⚠️ No activity for {threshold}s — could be extended thinking "
+                    "or context compression. Will resume automatically."
+                )
+
+            status = StatusManager(
+                user_message,
+                on_hard_stall=_notify_stall,
+                model=effective_model,
             )
+            await status.set_thinking()
 
-        status = StatusManager(
-            user_message,
-            on_hard_stall=_notify_stall,
-            model=effective_model,
-        )
-        await status.set_thinking()
+            tools_override = await self._get_allowed_tools()
+            effort_override = await self._get_current_effort()
 
-        tools_override = await self._get_allowed_tools()
-        effort_override = await self._get_current_effort()
+            runner = await self._build_runner_for_thread(
+                thread_id=thread.id,
+                model_override=model_override,
+                tools_override=tools_override,
+                fork_session=fork,
+                working_dir_override=working_dir_override,
+                effort_override=effort_override,
+            )
+            # Register as the sole active run BEFORE releasing the lock. Track
+            # the task too so a later eviction can await our cleanup.
+            self._active_runners[thread.id] = runner
+            if current_task is not None:
+                self._active_tasks[thread.id] = current_task
 
-        runner = await self._build_runner_for_thread(
-            thread_id=thread.id,
-            model_override=model_override,
-            tools_override=tools_override,
-            fork_session=fork,
-            working_dir_override=working_dir_override,
-            effort_override=effort_override,
-        )
-        self._active_runners[thread.id] = runner
+            # In chat_only mode, skip the "Session running" message and stop button.
+            stop_view: StopView | None = None
+            if not chat_only:
+                stop_view = StopView(runner)
+                stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
+                stop_view.set_message(stop_msg)
 
-        # In chat_only mode, skip the "Session running" message and stop button.
-        stop_view: StopView | None = None
-        if not chat_only:
-            stop_view = StopView(runner)
-            stop_msg = await thread.send("-# ⏺ Session running", view=stop_view)
-            stop_view.set_message(stop_msg)
-
+        # --- Phase 2: run the subprocess OUTSIDE the lock --------------------
+        # The lock is released so a later message can interrupt this run. The
+        # runner is already registered, so that message will find and evict it.
         try:
             await run_claude_with_config(
                 RunConfig(
@@ -1070,6 +1404,7 @@ class ClaudeChatCog(commands.Cog):
                     registry=self._registry,
                     ask_repo=self._ask_repo,
                     lounge_repo=self._lounge_repo,
+                    file_activity=getattr(self.bot, "file_activity", None),
                     stop_view=stop_view,
                     worktree_manager=getattr(self.bot, "worktree_manager", None),
                     images=images,
@@ -1079,14 +1414,26 @@ class ClaudeChatCog(commands.Cog):
                     claude_command=runner.command,
                     chat_only=chat_only,
                     notify_user_id=user_message.author.id,
+                    result_sink=result_sink,
+                    backend_settings=self._backend_settings,
+                    codex_command=(
+                        self._factory.codex_command if self._factory is not None else "codex"
+                    ),
                 )
             )
         finally:
             if stop_view is not None:
                 await stop_view.disable()
-            self._active_runners.pop(thread.id, None)
-            self._active_tasks.pop(thread.id, None)
-            self._thread_locks.pop(thread.id, None)
+            # Identity-guarded cleanup: only clear our own entries. A successor
+            # that evicted us may already have registered its runner/task, and
+            # we must not delete it. _thread_locks is intentionally NOT popped:
+            # the lock must stay stable for the thread's lifetime, or a later
+            # message could create a fresh Lock and run concurrently with one
+            # still holding the old object.
+            if self._active_runners.get(thread.id) is runner:
+                self._active_runners.pop(thread.id, None)
+            if self._active_tasks.get(thread.id) is current_task:
+                self._active_tasks.pop(thread.id, None)
 
             # Transition to WAITING_INPUT so owner knows a reply is needed
             if dashboard is not None:

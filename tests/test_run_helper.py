@@ -728,7 +728,7 @@ class TestStopViewRunnerSync:
     subprocess.  Without this, Stop sends SIGINT to the original runner whose
     _process is None and has no effect.
 
-    See: https://github.com/ebibibi/claude-code-discord-bridge/issues/174
+    See: https://github.com/ebibibi/ebi-agent-chat-relay/issues/174
     """
 
     @pytest.fixture
@@ -918,6 +918,28 @@ class TestConcurrencyIntegration:
         _, kwargs = runner.clone.call_args
         system_prompt = kwargs.get("append_system_prompt", "")
         assert "[CONCURRENCY NOTICE" in system_prompt
+
+    @pytest.mark.asyncio
+    @pytest.mark.real_system_context
+    async def test_file_delivery_mentions_substantial_written_deliverables(
+        self, thread: MagicMock, runner: MagicMock, repo: MagicMock
+    ) -> None:
+        captured_prompt = []
+
+        async def capturing_gen(prompt, **kwargs):
+            captured_prompt.append(prompt)
+            for e in self._simple_events():
+                yield e
+
+        runner.run = capturing_gen
+
+        await run_claude_in_thread(thread, runner, repo, "write a reply draft", None)
+
+        assert captured_prompt == ["write a reply draft"]
+        runner.clone.assert_called_once()
+        system_prompt = runner.clone.call_args.kwargs.get("append_system_prompt", "")
+        assert "substantial written deliverable" in system_prompt
+        assert "Markdown file" in system_prompt
 
     @pytest.mark.asyncio
     @pytest.mark.real_system_context
@@ -1435,6 +1457,7 @@ class TestCompactRerun:
             prompt="check X",
             session_id="sess-306",
             registry=registry,
+            chat_only=True,
         )
         await run_claude_with_config(config)
 
@@ -1557,10 +1580,12 @@ class TestGlobalSessionSemaphore:
         gate.set()
         await asyncio.gather(t1, t2)
 
+        # The wait is now an out-of-band notice rather than a raw message, so
+        # it arrives as an embed the surface built.
         waiting_msgs = [
             c
             for c in thread.send.call_args_list
-            if c.args and isinstance(c.args[0], str) and "\u23f3" in c.args[0]
+            if "\u23f3" in str(c.kwargs.get("embed", "").description or "")
         ]
         assert len(waiting_msgs) >= 1
 
@@ -1749,3 +1774,126 @@ class TestDrainAllowsResultEvent:
         assert "should be drained" not in all_text, (
             "Non-RESULT text must be drained when should_drain is True"
         )
+
+
+class TestResultSink:
+    """run_claude_with_config must fire config.result_sink at the terminal state."""
+
+    @pytest.fixture
+    def thread(self) -> MagicMock:
+        t = MagicMock(spec=discord.Thread)
+        t.id = 777
+        t.send = AsyncMock(return_value=MagicMock(spec=discord.Message))
+        return t
+
+    @pytest.fixture
+    def runner(self) -> MagicMock:
+        return MagicMock()
+
+    def _gen(self, events):
+        async def gen(*args, **kwargs):
+            for e in events:
+                yield e
+
+        return gen
+
+    @pytest.mark.asyncio
+    async def test_sink_receives_final_text_on_success(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        captured: list[tuple] = []
+
+        async def sink(text, error):
+            captured.append((text, error))
+
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"),
+            StreamEvent(message_type=MessageType.ASSISTANT, text="Final reply."),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                text="Final reply.",
+                session_id="s1",
+                cost_usd=0.01,
+                duration_ms=100,
+            ),
+        ]
+        runner.run = self._gen(events)
+
+        config = RunConfig(thread=thread, runner=runner, prompt="hi", result_sink=sink)
+        await run_claude_with_config(config)
+
+        assert captured == [("Final reply.", None)]
+
+    @pytest.mark.asyncio
+    async def test_sink_receives_error_on_exception(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        captured: list[tuple] = []
+
+        async def sink(text, error):
+            captured.append((text, error))
+
+        async def boom(*args, **kwargs):
+            raise RuntimeError("stream blew up")
+            yield  # pragma: no cover
+
+        runner.run = boom
+
+        config = RunConfig(thread=thread, runner=runner, prompt="hi", result_sink=sink)
+        await run_claude_with_config(config)
+
+        assert len(captured) == 1
+        text, error = captured[0]
+        assert text is None
+        assert "stream blew up" in error
+
+    @pytest.mark.asyncio
+    async def test_sink_receives_error_on_in_stream_result_error(
+        self, thread: MagicMock, runner: MagicMock
+    ) -> None:
+        """An API/CLI error surfaced via the RESULT event (not a raised
+        exception) must reach the sink as an error, not an empty 'done'."""
+        captured: list[tuple] = []
+
+        async def sink(text, error):
+            captured.append((text, error))
+
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                error="API Error: 429 rate limited",
+                session_id="s1",
+                cost_usd=0.0,
+                duration_ms=50,
+            ),
+        ]
+        runner.run = self._gen(events)
+
+        config = RunConfig(thread=thread, runner=runner, prompt="hi", result_sink=sink)
+        await run_claude_with_config(config)
+
+        assert len(captured) == 1
+        text, error = captured[0]
+        assert error is not None
+        assert "429" in error
+
+    @pytest.mark.asyncio
+    async def test_no_sink_is_a_noop(self, thread: MagicMock, runner: MagicMock) -> None:
+        events = [
+            StreamEvent(message_type=MessageType.SYSTEM, session_id="s1"),
+            StreamEvent(
+                message_type=MessageType.RESULT,
+                is_complete=True,
+                text="ok",
+                session_id="s1",
+                cost_usd=0.0,
+                duration_ms=10,
+            ),
+        ]
+        runner.run = self._gen(events)
+        config = RunConfig(thread=thread, runner=runner, prompt="hi")
+        # Must not raise when result_sink is None.
+        await run_claude_with_config(config)

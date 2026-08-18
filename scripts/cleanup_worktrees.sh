@@ -6,11 +6,16 @@
 # Removes worktrees whose PRs are MERGED or CLOSED.
 # Keeps worktrees for OPEN PRs and the main worktree.
 #
-# Run from repo root: /home/ebi/claude-code-discord-bridge/
+# Run from repo root (auto-detected from script location)
 
 set -euo pipefail
 
-REPO_ROOT="/home/ebi/claude-code-discord-bridge"
+# Auto-detect repo root from script location.
+# Uses `git rev-parse --show-toplevel` rather than `readlink -f` because BSD
+# readlink (macOS) has no -f flag; git itself is already a hard dependency
+# for this script (see the `gh`/`git worktree` calls below).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 DRY_RUN=false
 
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -72,7 +77,7 @@ while IFS= read -r line; do
             dev_worktree=$(cat "$DEV_WORKTREE_FILE" | tr -d '[:space:]')
             if [[ "$current_path" == "$dev_worktree" ]]; then
                 echo "  [PROTECTED] Active dev worktree — skipping"
-                ((kept++))
+                kept=$((kept + 1))
                 current_path=""
                 current_branch=""
                 continue
@@ -81,7 +86,7 @@ while IFS= read -r line; do
 
         if [[ -z "$current_branch" ]]; then
             echo "[WARN] $current_path: detached HEAD, no branch. Skipping."
-            ((warned++))
+            warned=$((warned + 1))
             current_path=""
             current_branch=""
             continue
@@ -90,7 +95,7 @@ while IFS= read -r line; do
         echo "--- Worktree: $current_path (branch: $current_branch)"
 
         # Check PR status via gh CLI
-        pr_json=$(gh pr list --repo ebibibi/claude-code-discord-bridge \
+        pr_json=$(gh pr list --repo ebibibi/ebi-agent-chat-relay \
             --head "$current_branch" --state all --json state --limit 1 2>/dev/null || echo "[]")
 
         pr_state=$(echo "$pr_json" | jq -r '.[0].state // empty' 2>/dev/null || true)
@@ -116,20 +121,20 @@ while IFS= read -r line; do
                     echo "  [WARN] Branch $current_branch already deleted or not found"
                 fi
             fi
-            ((removed++))
+            removed=$((removed + 1))
 
         elif [[ "$pr_state" == "OPEN" ]]; then
             echo "  PR state: OPEN -> keeping"
-            ((kept++))
+            kept=$((kept + 1))
 
         elif [[ -z "$pr_state" ]]; then
             echo "  [WARN] No PR found for branch '$current_branch'. Leftover branch?"
             echo "  Keeping worktree (manual review recommended)."
-            ((warned++))
+            warned=$((warned + 1))
 
         else
             echo "  [ERROR] Unexpected PR state: $pr_state"
-            ((errors++))
+            errors=$((errors + 1))
         fi
 
         echo ""

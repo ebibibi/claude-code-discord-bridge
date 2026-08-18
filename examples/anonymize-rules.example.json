@@ -1,0 +1,16 @@
+{
+  "_comment": "Copy to ~/.ccdb/anonymize-rules.json and edit. See docs/anonymization.md.",
+  "terms": [
+    { "value": "Contoso Japan", "category": "org" },
+    { "value": "Contoso", "category": "org" },
+    { "value": "Fabrikam", "category": "org" },
+    { "value": "Taro Yamada", "category": "person" },
+    { "value": "Project Northwind", "category": "project" }
+  ],
+  "patterns": [
+    { "regex": "srv-[a-z0-9\\-]+", "category": "host" },
+    { "regex": "[a-z0-9\\-]+\\.onmicrosoft\\.com", "category": "domain" },
+    { "regex": "[a-z0-9\\-]+\\.contoso\\.local", "category": "host" }
+  ],
+  "builtins": ["email", "ipv4"]
+}

@@ -23,6 +23,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from ..protocols import DrainAware
+from ..thread_policy import THREAD_AUTO_ARCHIVE_MINUTES
 
 logger = logging.getLogger(__name__)
 
@@ -258,12 +259,16 @@ class AutoUpgradeCog(commands.Cog):
         async with self._lock:
             thread = await text_channel.create_thread(
                 name=self.config.trigger_prefix[:100],
+                auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
             )
             await self._run_pipeline(thread, status_target=None)
 
     async def _run_upgrade(self, trigger_message: discord.Message) -> None:
         """Execute the upgrade pipeline triggered by a webhook message."""
-        thread = await trigger_message.create_thread(name=self.config.trigger_prefix[:100])
+        thread = await trigger_message.create_thread(
+            name=self.config.trigger_prefix[:100],
+            auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
+        )
         await self._run_pipeline(thread, status_target=trigger_message)
 
     async def _run_pipeline(
@@ -325,7 +330,7 @@ class AutoUpgradeCog(commands.Cog):
                     await status_target.add_reaction("✅")
                 await thread.send("✅ Upgrade complete (no restart configured).")
 
-        except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041 — asyncio.TimeoutError != builtins.TimeoutError on Python 3.10
+        except TimeoutError:
             await thread.send("❌ Step timed out.")
             if status_target is not None:
                 await status_target.add_reaction("❌")
@@ -503,7 +508,7 @@ class AutoUpgradeCog(commands.Cog):
                     )
                     logger.info("Restart approved by user %s", event.user_id)
                     approved.set()
-                except (TimeoutError, asyncio.TimeoutError):  # noqa: UP041
+                except TimeoutError:
                     if not approved.is_set():
                         await thread.send(
                             "⏳ Still waiting for restart approval... "

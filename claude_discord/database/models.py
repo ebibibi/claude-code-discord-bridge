@@ -82,12 +82,45 @@ CREATE TABLE IF NOT EXISTS usage_stats (
     is_using_overage INTEGER NOT NULL DEFAULT 0,
     recorded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+-- Advisory resource claims: a session announces "I am working on X" so a
+-- second session asking for the same X is told to step aside *before* it
+-- starts. Advisory only — nothing enforces them. Every claim has a TTL so a
+-- session that dies cannot pin a resource forever.
+CREATE TABLE IF NOT EXISTS resource_claims (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    resource TEXT NOT NULL UNIQUE,
+    thread_id INTEGER NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    expires_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_claims_thread ON resource_claims(thread_id);
+
+-- Where a ThreadKey actually lives. Every other table stores a conversation as
+-- a bare integer; for Discord that integer is the thread's snowflake and needs
+-- no translation, but a frontend whose ids are strings mints a surrogate here.
+-- A surrogate is a hash, and a hash does not run backwards — without this row
+-- a session could be looked up and still be unreplyable.
+CREATE TABLE IF NOT EXISTS frontend_threads (
+    thread_key INTEGER PRIMARY KEY,
+    frontend TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    parent_external_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(frontend, external_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_frontend_threads_frontend ON frontend_threads(frontend);
 """
 
 # Migrations for existing databases that lack new columns.
 _MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'discord'",
     "ALTER TABLE sessions ADD COLUMN summary TEXT",
+    # Which CLI produced this session ID (claude / codex) — see claude_code_core.models.
+    "ALTER TABLE sessions ADD COLUMN backend TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id)",
     # Lounge table added in v1.x — safe to run on existing DBs
     (
@@ -136,6 +169,17 @@ _MIGRATIONS = [
     ),
     # thread_id column on lounge_messages — tracks which Discord thread posted the message
     "ALTER TABLE lounge_messages ADD COLUMN thread_id INTEGER",
+    # resource_claims added in v3.2 — advisory cross-session locks
+    (
+        "CREATE TABLE IF NOT EXISTS resource_claims ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "resource TEXT NOT NULL UNIQUE, "
+        "thread_id INTEGER NOT NULL, "
+        "note TEXT, "
+        "created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')), "
+        "expires_at TEXT NOT NULL)"
+    ),
+    "CREATE INDEX IF NOT EXISTS idx_resource_claims_thread ON resource_claims(thread_id)",
 ]
 
 

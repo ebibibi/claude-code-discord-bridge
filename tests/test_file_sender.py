@@ -14,6 +14,8 @@ import pytest
 from claude_discord.discord_ui.file_sender import (
     _relative_path,
     collect_discord_files,
+    collect_discord_files_from_blobs,
+    send_file_blobs,
     send_files,
 )
 
@@ -189,3 +191,84 @@ class TestSendFiles:
         await send_files(thread, [str(f)], str(tmp_path))
 
         thread.send.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# collect_discord_files_from_blobs
+# ---------------------------------------------------------------------------
+
+
+class TestCollectDiscordFilesFromBlobs:
+    def test_blob_returned_as_discord_file(self) -> None:
+        files = collect_discord_files_from_blobs([("report.pdf", b"%PDF-1.4 data")])
+
+        assert len(files) == 1
+        assert files[0].filename == "report.pdf"
+
+    def test_strips_directory_component_from_filename(self) -> None:
+        files = collect_discord_files_from_blobs([("sub/dir/img.png", b"\x89PNG")])
+
+        assert files[0].filename == "img.png"
+
+    def test_oversized_blob_skipped(self) -> None:
+        files = collect_discord_files_from_blobs([("big.bin", b"x" * 11)], max_bytes=10)
+
+        assert files == []
+
+    def test_empty_list_returns_empty(self) -> None:
+        assert collect_discord_files_from_blobs([]) == []
+
+
+# ---------------------------------------------------------------------------
+# send_file_blobs
+# ---------------------------------------------------------------------------
+
+
+class TestSendFileBlobs:
+    @pytest.mark.asyncio
+    async def test_does_nothing_for_empty_list(self) -> None:
+        thread = MagicMock()
+        thread.send = AsyncMock()
+
+        await send_file_blobs(thread, [])
+
+        thread.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sends_blob_attachment(self) -> None:
+        thread = MagicMock()
+        thread.send = AsyncMock()
+
+        await send_file_blobs(thread, [("a.txt", b"hello")])
+
+        thread.send.assert_called_once()
+        kwargs = thread.send.call_args.kwargs
+        assert len(kwargs["files"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_discord_error_does_not_propagate(self) -> None:
+        thread = MagicMock()
+        thread.send = AsyncMock(side_effect=Exception("connection reset"))
+
+        await send_file_blobs(thread, [("a.txt", b"hello")])
+
+    @pytest.mark.asyncio
+    async def test_batches_more_than_10_blobs(self) -> None:
+        thread = MagicMock()
+        thread.send = AsyncMock()
+
+        blobs = [(f"f{i}.txt", b"x") for i in range(12)]
+        await send_file_blobs(thread, blobs)
+
+        assert thread.send.call_count == 2
+        assert len(thread.send.call_args_list[0].kwargs["files"]) == 10
+        assert len(thread.send.call_args_list[1].kwargs["files"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_custom_content_used_on_first_batch(self) -> None:
+        thread = MagicMock()
+        thread.send = AsyncMock()
+
+        await send_file_blobs(thread, [("a.txt", b"hi")], content="📎 Forgejo 添付")
+
+        assert thread.send.call_args.kwargs["content"] == "📎 Forgejo 添付"
