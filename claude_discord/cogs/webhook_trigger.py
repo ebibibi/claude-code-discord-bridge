@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -179,9 +180,14 @@ class WebhookTriggerCog(commands.Cog):
                 )
             )
 
-            if session_id:
-                await message.add_reaction("✅")
-            else:
-                await message.add_reaction("❌")
+            reaction = "✅" if session_id else "❌"
+            try:
+                await message.add_reaction(reaction)
+            except (discord.HTTPException, aiohttp.ClientError):
+                logger.debug("Discord client closed before completion reaction", exc_info=True)
+            except RuntimeError as exc:
+                if str(exc) != "Session is closed":
+                    raise
+                logger.debug("Discord session closed before completion reaction", exc_info=True)
         finally:
             self._active_count -= 1
