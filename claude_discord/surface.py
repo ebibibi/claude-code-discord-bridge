@@ -243,6 +243,7 @@ class DiscordSurface:
         self._interrupt_runner = interrupt_runner
         self._interrupt_view = interrupt_view
         self._status: StatusManager | None = status_manager
+        self._thread_missing = False
 
     # -- identity ----------------------------------------------------------
     @property
@@ -277,12 +278,14 @@ class DiscordSurface:
 
     # -- output ------------------------------------------------------------
     async def send_text(self, text: str) -> str | None:
+        if self._thread_missing:
+            return None
         last: discord.Message | None = None
         for chunk in render_for(text, DISCORD_CAPABILITIES):
             try:
                 last = await self._thread.send(chunk)
             except discord.NotFound:
-                logger.info("Thread %d disappeared mid-send", self._thread.id)
+                self._remember_missing_thread()
                 return None
             except discord.HTTPException:
                 logger.warning("Failed to send message chunk", exc_info=True)
@@ -290,6 +293,8 @@ class DiscordSurface:
         return str(last.id) if last else None
 
     async def send_notice(self, notice: Notice) -> str | None:
+        if self._thread_missing:
+            return None
         embed = discord.Embed(color=_NOTICE_COLOR.get(notice.level, COLOR_INFO))
         if notice.title:
             embed.title = notice.title[:256]
@@ -300,13 +305,16 @@ class DiscordSurface:
             embed.add_field(name=name[:256], value=value[:1024], inline=True)
         try:
             sent = await self._thread.send(embed=embed)
+        except discord.NotFound:
+            self._remember_missing_thread()
+            return None
         except discord.HTTPException:
             logger.warning("Failed to send notice", exc_info=True)
             return None
         return str(sent.id)
 
     async def deliver_files(self, files: Sequence[OutboundFile]) -> None:
-        if not files:
+        if self._thread_missing or not files:
             return
         paths = [f.path for f in files if f.path]
         blobs = [(f.display_name, f.blob) for f in files if f.blob is not None]
@@ -319,10 +327,21 @@ class DiscordSurface:
         return DiscordStream(StreamingMessageManager(self._thread))
 
     async def open_activity(self, spec: ActivitySpec) -> DiscordActivity:
+        if self._thread_missing:
+            return DiscordActivity(None, spec)
         message: discord.Message | None = None
-        with contextlib.suppress(discord.HTTPException):
+        try:
             message = await self._thread.send(embed=_activity_embed(spec, spec.detail))
+        except discord.NotFound:
+            self._remember_missing_thread()
+        except discord.HTTPException:
+            pass
         return DiscordActivity(message, spec)
+
+    def _remember_missing_thread(self) -> None:
+        if not self._thread_missing:
+            logger.info("Thread %d disappeared; disabling further delivery", self._thread.id)
+        self._thread_missing = True
 
     # -- state -------------------------------------------------------------
     async def set_status(self, status: StatusKind) -> None:
