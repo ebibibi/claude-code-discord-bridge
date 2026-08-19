@@ -268,16 +268,12 @@ class BackendCommandCog(commands.Cog):
             backend_for_global, None
         ) or self._factory.default_model_for(backend_for_global)
         lines = [
-            f"🧠 **Global model**: {_model_label(current_global)} "
-            f"(for `{backend_for_global}`)",
+            f"🧠 **Global model**: {_model_label(current_global)} (for `{backend_for_global}`)",
         ]
         if thread_id_now is not None:
-            resolved_thread = current_thread or self._factory.default_model_for(
-                backend_for_thread
-            )
+            resolved_thread = current_thread or self._factory.default_model_for(backend_for_thread)
             lines.append(
-                f"🧵 **This thread**: {_model_label(resolved_thread)} "
-                f"(for `{backend_for_thread}`)"
+                f"🧵 **This thread**: {_model_label(resolved_thread)} (for `{backend_for_thread}`)"
             )
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
@@ -329,8 +325,7 @@ class BackendCommandCog(commands.Cog):
             else "**globally**"
         )
         await interaction.response.send_message(
-            f"🧠 Model set to `{name}` for `{backend}` {scope_label}. "
-            "Next session will use it.",
+            f"🧠 Model set to `{name}` for `{backend}` {scope_label}. Next session will use it.",
             ephemeral=False,
         )
 
@@ -495,8 +490,7 @@ class BackendCommandCog(commands.Cog):
         normalized = level.strip().lower()
         if normalized not in valid:
             await interaction.response.send_message(
-                f"❌ Unknown effort `{level}` for `{backend}`. "
-                f"Choose: {', '.join(sorted(valid))}.",
+                f"❌ Unknown effort `{level}` for `{backend}`. Choose: {', '.join(sorted(valid))}.",
                 ephemeral=True,
             )
             return
