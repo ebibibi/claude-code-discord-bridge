@@ -2200,6 +2200,18 @@ class ApiServer:
                 # A full scan means nothing above is unexamined any more.
                 coverage["oldest_seen_mid"] = None
                 coverage["full_scan"] = True
+            raw_scan = raw_coverage.get("attachment_scan")
+            if isinstance(raw_scan, dict):
+                try:
+                    detected = int(raw_scan.get("detected", 0))
+                    ignored = int(raw_scan.get("ignored", 0))
+                except (TypeError, ValueError):
+                    detected = ignored = -1
+                if 0 <= ignored <= detected <= 100_000:
+                    coverage["attachment_scan"] = {
+                        "detected": detected,
+                        "ignored": ignored,
+                    }
         return (ref, messages, coverage), None
 
     async def teams_sync_plan(self, request: web.Request) -> web.Response:
@@ -2226,6 +2238,7 @@ class ApiServer:
             messages,
             stored,
             pending=meta.get("pending_attachments") or [],
+            unavailable=meta.get("unavailable_attachments") or [],
         )
         return web.json_response(
             {
@@ -2240,6 +2253,16 @@ class ApiServer:
                 # it wrong costs one extra sync, not a hole in the history.
                 "newest_have_mid": plan.newest_have_mid,
                 "pending": meta.get("pending_attachments") or [],
+                "unavailable": meta.get("unavailable_attachments") or [],
+                "attachment_summary": meta.get("attachment_summary")
+                or {
+                    "detected": 0,
+                    "saved": 0,
+                    "unavailable": 0,
+                    "ignored": 0,
+                    "pending": len(meta.get("pending_attachments") or []),
+                },
+                "message_count": int(meta.get("message_count") or len(stored)),
                 # What this server supports, so a client can tell it apart from
                 # an older one. `conversation_scope` is the permission a client
                 # needs before it may upload a partially-scrolled chat: against
@@ -2281,6 +2304,7 @@ class ApiServer:
 
         created = updated = attachments_saved = 0
         fresh_pending: list[dict] = []
+        fresh_unavailable: list[dict] = []
         for msg in ordered:
             position = known.index(int(msg.mid))
             prev_mid = str(known[position - 1]) if position > 0 else None
@@ -2295,9 +2319,22 @@ class ApiServer:
                 updated += 1
             attachments_saved += report["attachments_saved"]
             fresh_pending.extend(report["pending"])
+            fresh_unavailable.extend(report["unavailable"])
 
-        pending = store.merge_pending(thread_dir, fresh_pending, pushed=ordered)
-        meta = store.write_meta(thread_dir, ref, pending=pending, coverage=coverage)
+        unavailable = store.merge_unavailable(thread_dir, fresh_unavailable, pushed=ordered)
+        pending = store.merge_pending(
+            thread_dir,
+            fresh_pending,
+            pushed=ordered,
+            unavailable=unavailable,
+        )
+        meta = store.write_meta(
+            thread_dir,
+            ref,
+            pending=pending,
+            unavailable=unavailable,
+            coverage=coverage,
+        )
         logger.info(
             "Teams sync: %s (+%d new, %d updated, %d attachments, %d pending)",
             _sanitize_log(thread_dir.name),
@@ -2315,6 +2352,8 @@ class ApiServer:
                 # Never reported as an empty success: whatever did not arrive is
                 # listed here, in thread.json and in the folder's README.
                 "pending": pending,
+                "unavailable": unavailable,
+                "attachment_summary": meta["attachment_summary"],
                 "message_count": meta["message_count"],
             }
         )

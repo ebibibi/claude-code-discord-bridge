@@ -346,6 +346,66 @@ async def test_pending_clears_once_the_bytes_arrive(client: TestClient) -> None:
     assert (await resp.json())["pending"] == []
 
 
+async def test_source_unavailable_is_terminal_and_reported_separately(
+    client: TestClient,
+) -> None:
+    """A confirmed source-side 404 is visible, but not retryable pending work."""
+    resp = await client.post(
+        "/api/teams/sync/push",
+        headers=AUTH,
+        json=thread_body(
+            messages=[
+                msg(
+                    ROOT,
+                    "x",
+                    "h1",
+                    attachments=[
+                        {
+                            "name": "gone.txt",
+                            "status": "unavailable",
+                            "url": "https://contoso.sharepoint.com/sites/team/gone.txt",
+                            "reason": "Authenticated source returned HTTP 404",
+                        }
+                    ],
+                )
+            ],
+            coverage={
+                "full_scan": True,
+                "attachment_scan": {"detected": 10, "ignored": 1},
+            },
+        ),
+    )
+    body = await resp.json()
+
+    assert body["pending"] == []
+    assert body["unavailable"] == [
+        {
+            "mid": ROOT,
+            "name": "gone.txt",
+            "reason": "Authenticated source returned HTTP 404",
+            "url": "https://contoso.sharepoint.com/sites/team/gone.txt",
+        }
+    ]
+    assert body["attachment_summary"] == {
+        "detected": 10,
+        "saved": 0,
+        "unavailable": 1,
+        "ignored": 1,
+        "pending": 0,
+    }
+
+    plan = await client.post(
+        "/api/teams/sync/plan",
+        headers=AUTH,
+        json=thread_body(messages=[{"mid": ROOT, "hash": "h1", "attachments": ["gone.txt"]}]),
+    )
+    plan_body = await plan.json()
+    assert plan_body["want_messages"] == []
+    assert plan_body["want_attachments"] == []
+    assert plan_body["attachment_summary"] == body["attachment_summary"]
+    assert plan_body["message_count"] == 1
+
+
 async def test_obsolete_pending_clears_when_the_message_inventory_changes(
     client: TestClient,
 ) -> None:

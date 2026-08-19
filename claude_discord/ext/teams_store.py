@@ -322,7 +322,7 @@ class TeamsVaultStore:
                 self._archive_version(thread_dir, msg.mid, str(previous.get("hash") or ""), note)
             first_synced = self._existing_first_synced(note) or now
 
-        saved, pending = self._save_attachments(thread_dir, msg)
+        saved, pending, unavailable = self._save_attachments(thread_dir, msg)
         note.write_text(
             teams_sync.render_message(
                 msg,
@@ -332,6 +332,7 @@ class TeamsVaultStore:
                 first_synced_at=first_synced,
                 last_synced_at=now,
                 pending=pending,
+                unavailable=unavailable,
             ),
             encoding="utf-8",
         )
@@ -345,6 +346,7 @@ class TeamsVaultStore:
             "edited": edited,
             "attachments_saved": saved,
             "pending": pending,
+            "unavailable": unavailable,
         }
 
     def _existing_first_synced(self, note: Path) -> str | None:
@@ -375,8 +377,10 @@ class TeamsVaultStore:
         except OSError as exc:
             logger.warning("Could not archive previous version of %s: %s", mid, exc)
 
-    def _save_attachments(self, thread_dir: Path, msg: IncomingMessage) -> tuple[int, list[dict]]:
-        """Write embedded attachment bytes; record everything else as pending.
+    def _save_attachments(
+        self, thread_dir: Path, msg: IncomingMessage
+    ) -> tuple[int, list[dict], list[dict]]:
+        """Write bytes; separate terminal source gaps from retryable failures.
 
         An attachment that cannot be stored is never dropped silently — it is
         returned as pending so it surfaces in thread.json, in the README and in
@@ -387,8 +391,19 @@ class TeamsVaultStore:
 
         saved = 0
         pending: list[dict] = []
+        unavailable: list[dict] = []
         for i, att in enumerate(msg.attachments):
             name = teams_sync.safe_attachment_name(att.name, i)
+            if att.status == "unavailable":
+                unavailable.append(
+                    {
+                        "mid": msg.mid,
+                        "name": name,
+                        "reason": att.reason or "取得元で利用できません",
+                        "url": att.url,
+                    }
+                )
+                continue
             if att.status != "embedded" or not att.data_b64:
                 pending.append(
                     {
@@ -429,7 +444,7 @@ class TeamsVaultStore:
                 pending.append({"mid": msg.mid, "name": name, "reason": f"書き込み失敗: {exc}"})
                 continue
             saved += 1
-        return saved, pending
+        return saved, pending, unavailable
 
     def _append_chain(self, thread_dir: Path, entry: dict) -> None:
         path = thread_dir / "chain.jsonl"
@@ -461,6 +476,7 @@ class TeamsVaultStore:
         ref: ThreadRef,
         *,
         pending: list[dict],
+        unavailable: list[dict] | None = None,
         coverage: dict,
         now: str | None = None,
     ) -> dict:
@@ -469,6 +485,27 @@ class TeamsVaultStore:
         chain = self.read_chain(thread_dir)
         latest = self.latest_chain(thread_dir)
         previous = self.read_meta(thread_dir)
+        unavailable = unavailable or []
+        saved_total = sum(len(self._attachments_present(thread_dir, mid)) for mid in latest)
+        scan = coverage.get("attachment_scan") or {}
+        previous_summary = previous.get("attachment_summary") or {}
+        ignored = int(scan.get("ignored", previous_summary.get("ignored", 0)) or 0)
+        detected = int(
+            scan.get(
+                "detected",
+                previous_summary.get(
+                    "detected", saved_total + len(unavailable) + len(pending) + ignored
+                ),
+            )
+            or 0
+        )
+        attachment_summary = {
+            "detected": detected,
+            "saved": saved_total,
+            "unavailable": len(unavailable),
+            "ignored": ignored,
+            "pending": len(pending),
+        }
         authors = [str(e.get("author") or "") for e in latest.values()]
         meta = {
             "team": ref.team,
@@ -480,6 +517,8 @@ class TeamsVaultStore:
             "message_count": len(latest),
             "coverage": {**(previous.get("coverage") or {}), **coverage},
             "pending_attachments": pending,
+            "unavailable_attachments": unavailable,
+            "attachment_summary": attachment_summary,
             "first_synced_at": previous.get("first_synced_at") or now,
             "last_synced_at": now,
         }
@@ -497,6 +536,7 @@ class TeamsVaultStore:
         fresh: list[dict],
         *,
         pushed: list[IncomingMessage] | None = None,
+        unavailable: list[dict] | None = None,
     ) -> list[dict]:
         """Carry forward unresolved gaps, drop resolved or obsolete ones.
 
@@ -512,10 +552,15 @@ class TeamsVaultStore:
             for msg in pushed or []
         }
         merged: dict[tuple[str, str], dict] = {}
+        unavailable_keys = {
+            (str(item.get("mid") or ""), str(item.get("name") or "")) for item in unavailable or []
+        }
         for item in (self.read_meta(thread_dir).get("pending_attachments") or []) + fresh:
             mid = str(item.get("mid") or "")
             name = str(item.get("name") or "")
             if not mid or not name:
+                continue
+            if (mid, name) in unavailable_keys:
                 continue
             if mid in declared_by_mid and name not in declared_by_mid[mid]:
                 continue
@@ -534,4 +579,32 @@ class TeamsVaultStore:
             )
             if current is None or candidate_priority >= current_priority:
                 merged[key] = candidate
+        return sorted(merged.values(), key=lambda i: (i["mid"], i["name"]))
+
+    def merge_unavailable(
+        self,
+        thread_dir: Path,
+        fresh: list[dict],
+        *,
+        pushed: list[IncomingMessage] | None = None,
+    ) -> list[dict]:
+        """Carry forward terminal source gaps until bytes arrive or inventory changes."""
+        declared_by_mid = {
+            msg.mid: {teams_sync.safe_attachment_name(att.name) for att in msg.attachments}
+            for msg in pushed or []
+        }
+        fresh_keys = {(str(item.get("mid") or ""), str(item.get("name") or "")) for item in fresh}
+        merged: dict[tuple[str, str], dict] = {}
+        for item in (self.read_meta(thread_dir).get("unavailable_attachments") or []) + fresh:
+            mid = str(item.get("mid") or "")
+            name = str(item.get("name") or "")
+            if not mid or not name:
+                continue
+            if mid in declared_by_mid and name not in declared_by_mid[mid]:
+                continue
+            if name in self._attachments_present(thread_dir, mid):
+                continue
+            if mid in declared_by_mid and (mid, name) not in fresh_keys:
+                continue
+            merged[(mid, name)] = {**item, "mid": mid, "name": name}
         return sorted(merged.values(), key=lambda i: (i["mid"], i["name"]))

@@ -319,6 +319,7 @@ def build_plan(
     incoming: list[IncomingMessage],
     stored: dict[str, StoredMessage],
     pending: list[dict] | None = None,
+    unavailable: list[dict] | None = None,
 ) -> SyncPlan:
     """Decide what the client still needs to send.
 
@@ -338,6 +339,11 @@ def build_plan(
         name = str(item.get("name") or "")
         if mid and name:
             pending_by_mid.setdefault(mid, set()).add(name)
+    unavailable_keys = {
+        (str(item.get("mid") or ""), str(item.get("name") or ""))
+        for item in unavailable or []
+        if item.get("mid") and item.get("name")
+    }
     if stored:
         plan.newest_have_mid = max(stored, key=_mid_sort_key)
     for msg in incoming:
@@ -350,7 +356,7 @@ def build_plan(
         for att in msg.attachments:
             name = safe_attachment_name(att.name)
             present = current is not None and name in current.attachments_present
-            if not present:
+            if not present and (msg.mid, name) not in unavailable_keys:
                 plan.want_attachments.append({"mid": msg.mid, "name": name})
     plan.want_messages.sort(key=_mid_sort_key)
     return plan
@@ -375,6 +381,7 @@ def render_message(
     first_synced_at: str,
     last_synced_at: str,
     pending: list[dict],
+    unavailable: list[dict] | None = None,
 ) -> str:
     """Render one message as an Obsidian note with YAML frontmatter.
 
@@ -397,6 +404,7 @@ def render_message(
         "deleted": msg.deleted,
         "attachments": [safe_attachment_name(a.name) for a in msg.attachments],
         "attachments_pending": [p["name"] for p in pending],
+        "attachments_unavailable": [p["name"] for p in unavailable or []],
         "first_synced_at": first_synced_at,
         "last_synced_at": last_synced_at,
     }
@@ -468,6 +476,7 @@ def render_readme(meta: dict, chain: list[dict]) -> str:
     whole rewrite exists to remove.
     """
     pending = meta.get("pending_attachments") or []
+    unavailable = meta.get("unavailable_attachments") or []
     coverage = meta.get("coverage") or {}
     lines = [
         f"# Teams スレッド: {meta.get('title', '')}",
@@ -494,6 +503,13 @@ def render_readme(meta: dict, chain: list[dict]) -> str:
     if pending:
         lines += ["## ⚠️ 未取得の添付", ""]
         for item in pending:
+            lines.append(
+                f"- `{item.get('name', '')}`（{item.get('mid', '')}）— {item.get('reason', '')}"
+            )
+        lines.append("")
+    if unavailable:
+        lines += ["## 取得元で利用できない添付", ""]
+        for item in unavailable:
             lines.append(
                 f"- `{item.get('name', '')}`（{item.get('mid', '')}）— {item.get('reason', '')}"
             )
