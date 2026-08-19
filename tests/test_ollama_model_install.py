@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import aiosqlite
 import pytest
+from discord import app_commands
 
 from claude_code_core.local_backend import (
     LocalModelConfig,
@@ -133,13 +134,53 @@ def _make_cog(settings: BackendSettings) -> tuple[BackendCommandCog, MagicMock]:
     return cog, chat_cog
 
 
+def _model_subcommand(cog: BackendCommandCog, name: str) -> app_commands.Command:
+    group = next(command for command in cog.get_app_commands() if command.name == "model")
+    assert isinstance(group, app_commands.Group)
+    command = group.get_command(name)
+    assert isinstance(command, app_commands.Command)
+    return command
+
+
 def _channel_interaction() -> MagicMock:
     interaction = MagicMock()
     interaction.channel = MagicMock()
     interaction.channel.send = AsyncMock()
     interaction.response = MagicMock()
     interaction.response.send_message = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
     return interaction
+
+
+class TestModelDiscordCommandShape:
+    async def test_model_is_a_group_with_visible_subcommands(self) -> None:
+        settings = await _settings()
+        cog, _ = _make_cog(settings)
+
+        roots = {command.name: command for command in cog.get_app_commands()}
+        model = roots["model"]
+
+        assert isinstance(model, app_commands.Group)
+        assert [command.name for command in model.commands] == ["show", "set", "install"]
+        assert [command.qualified_name for command in model.commands] == [
+            "model show",
+            "model set",
+            "model install",
+        ]
+
+    async def test_set_subcommand_selects_model(self) -> None:
+        settings = await _settings()
+        cog, chat_cog = _make_cog(settings)
+        interaction = _channel_interaction()
+
+        command = _model_subcommand(cog, "set")
+        await command.callback(cog, interaction, name="opus", scope="global")
+
+        assert await settings.current_model("claude") == "opus"
+        assert chat_cog.runner.model == "opus"
+        message = interaction.response.send_message.await_args.args[0]
+        assert "Model set" in message
 
 
 class TestModelInstallCommand:
@@ -153,13 +194,8 @@ class TestModelInstallCommand:
         pull = AsyncMock()
         monkeypatch.setattr("claude_discord.cogs.backend_command.pull_ollama_model", pull)
 
-        await cog.model_command.callback(
-            cog,
-            interaction,
-            name=None,
-            install=MODEL,
-            scope="global",
-        )
+        command = _model_subcommand(cog, "install")
+        await command.callback(cog, interaction, name=MODEL, scope="global")
 
         pull.assert_awaited_once_with(MODEL)
         assert await settings.current_model("local") == MODEL
@@ -179,13 +215,8 @@ class TestModelInstallCommand:
         pull = AsyncMock()
         monkeypatch.setattr("claude_discord.cogs.backend_command.pull_ollama_model", pull)
 
-        await cog.model_command.callback(
-            cog,
-            interaction,
-            name=None,
-            install=MODEL,
-            scope="global",
-        )
+        command = _model_subcommand(cog, "install")
+        await command.callback(cog, interaction, name=MODEL, scope="global")
 
         pull.assert_not_awaited()
         assert await settings.explicit_model("claude") is None
@@ -202,31 +233,9 @@ class TestModelInstallCommand:
         pull = AsyncMock(side_effect=RuntimeError("offline"))
         monkeypatch.setattr("claude_discord.cogs.backend_command.pull_ollama_model", pull)
 
-        await cog.model_command.callback(
-            cog,
-            interaction,
-            name=None,
-            install=MODEL,
-            scope="global",
-        )
+        command = _model_subcommand(cog, "install")
+        await command.callback(cog, interaction, name=MODEL, scope="global")
 
         assert await settings.explicit_model("local") is None
         completed = interaction.channel.send.await_args.args[0]
         assert "failed" in completed.lower()
-
-    async def test_name_and_install_are_mutually_exclusive(self) -> None:
-        settings = await _settings()
-        await settings.set_backend("local")
-        cog, _ = _make_cog(settings)
-        interaction = _channel_interaction()
-
-        await cog.model_command.callback(
-            cog,
-            interaction,
-            name="gpt-oss:120b",
-            install=MODEL,
-            scope="global",
-        )
-
-        message = interaction.response.send_message.await_args.args[0]
-        assert "either" in message.lower()

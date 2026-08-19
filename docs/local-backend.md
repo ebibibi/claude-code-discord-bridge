@@ -59,14 +59,15 @@ CCDB_LOCAL_MODEL=gpt-oss:120b
 ```
 
 3. In Discord, select the backend: `/backend name:local`.
-4. Either select a model already present in Ollama with `/model name:<model>`,
-   or install and select one with `/model install:<model>`.
+4. Either select a model already present in Ollama with
+   `/model set name:<model>`, or install and select one with
+   `/model install name:<model>`.
 
 For example:
 
 ```text
 /backend name:local
-/model install:qwen3.6:35b-a3b-mtp-q4_K_M
+/model install name:qwen3.6:35b-a3b-mtp-q4_K_M
 ```
 
 The session embed turns olive and reads 🏠 Local model.
@@ -79,8 +80,9 @@ The session embed turns olive and reads 🏠 Local model.
 
 ## Installing an Ollama model from Discord
 
-`/model install:<model>` is available only while the selected backend for the
-chosen scope is `local`. ccdb derives Ollama's native `/api/pull` endpoint from
+`/model install name:<model>` appears as a real Discord subcommand and is
+available only while the selected backend for the chosen scope is `local`.
+ccdb derives Ollama's native `/api/pull` endpoint from
 `CCDB_LOCAL_BASE_URL`, asks Ollama to pull the model, and immediately
 acknowledges the command so a large download does not exceed Discord's
 interaction deadline.
