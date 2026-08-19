@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 
 from claude_code_core.escalation import (
-    CONSULT_DISALLOWED_TOOLS,
     ConsultChannel,
     Escalation,
     IsolationError,
@@ -65,9 +64,10 @@ class TestIsolationContract:
         assert any("separator" in p for p in verify_isolation(args, tmp_path))
 
     def test_a_tool_left_enabled_is_caught(self, tmp_path):
-        args = [a for a in ConsultChannel().build_args("hi") if a != "Bash"]
+        args = ConsultChannel().build_args("hi")
+        args[args.index("--tools") + 1] = "Bash"
         problems = verify_isolation(args, tmp_path)
-        assert any("Bash" in p for p in problems)
+        assert any("tools" in p for p in problems)
 
     def test_a_non_empty_working_directory_is_caught(self, tmp_path):
         (tmp_path / "CLAUDE.md").write_text("customer notes", encoding="utf-8")
@@ -79,13 +79,11 @@ class TestIsolationContract:
         problems = verify_isolation(ConsultChannel().build_args("hi"), tmp_path / "absent")
         assert any("does not exist" in p for p in problems)
 
-    def test_every_known_tool_is_disallowed(self):
+    def test_all_builtin_tools_are_disabled_without_enumerating_tool_names(self):
         args = ConsultChannel().build_args("hi")
-        listed = args[args.index("--disallowedTools") + 1 : args.index("--")]
-        assert set(listed) == set(CONSULT_DISALLOWED_TOOLS)
-        # The ones that can reach the filesystem or the network matter most.
-        for tool in ("Bash", "Read", "WebFetch", "Task"):
-            assert tool in listed
+        assert args[args.index("--tools") + 1] == ""
+        assert "--disallowedTools" not in args
+        assert "SlashCommand" not in args
 
     def test_prompt_is_the_last_argument(self):
         args = ConsultChannel().build_args("the question")

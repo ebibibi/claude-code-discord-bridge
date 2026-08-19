@@ -11,7 +11,8 @@ a hurry always eventually is:
 
 1. ``--setting-sources ""`` — no CLAUDE.md, skills or memory.
 2. An **empty** temporary directory as cwd — nothing local to read.
-3. Every tool disallowed — no shell to escape the directory with.
+3. ``--tools ""`` — every built-in tool disabled, including tools added by a
+   future CLI release; no shell to escape the directory with.
 4. ``--`` before the prompt — without it the variadic tool list eats the
    prompt and the CLI dies with "Input must be provided...".
 
@@ -41,7 +42,6 @@ __all__ = [
     "ConsultOutcome",
     "Escalation",
     "IsolationError",
-    "CONSULT_DISALLOWED_TOOLS",
     "verify_isolation",
 ]
 
@@ -49,25 +49,6 @@ __all__ = [
 class IsolationError(RuntimeError):
     """Raised when a consult would run without its isolation intact."""
 
-
-# Every tool the CLI ships. A consult is text-in, text-out; anything that can
-# touch the filesystem or the network defeats the point of the empty cwd.
-CONSULT_DISALLOWED_TOOLS: tuple[str, ...] = (
-    "Bash",
-    "BashOutput",
-    "Edit",
-    "Glob",
-    "Grep",
-    "KillShell",
-    "NotebookEdit",
-    "Read",
-    "SlashCommand",
-    "Task",
-    "TodoWrite",
-    "WebFetch",
-    "WebSearch",
-    "Write",
-)
 
 # Secrets and control-plane handles that have no business in a consult.
 _STRIPPED_ENV_KEYS = frozenset(
@@ -103,16 +84,15 @@ def verify_isolation(args: list[str], cwd: str | Path) -> list[str]:
     if "--" not in args:
         problems.append("-- separator is missing (the tool list would swallow the prompt)")
 
-    if "--disallowedTools" in args:
-        # Without the separator the tool list runs to the end of argv; report
-        # every finding rather than crashing on the first broken assumption.
-        separator = args.index("--") if "--" in args else len(args)
-        listed = set(args[args.index("--disallowedTools") + 1 : separator])
-        missing = [tool for tool in CONSULT_DISALLOWED_TOOLS if tool not in listed]
-        if missing:
-            problems.append(f"tools not disallowed: {', '.join(missing)}")
+    if "--tools" in args:
+        index = args.index("--tools")
+        if index + 1 >= len(args) or args[index + 1] != "":
+            problems.append("built-in tools are not disabled with --tools empty")
     else:
-        problems.append("--disallowedTools is missing")
+        problems.append("--tools empty is missing")
+
+    if "--allowedTools" in args or "--allowed-tools" in args:
+        problems.append("an allowed-tools override is present")
 
     path = Path(cwd)
     if not path.is_dir():
@@ -155,8 +135,8 @@ class ConsultChannel:
             self.model,
             "--setting-sources",
             "",
-            "--disallowedTools",
-            *CONSULT_DISALLOWED_TOOLS,
+            "--tools",
+            "",
             "--",
             prompt,
         ]
