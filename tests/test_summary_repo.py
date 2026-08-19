@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 
@@ -63,6 +64,38 @@ async def test_delete_removes_row(repo: ThreadSummaryRepository) -> None:
     assert await repo.get("teams:thread:1") is None
     # Deleting a missing key is a no-op that reports False.
     assert await repo.delete("teams:thread:1") is False
+
+
+@pytest.mark.asyncio
+async def test_upsert_does_not_write_multiline_log_entries(
+    repo: ThreadSummaryRepository, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="claude_discord.database.summary_repo")
+
+    await repo.upsert("teams:\r\nforged", summary="v1", marker="100\nforged")
+
+    message = caplog.records[-1].getMessage()
+    assert "\r" not in message
+    assert "\n" not in message
+    assert "key=teams:  forged" in message
+    assert "marker=100 forged" in message
+
+
+@pytest.mark.asyncio
+async def test_delete_does_not_write_multiline_log_entries(
+    repo: ThreadSummaryRepository, caplog: pytest.LogCaptureFixture
+) -> None:
+    summary_key = "teams:\r\nforged"
+    await repo.upsert(summary_key, summary="v1")
+    caplog.clear()
+    caplog.set_level(logging.INFO, logger="claude_discord.database.summary_repo")
+
+    assert await repo.delete(summary_key) is True
+
+    message = caplog.records[-1].getMessage()
+    assert "\r" not in message
+    assert "\n" not in message
+    assert "key=teams:  forged" in message
 
 
 @pytest.mark.asyncio

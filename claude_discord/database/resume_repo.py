@@ -71,7 +71,13 @@ class PendingResumeRepository:
             )
             await db.commit()
             row_id: int = cursor.lastrowid or 0
-        logger.info("Marked thread %d for resume (reason=%s, row_id=%d)", thread_id, reason, row_id)
+        safe_reason = reason.replace("\r", " ").replace("\n", " ")
+        logger.info(
+            "Marked thread %d for resume (reason=%s, row_id=%d)",
+            thread_id,
+            safe_reason,
+            row_id,
+        )
         return row_id
 
     async def get_pending(self) -> list[PendingResume]:
