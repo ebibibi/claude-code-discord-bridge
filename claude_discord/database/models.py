@@ -190,6 +190,9 @@ async def init_db(db_path: str) -> None:
     the migration statements add any missing columns idempotently.
     """
     async with aiosqlite.connect(db_path) as db:
+        # WAL lets readers continue using the last committed snapshot while a
+        # different connection holds a write transaction.
+        await db.execute("PRAGMA journal_mode=WAL")
         await db.executescript(SCHEMA)
         for stmt in _MIGRATIONS:
             with contextlib.suppress(Exception):
