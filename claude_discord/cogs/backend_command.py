@@ -13,7 +13,7 @@ follow-up).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
@@ -21,6 +21,7 @@ from discord.app_commands import Choice
 from discord.ext import commands
 
 from claude_code_core.codex_runner import VALID_CODEX_EFFORTS
+from claude_code_core.local_backend import pull_ollama_model, validate_ollama_model_name
 
 from ..backend_settings import (
     ALL_BACKENDS,
@@ -94,7 +95,7 @@ def _model_label(model: str | None) -> str:
 
 
 class BackendCommandCog(commands.Cog):
-    """/backend and /model slash commands."""
+    """/backend, /model, /effort, and /engine-status slash commands."""
 
     def __init__(
         self,
@@ -135,6 +136,18 @@ class BackendCommandCog(commands.Cog):
         if thread_id is not None:
             return SCOPE_THREAD, thread_id
         return SCOPE_GLOBAL, None
+
+    async def _send_install_result(
+        self,
+        interaction: discord.Interaction,
+        message: str,
+    ) -> None:
+        """Post the result after the initial interaction response was consumed."""
+        channel: Any = interaction.channel
+        if channel is not None:
+            await channel.send(message)
+        else:
+            await interaction.followup.send(message)
 
     # ── /backend ───────────────────────────────────────────────────
 
@@ -267,7 +280,7 @@ class BackendCommandCog(commands.Cog):
 
     @app_commands.command(
         name="model",
-        description="Show or switch the model for the current backend",
+        description="Show, switch, or install a model for the current backend",
     )
     @app_commands.choices(
         scope=[
@@ -277,7 +290,8 @@ class BackendCommandCog(commands.Cog):
     )
     @app_commands.autocomplete(name=_model_name_autocomplete)
     @app_commands.describe(
-        name="Model id (e.g. sonnet, opus, gpt-5.6-sol, o4-mini). Omit to show current.",
+        name="Model id to select. Omit to show current or use install for Ollama.",
+        install="Ollama model id to pull and select (local backend only).",
         scope=(
             "thread: only this thread; global: server-wide. "
             "Default: thread when in thread, else global."
@@ -287,12 +301,21 @@ class BackendCommandCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         name: str | None = None,
+        install: str | None = None,
         scope: str | None = None,
     ) -> None:
         thread_id_now = self._thread_id_or_none(interaction)
 
+        if name is not None and install is not None:
+            await interaction.response.send_message(
+                "Choose either `name` to select an installed model or `install` to pull one, "
+                "not both.",
+                ephemeral=True,
+            )
+            return
+
         # Show current
-        if name is None:
+        if name is None and install is None:
             backend_for_thread = (
                 await self._settings.current_backend(thread_id_now)
                 if thread_id_now is not None
@@ -334,6 +357,39 @@ class BackendCommandCog(commands.Cog):
             target_thread_id if resolved_scope == SCOPE_THREAD else None
         )
 
+        installed = install is not None
+        if install is not None:
+            if backend_for_save != "local":
+                await interaction.response.send_message(
+                    "Model installation is available only for the `local` backend. "
+                    "Run `/backend name:local` first.",
+                    ephemeral=True,
+                )
+                return
+            try:
+                name = validate_ollama_model_name(install)
+            except ValueError as exc:
+                await interaction.response.send_message(f"❌ {exc}", ephemeral=True)
+                return
+
+            await interaction.response.send_message(
+                f"📦 Installing `{name}` from Ollama. This can take a while; "
+                "I will post again when it finishes.",
+                ephemeral=False,
+            )
+            try:
+                await pull_ollama_model(name)
+            except Exception as exc:
+                logger.exception("Failed to install Ollama model %s", name)
+                detail = str(exc).strip()[:500] or type(exc).__name__
+                await self._send_install_result(
+                    interaction,
+                    f"❌ Ollama model installation failed for `{name}`: {detail}",
+                )
+                return
+
+        # The show-current and mutually-exclusive branches above guarantee this.
+        assert name is not None
         await self._settings.set_model(backend_for_save, name, thread_id=target_thread_id)
 
         # Global change → also update shared runner.model so the next
@@ -350,11 +406,18 @@ class BackendCommandCog(commands.Cog):
             if resolved_scope == SCOPE_THREAD and target_thread_id is not None
             else "**globally**"
         )
-        await interaction.response.send_message(
-            f"\U0001f9e0 Model set to `{name}` for `{backend_for_save}` "
-            f"{scope_label}. Next session will use it.",
-            ephemeral=False,
-        )
+        if installed:
+            await self._send_install_result(
+                interaction,
+                f"✅ Installed `{name}` from Ollama and set it for `local` "
+                f"{scope_label}. It is ready for the next session.",
+            )
+        else:
+            await interaction.response.send_message(
+                f"\U0001f9e0 Model set to `{name}` for `{backend_for_save}` "
+                f"{scope_label}. Next session will use it.",
+                ephemeral=False,
+            )
 
     # ── /effort ────────────────────────────────────────────────────
 
