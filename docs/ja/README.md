@@ -260,6 +260,20 @@ curl -X POST "$CCDB_API_URL/api/spawn" \
 
 デイリーブリーフィングや CI アラートなど、情報を先に表示してユーザーが Claude に問いかけるかどうかを判断するワークフローに便利です。
 
+**リクエスト元をスレッドに追加する（`user_id`）** — スポーンされたスレッドは Bot が作成するため、誰も見ていない状態で生まれます。チャンネル一覧の中に埋もれ、探しに行かないと気づけません。Discord の `user_id` を渡すと、ccdb はシードメッセージを投稿する**前に**そのユーザーをスレッドメンバーとして追加します。スレッドは参加済み一覧に現れ、ユーザーは最初の 1 行目からやり取りを追えます。
+
+```bash
+curl -X POST "$CCDB_API_URL/api/spawn" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "失敗した nightly ビルドをトリアージして",
+    "thread_name": "Nightly Triage",
+    "user_id": 123456789012345678
+  }'
+```
+
+正の整数でない `user_id` は呼び出し側のバグなので 400 で拒否します。一方、Discord 側でのメンバー追加失敗は「見えにくい」だけの問題なので抑制されます。スレッドを作成して Claude をすでに起動できたスポーンを、失敗として報告することはありません。
+
 Claude のサブプロセスには `DISCORD_THREAD_ID` 環境変数が渡されるため、実行中のセッションから子セッションを起動して作業を並列化できます。
 
 ### 認証済み外部インジェストと結果取得 (`/api/ingest`)
@@ -508,6 +522,7 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 - **シークレット分離** — Bot トークンを subprocess 環境から除去
 - **ユーザー認証** — `allowed_user_ids` で Claude を呼び出せるユーザーを制限
 - **ログインジェクション防止** — API 経由のユーザー入力値はログ書き込み前に無害化（改行文字除去）
+- **認証情報ファイルを追跡しない** — `.gitignore` は `.env` だけでなく `.env.*` も対象にする。運用者は実ファイルの隣に日付付きバックアップ（`.env.bak-…`）を残しがちで、その 1 つ 1 つが有効な Bot トークンを保持しているため。テンプレートを追跡し続けられるよう `.env.example` だけは明示的に再包含している
 - **ローカルモデルバックエンド**（オプション）— `/backend local` で自身のハードウェア上のモデルに対してスレッドを実行。通常は「local」実行でもベンダーへ接続するため、ccdb は update check と analytics を無効にした専用 CLI home を管理し、その設定がなければ起動を拒否します — [docs/local-backend.md](../local-backend.md)参照
 - **リモート AG-UI バックエンド**（オプション）— `/backend agui` で既存の Discord/Teams セッション機構を任意の HTTP/SSE AG-UI エージェントへ接続し、ccdb の session ledger、rendering、cancellation、運用制御を維持します — [docs/agui-backend.md](../agui-backend.md)参照
 - **匿名化ゲートウェイ**（オプション）— プロンプトが Claude または Codex へ届く前に組織を識別する語を安定した alias へ置換し、回答内で復元。ローカルモデルが置換漏れを確認し、デフォルトでは漏れを検出すると送信をブロックします。rules file を作成するまでは無効です — [docs/anonymization.md](../anonymization.md)参照
@@ -1123,7 +1138,7 @@ uv sync --extra api
 | GET | `/api/tasks` | 登録済みタスクの一覧 |
 | DELETE | `/api/tasks/{id}` | タスクの削除 |
 | PATCH | `/api/tasks/{id}` | タスクの更新（有効/無効、スケジュール変更） |
-| POST | `/api/spawn` | 新しい Discord スレッドを作成し Claude Code セッションを起動（非ブロッキング）。`auto_start: false` を指定するとユーザーの最初の返信まで Claude の起動を延期できる |
+| POST | `/api/spawn` | 新しい Discord スレッドを作成し Claude Code セッションを起動（非ブロッキング）。`auto_start: false` を指定するとユーザーの最初の返信まで Claude の起動を延期でき、`user_id` を指定するとリクエスト元をスレッドに追加できる |
 | POST | `/api/ingest` | 認証済み外部スポーン（ブラウザ拡張機能 / webhook）。base64 添付ファイル対応。結果取得が設定されている場合 `result_id` を返す |
 | GET | `/api/ingest/{result_id}` | スポーンされたセッションの最終返信をポーリング（`status`/`result`/`error`/`thread_id`） |
 | GET | `/api/ingest/summary` | 長時間続くインジェストスレッドの継続サマリー + `marker` を `key` で読み取り（ingest-token 認証）。クライアントは差分だけをエクスポートできる |
