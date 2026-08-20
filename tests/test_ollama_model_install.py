@@ -76,7 +76,7 @@ class TestOllamaPull:
             captured["timeout"] = timeout
             return _FakeResponse({"status": "success"})
 
-        monkeypatch.setattr("claude_code_core.local_backend.urllib_request.urlopen", _urlopen)
+        monkeypatch.setattr("claude_code_core.ollama_client.urllib_request.urlopen", _urlopen)
 
         await pull_ollama_model(MODEL, config=local_config)
 
@@ -92,7 +92,7 @@ class TestOllamaPull:
         def _urlopen(request, *, timeout: float):
             return _FakeResponse({"status": "pulling manifest"})
 
-        monkeypatch.setattr("claude_code_core.local_backend.urllib_request.urlopen", _urlopen)
+        monkeypatch.setattr("claude_code_core.ollama_client.urllib_request.urlopen", _urlopen)
 
         with pytest.raises(RuntimeError, match="did not complete successfully"):
             await pull_ollama_model(MODEL, config=local_config)
@@ -223,9 +223,7 @@ class TestModelInstallCommand:
         message = interaction.response.send_message.await_args.args[0]
         assert "local" in message.lower()
 
-    async def test_failed_pull_does_not_select_model(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_failed_pull_does_not_select_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         settings = await _settings()
         await settings.set_backend("local")
         cog, _ = _make_cog(settings)

@@ -59,15 +59,17 @@ CCDB_LOCAL_MODEL=gpt-oss:120b
 ```
 
 3. In Discord, select the backend: `/backend name:local`.
-4. Either select a model already present in Ollama with
-   `/model set name:<model>`, or install and select one with
-   `/model install name:<model>`.
+4. Pick a model. `/ollama list` shows what is already there, `/ollama use`
+   selects one, and `/ollama pull` downloads a new one — see
+   [Managing the runtime](#managing-the-runtime-ollama) below. `/model` and
+   `/model install name:<model>` still work and do the same thing.
 
 For example:
 
 ```text
 /backend name:local
-/model install name:qwen3.6:35b-a3b-mtp-q4_K_M
+/ollama status
+/ollama pull model:qwen3.6:35b-a3b use:true
 ```
 
 The session embed turns olive and reads 🏠 Local model.
@@ -100,6 +102,96 @@ download progress, storage, and deduplication.
 Model names are sent as JSON to Ollama, never through a shell. ccdb accepts the
 normal Ollama `name[:tag]` and namespaced `namespace/name[:tag]` forms and
 rejects whitespace, URL syntax, and control characters before starting a pull.
+
+## Managing the runtime: `/ollama`
+
+`/model` answers "which model do I want". It cannot answer the questions that
+actually come up when the cloud backends are unavailable — what is installed,
+what will fit, what is resident in memory right now, why the answers are bad.
+Those live on Ollama's *native* API, and `/ollama` is a typed mirror of it, so
+managing the runtime does not mean SSHing to the box.
+
+| Command | What it answers |
+|---|---|
+| `/ollama status` | Is the server reachable, is the selected model installed, can it call tools, are skills wired up |
+| `/ollama list` | Every installed model with size, parameters and capabilities; ▶ marks the selected one |
+| `/ollama ps` | What is loaded **right now**, how much memory it holds, and how much of it is on the GPU |
+| `/ollama show model:<m>` | Capabilities, quantization, and the model's maximum context |
+| `/ollama pull model:<m> [use:true]` | Download a model, optionally selecting it when the download finishes |
+| `/ollama rm model:<m>` | Delete a model and free its disk space |
+| `/ollama use model:<m>` | Select an installed model for the `local` backend (`thread_only:true` to scope it) |
+
+Every model argument is autocompleted, so none of this requires knowing Ollama
+syntax. `list`/`ps`/`show`/`rm`/`use` suggest what is installed on the server;
+`pull` suggests a curated shortlist of models that suit the Codex CLI, annotated
+with size and marked `[installed]` when you already have one — any tag from
+`ollama.com/library` is still accepted as free text.
+
+The management calls are derived from `CCDB_LOCAL_BASE_URL` by replacing the
+terminal `/v1`, so there is only ever one address to configure. A reverse-proxy
+prefix (`https://gw/ollama/v1`) is preserved.
+
+### Two numbers worth reading
+
+**Tool calling.** Codex acts *only* through tool calls. A model that does not
+advertise the `tools` capability will describe the edit it would make instead of
+making it — which reads as "the local backend is broken" and is really "this
+model cannot act". `/ollama list` flags such models `NO-TOOLS`, and `/ollama
+use` warns before selecting one.
+
+**`ON GPU` in `/ollama ps`.** Below 100% means the remainder of the model is
+running on the CPU, which is roughly an order of magnitude slower. If a local
+thread suddenly feels unusable and nothing else changed, check this first: it is
+usually another model having been loaded alongside it.
+
+## Skills, and why the local model seems to ignore them
+
+The obvious hypothesis is that the separate `CODEX_HOME` costs you your skills.
+**It does not** — measured on codex-cli 0.147.0, by reading the session rollout
+files under `<CODEX_HOME>/sessions/`, which record exactly what was sent:
+
+| Setup | Skills in the `developer` message |
+|---|---|
+| ccdb-owned `CODEX_HOME`, no `skills/` directory at all | **135** |
+| A bare temporary `CODEX_HOME` | **135** |
+
+codex-cli discovers `~/.codex/skills` and `~/.claude/skills` on its own,
+regardless of `CODEX_HOME`, and injects a `<skills_instructions>` block naming
+every one. A local thread gets the same ~15 KB skill index a cloud thread does.
+Mirroring the directories into the ccdb home changes nothing; an earlier
+revision of this document said otherwise and was wrong.
+
+So when a local run ignores a skill, the instructions were there and the model
+did not act on them. In testing, a 30B model answered "I have no skills
+available" with a 14,728-character skill index in its context. That is a model
+capability limit, not a wiring problem, and the levers that move it are:
+
+1. **A bigger or more agentic model.** By far the largest effect. `/ollama list`
+   and `/ollama pull` exist to make this cheap to try.
+2. **A model that advertises `tools`.** Codex acts only through tool calls.
+   `/ollama list` flags the ones that cannot.
+3. **`APPEND_SYSTEM_PROMPT`.** A short, blunt directive ("before answering,
+   check the skills list for a matching skill and read its SKILL.md") is
+   followed far more reliably by a small model than a 15 KB index is. ccdb
+   passes it to Codex and to `local` as `developer_instructions`, which arrives
+   as a `developer` message ahead of the turn.
+
+Verify what a run actually received rather than guessing — the rollout files are
+the record:
+
+```bash
+python3 - <<'EOF'
+import json, pathlib
+newest = max(pathlib.Path.home().glob(".ccdb/local-codex-home/sessions/**/*.jsonl"),
+             key=lambda p: p.stat().st_mtime)
+for line in newest.open():
+    payload = json.loads(line).get("payload", {})
+    if payload.get("role") == "developer":
+        for chunk in payload.get("content", []):
+            print(chunk.get("text", "")[:2000])
+        break
+EOF
+```
 
 ## Honest expectations
 

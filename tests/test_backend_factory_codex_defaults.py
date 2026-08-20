@@ -61,3 +61,35 @@ class TestEnvEffortDoesNotLeakToCodex:
         runner = _factory(effort="max").build(backend="codex")
         assert isinstance(runner, CodexRunner)
         assert runner.effort is None
+
+
+class TestAppendSystemPromptReachesEveryCliBackend:
+    """The operator's standing instructions must not be silently Claude-only.
+
+    ``APPEND_SYSTEM_PROMPT`` used to reach the Claude runner alone. On Codex
+    the same text is `developer_instructions`, which lands as a `developer`
+    message ahead of the turn — so withholding it left `local` threads running
+    without the instructions the operator believed applied everywhere.
+    """
+
+    def test_forwarded_to_claude(self) -> None:
+        runner = _factory(append_system_prompt="be terse").build(backend="claude")
+        assert runner.append_system_prompt == "be terse"
+
+    def test_forwarded_to_codex(self) -> None:
+        runner = _factory(append_system_prompt="be terse").build(backend="codex")
+        assert isinstance(runner, CodexRunner)
+        assert runner.append_system_prompt == "be terse"
+
+    def test_forwarded_to_local(self) -> None:
+        runner = _factory(append_system_prompt="be terse").build(backend="local")
+        assert runner.append_system_prompt == "be terse"
+
+    def test_codex_renders_it_as_developer_instructions(self) -> None:
+        runner = _factory(append_system_prompt="be terse").build(backend="codex")
+        args = runner._build_args("hi", session_id=None)
+        assert any(arg.startswith("developer_instructions=") for arg in args)
+
+    def test_absent_when_unset(self) -> None:
+        args = _factory().build(backend="codex")._build_args("hi", session_id=None)
+        assert not any(arg.startswith("developer_instructions=") for arg in args)

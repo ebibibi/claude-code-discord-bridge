@@ -114,15 +114,19 @@ class BackendFactory:
                 kwargs["auth_token"] = self.agui_token
         if thread_id is not None:
             kwargs["thread_id"] = thread_id
-        # ``append_system_prompt`` and the env-level ``effort`` are Claude-only
-        # defaults. We deliberately do NOT forward them to Codex: Codex effort
-        # is resolved per-backend from BackendSettings at spawn time (and its
-        # valid values differ — e.g. Claude's "max" is not a Codex level).
-        if backend == "claude":
-            if self.append_system_prompt is not None:
-                kwargs["append_system_prompt"] = self.append_system_prompt
-            if self.effort is not None:
-                kwargs["effort"] = self.effort
+        # ``append_system_prompt`` goes to every CLI-backed backend. Codex takes
+        # it as `developer_instructions`, which lands as a `developer` message
+        # ahead of the turn (measured on codex-cli 0.147.0). Withholding it made
+        # the operator's standing instructions silently Claude-only, which
+        # matters most on `local`: a small model needs a short, blunt directive
+        # far more than a frontier one does.
+        if backend in ("claude", "codex", "local") and self.append_system_prompt is not None:
+            kwargs["append_system_prompt"] = self.append_system_prompt
+        # The env-level ``effort`` stays Claude-only. Codex effort is resolved
+        # per-backend from BackendSettings at spawn time, and the valid values
+        # differ — Claude's "max" is not a Codex level.
+        if backend == "claude" and self.effort is not None:
+            kwargs["effort"] = self.effort
         if self.api_port is not None:
             kwargs["api_port"] = self.api_port
         if self.api_secret is not None:
