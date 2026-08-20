@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/check-deploy-drift.sh` (also `make drift`)** — reports when the bot is loading code
+  that is not on `origin/main`. `make dev-on` is the right tool for testing a change against real
+  Discord traffic, but nothing expires it: `pre-start.sh` printed one line at boot and never
+  mentioned it again, so a forgotten dev worktree can keep a side branch in production for days
+  while every merged PR appears to deploy and does not. The check names the worktree and branch,
+  states whether that commit is an ancestor of `origin/main`, counts how many merged commits are
+  therefore not running, and reports how long dev mode has been on. `pre-start.sh` now prints the
+  full report instead of the single line. Exit codes: 0 clean, 1 drift, 2 marker points nowhere.
+
 ### Changed
 
 - **Thread-completion recording is opt-in, off by default** — deleting a thread is an everyday,
