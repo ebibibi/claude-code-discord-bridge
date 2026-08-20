@@ -528,7 +528,8 @@ ccdb がバックエンド情報を記録する前に作成されたレコード
 - **認証情報ファイルを追跡しない** — `.gitignore` は `.env` だけでなく `.env.*` も対象にする。運用者は実ファイルの隣に日付付きバックアップ（`.env.bak-…`）を残しがちで、その 1 つ 1 つが有効な Bot トークンを保持しているため。テンプレートを追跡し続けられるよう `.env.example` だけは明示的に再包含している
 - **ローカルモデルバックエンド**（オプション）— `/backend local` で自身のハードウェア上のモデルに対してスレッドを実行。通常は「local」実行でもベンダーへ接続するため、ccdb は update check と analytics を無効にした専用 CLI home を管理し、その設定がなければ起動を拒否します — [docs/local-backend.md](../local-backend.md)参照。`/ollama` で Discord からそのランタイムを管理でき、実行されるモデルはそこで選択したものだけです — 黙って食い違う環境変数は存在しません
 - **リモート AG-UI バックエンド**（オプション）— `/backend agui` で既存の Discord/Teams セッション機構を任意の HTTP/SSE AG-UI エージェントへ接続し、ccdb の session ledger、rendering、cancellation、運用制御を維持します — [docs/agui-backend.md](../agui-backend.md)参照
-- **匿名化ゲートウェイ**（オプション）— プロンプトが Claude または Codex へ届く前に組織を識別する語を安定した alias へ置換し、回答内で復元。ローカルモデルが置換漏れを確認し、デフォルトでは漏れを検出すると送信をブロックします。rules file を作成するまでは無効です — [docs/anonymization.md](../anonymization.md)参照
+- **`/ask` — 明示的なエスカレーション**（オプション）— 匿名化済みかつ単体で完結する質問を 1 件だけ、プロジェクトの文脈もファイルもツールも与えずに強力な外部モデルへ送り、回答内で実名を復元します。ツールは deny list ではなく空の *allow* list（`--tools ""`）で制御します — deny list は CLI がツールを追加するたびに書き換えが必要になるためです。分離は spawn のたびに検証されます。送信前にはローカルのジャッジが、置換によって質問の主題そのものが隠されていないかを確認します —「`org-002` の良い点と悪い点」は完璧に匿名化されている一方で回答不能です — 該当する場合は送信を保留します（`force: true` で上書き可能）— [docs/escalation.md](../escalation.md)参照
+- **匿名化ゲートウェイ**（オプション）— プロンプトが Claude または Codex へ届く前に組織を識別する語を安定した alias へ置換し、回答内で復元。ローカルモデルが置換漏れを確認し、デフォルトでは漏れを検出すると送信をブロックします。`CCDB_ANONYMIZE_POLICY=adopt` を指定すると、報告された語に対して alias を対応表へ発行したうえで送信するため、新しい顧客名が出てくるたびに誰かが手で rules file を編集するまでコマンドが止まる、という事態を避けられます。rules file を作成するまでは無効です — [docs/anonymization.md](../anonymization.md)参照
 
 ---
 
