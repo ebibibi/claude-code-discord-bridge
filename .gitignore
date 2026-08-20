@@ -12,7 +12,13 @@ build/
 .venv/
 
 # Environment variables
+# .env.* too: operators leave dated backups (.env.bak-2026-01-01) next to the
+# real file, and those hold a live bot token. Ignoring only `.env` means one
+# `git add -A` stages a working credential. `.env.example` is the tracked
+# template and is re-included explicitly.
 .env
+.env.*
+!.env.example
 
 # Database
 data/
