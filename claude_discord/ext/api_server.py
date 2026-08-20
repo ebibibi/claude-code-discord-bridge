@@ -1403,6 +1403,10 @@ class ApiServer:
                 (optional; defaults to ``true``).  When ``false``, only the
                 thread and seed message are created — a Claude session will
                 start when a user replies in the thread.
+            user_id: Discord user to add to the new thread (optional), so the
+                thread appears in their joined list instead of having to be
+                found in the channel. Mirrors what ``/api/ingest`` does for the
+                bot owner.
 
         Returns (201):
             ``{"status": "spawned", "thread_id": "...", "thread_name": "..."}``
@@ -1453,6 +1457,19 @@ class ApiServer:
         thread_name: str | None = data.get("thread_name") or None
         auto_start: bool = data.get("auto_start", True)
 
+        # Validated here rather than swallowed downstream: a typo'd user_id is a
+        # caller bug and should say so, while a Discord-side failure to add the
+        # member is only a visibility miss and must never fail the spawn.
+        raw_user_id = data.get("user_id")
+        invite_user_id: int | None = None
+        if raw_user_id is not None:
+            try:
+                invite_user_id = int(raw_user_id)
+            except (TypeError, ValueError):
+                return web.json_response({"error": "user_id must be an integer"}, status=400)
+            if invite_user_id <= 0:
+                return web.json_response({"error": "user_id must be positive"}, status=400)
+
         # Optional attachments to post into the new thread (e.g. files attached
         # to a Forgejo Issue forwarded by a watcher). Decoded here; posting is
         # handled inside spawn_session right after the seed prompt.
@@ -1467,6 +1484,7 @@ class ApiServer:
                 thread_name=thread_name,
                 auto_start=auto_start,
                 attachments=decoded_attachments or None,
+                invite_user_id=invite_user_id,
             )
         except Exception as exc:
             logger.error("spawn_session failed: %s", exc, exc_info=True)
