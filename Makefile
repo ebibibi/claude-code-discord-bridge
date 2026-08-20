@@ -43,6 +43,10 @@ pr:
 	git push -u origin "$$BRANCH"; \
 	gh pr create --fill --web
 
+# Report whether the bot is running code that is not on origin/main.
+drift:
+	@./scripts/check-deploy-drift.sh
+
 # Enable dev mode: EbiBot loads claude_discord from this worktree on next restart.
 dev-on:
 	@echo "$$(pwd)" > $(HOME)/.ccdb-dev-worktree

@@ -49,9 +49,7 @@ def _collect_app_command_names() -> set[str]:
         for class_node in (node for node in tree.body if isinstance(node, ast.ClassDef)):
             for statement in class_node.body:
                 value: ast.expr | None = None
-                if isinstance(statement, ast.Assign):
-                    value = statement.value
-                elif isinstance(statement, ast.AnnAssign):
+                if isinstance(statement, (ast.Assign, ast.AnnAssign)):
                     value = statement.value
                 if not isinstance(value, ast.Call):
                     continue
