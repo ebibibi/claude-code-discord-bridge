@@ -19,7 +19,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from claude_code_core.escalation import ConsultChannel, Escalation, IsolationError
-from claude_code_core.privacy import get_gateway
+from claude_code_core.privacy import get_gateway, get_judge
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,14 @@ class AskCommandCog(commands.Cog):
     @app_commands.describe(
         question="Self-contained question. Identifying terms are replaced before it is sent.",
         show_sent="Also show the exact text that left this machine (default: yes)",
+        force="Send even if the local check says the answer needs the hidden identity",
     )
     async def ask(
         self,
         interaction: discord.Interaction,
         question: str,
         show_sent: bool = True,
+        force: bool = False,
     ) -> None:
         gateway = get_gateway()
         if gateway is None:
@@ -59,11 +61,16 @@ class AskCommandCog(commands.Cog):
             return
 
         await interaction.response.defer(thinking=True)
-        escalation = Escalation(gateway=gateway, channel=ConsultChannel(model=self.model))
+        escalation = Escalation(
+            gateway=gateway,
+            channel=ConsultChannel(model=self.model),
+            judge=get_judge(),
+        )
 
         try:
             outcome = await escalation.consult(
                 question,
+                force=force,
                 thread_id=getattr(interaction.channel, "id", None),
                 user_id=interaction.user.id,
             )

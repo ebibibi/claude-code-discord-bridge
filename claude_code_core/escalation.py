@@ -32,7 +32,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .privacy.gateway import PrivacyGateway
+from .privacy.answerability import AnswerabilityJudge, AnswerabilityVerdict
+from .privacy.gateway import GuardOutcome, PrivacyGateway
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,16 @@ def verify_isolation(args: list[str], cwd: str | Path) -> list[str]:
     else:
         problems.append("--setting-sources is missing (CLAUDE.md and skills would be sent)")
 
+    if "--tools" in args:
+        index = args.index("--tools")
+        if index + 1 >= len(args) or args[index + 1] != "":
+            problems.append("--tools is not empty (tools would be available)")
+    else:
+        problems.append("--tools is missing (every built-in tool would be allowed)")
+
+    if "--strict-mcp-config" not in args:
+        problems.append("--strict-mcp-config is missing (configured MCP servers would be sent)")
+
     if "--" not in args:
         problems.append("-- separator is missing (the tool list would swallow the prompt)")
 
@@ -155,6 +166,18 @@ class ConsultChannel:
             self.model,
             "--setting-sources",
             "",
+            # Allow list, not deny list. The deny list below is kept as a
+            # second layer, but it cannot be the primary one: measured
+            # 2026-08-17 it still left ToolSearch (the entry point to every
+            # MCP tool), Skill and Workflow, and extending it by hand then
+            # left CronCreate, RemoteTrigger and DesignSync. Every new tool
+            # in the CLI would be allowed by default.
+            "--tools",
+            "",
+            # Without this the consult inherits the operator's configured MCP
+            # servers — Gmail, Calendar, cloud APIs — none of which belong in
+            # a one-question, text-in-text-out escalation.
+            "--strict-mcp-config",
             "--disallowedTools",
             *CONSULT_DISALLOWED_TOOLS,
             "--",
@@ -202,12 +225,33 @@ class Escalation:
 
     gateway: PrivacyGateway
     channel: ConsultChannel = field(default_factory=ConsultChannel)
+    judge: AnswerabilityJudge | None = None
 
-    async def consult(self, question: str, **context: object) -> ConsultOutcome:
-        """Send one question out, under the gateway's policy."""
+    async def consult(
+        self, question: str, *, force: bool = False, **context: object
+    ) -> ConsultOutcome:
+        """Send one question out, under the gateway's policy.
+
+        Two gates, in this order. The leak check decides whether the text *may*
+        go; the answerability check decides whether it is *worth* sending. Order
+        matters: never spend a judgement on text that cannot leave anyway.
+        """
         outcome = await self.gateway.guard(question, kind="consult", **context)
         if not outcome.allowed:
             return ConsultOutcome(allowed=False, reason=outcome.reason)
+
+        verdict = await self._judge_answerability(outcome, force=force)
+        if verdict is not None and verdict.blocks:
+            reason = _unanswerable_reason(verdict)
+            self.gateway.audit.record(
+                "consult_unanswerable",
+                judge=verdict.model,
+                judge_reason=verdict.reason,
+                substitutions=outcome.result.total_substitutions,
+                **context,
+            )
+            logger.info("Escalation withheld as unanswerable: %s", verdict.reason)
+            return ConsultOutcome(allowed=False, reason=reason)
 
         answer = await self.channel.ask(outcome.text)
         restored = self.gateway.restore(answer)
@@ -224,3 +268,34 @@ class Escalation:
             warning=outcome.warning,
             substitutions=outcome.result.total_substitutions,
         )
+
+    async def _judge_answerability(
+        self, outcome: GuardOutcome, *, force: bool
+    ) -> AnswerabilityVerdict | None:
+        """Ask the local judge, or return ``None`` when there is nothing to ask.
+
+        Skipped when nothing was replaced: anonymization cannot have broken a
+        question it did not touch. That is the common case for technical
+        questions, so the usual `/ask` pays no extra latency at all.
+        """
+        if force or self.judge is None:
+            return None
+        if outcome.result.total_substitutions == 0:
+            return None
+        # The judge is a model too, and gets the redacted text — the same one
+        # the vendor would receive, never the original question.
+        return await self.judge.judge(outcome.text)
+
+
+def _unanswerable_reason(verdict: AnswerabilityVerdict) -> str:
+    """Explain the refusal in terms of the fix, not the mechanism."""
+    detail = verdict.reason or "the answer would depend on who the placeholders really are"
+    # The judge writes a sentence; this is a clause inside one. Measured: models
+    # end the reason with a full stop, giving "…cons.. Either describe…".
+    detail = detail.rstrip(" 。．.")
+    return (
+        "Not sent: after anonymization this question is about placeholders, and "
+        f"answering it needs the identity that was removed — {detail}. "
+        "Either describe them generically (industry, size, role) and ask again, "
+        "ask about the general case instead, or pass force: true to send it as is."
+    )

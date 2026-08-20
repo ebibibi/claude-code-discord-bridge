@@ -123,6 +123,15 @@ class MappingStore:
         with self._lock:
             return [entry.alias for entry in self._by_alias.values()]
 
+    def originals(self) -> list[tuple[str, str]]:
+        """Every ``(category, original)`` minted so far.
+
+        This is what lets a term the inspector once flagged be replaced by the
+        table on every later pass, without asking the model again.
+        """
+        with self._lock:
+            return [(entry.category, entry.original) for entry in self._by_alias.values()]
+
     # ----------------------------------------------------------- persistence
 
     def _load(self) -> None:

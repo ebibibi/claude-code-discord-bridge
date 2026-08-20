@@ -34,8 +34,9 @@ class InspectionPolicy:
     BLOCK = "block"  # refuse to send; show the operator what was found
     WARN = "warn"  # send anyway, but log and surface the finding
     OFF = "off"  # do not inspect at all (rule-based replacement still runs)
+    ADOPT = "adopt"  # mint an alias for what was found, replace it, and send
 
-    ALL = (BLOCK, WARN, OFF)
+    ALL = (BLOCK, WARN, OFF, ADOPT)
 
 
 class GatewayScope:
@@ -87,6 +88,10 @@ class PrivacyConfig:
     audit_includes_text: bool = True
     scope: str = GatewayScope.ESCALATION
     explicitly_disabled: bool = False
+    # Reuses the inspector's endpoint and model on purpose: it is the same local
+    # judge on the same hop, and a second URL to configure would mean the check
+    # silently does nothing until someone notices the extra variable.
+    answerability_check: bool = True
 
     @property
     def rules_exist(self) -> bool:
@@ -154,4 +159,5 @@ class PrivacyConfig:
             audit_includes_text=_env_bool("CCDB_ANONYMIZE_AUDIT_TEXT", True),
             scope=scope,
             explicitly_disabled=not _env_bool("CCDB_ANONYMIZE", True),
+            answerability_check=_env_bool("CCDB_ASK_ANSWERABILITY", True),
         )

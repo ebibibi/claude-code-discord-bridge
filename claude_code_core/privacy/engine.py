@@ -12,12 +12,31 @@ job is to *report* leftovers, never to rewrite text.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from .mapping import MappingStore
-from .rules import AnonymizationRules
+from .rules import AnonymizationRules, Matcher, normalize_category
 
-__all__ = ["Anonymizer", "AnonymizationResult", "Replacement"]
+__all__ = ["Anonymizer", "AnonymizationResult", "Replacement", "is_adoptable"]
+
+# Bounds on what may be adopted from an inspector report. The inspector is a
+# local LLM, so its output is untrusted input: a one-character "proper noun"
+# would alias a particle and shred every later message, a paragraph reported as
+# a name would alias the message itself, and an unbounded list would grow the
+# matcher table without limit.
+MIN_ADOPT_CHARS = 2
+MAX_ADOPT_CHARS = 120
+MAX_ADOPT_TERMS = 32
+
+
+def is_adoptable(value: str) -> bool:
+    """Whether ``value`` may be minted from an inspector report.
+
+    The caller needs this too: a term rejected here is still an unreplaced
+    proper noun, so it has to keep blocking rather than count as handled.
+    """
+    return MIN_ADOPT_CHARS <= len(value.strip()) <= MAX_ADOPT_CHARS
 
 
 @dataclass(frozen=True)
@@ -62,13 +81,33 @@ class Anonymizer:
     store: MappingStore = field(default_factory=MappingStore)
     _restore_pattern: re.Pattern[str] | None = field(default=None, init=False, repr=False)
     _restore_size: int = field(default=-1, init=False, repr=False)
+    _learned: tuple[Matcher, ...] = field(default=(), init=False, repr=False)
+    _learned_size: int = field(default=-1, init=False, repr=False)
 
     # ------------------------------------------------------------ anonymize
 
+    def adopt(self, text: str, terms: Iterable[tuple[str, str]]) -> AnonymizationResult:
+        """Mint aliases for ``terms``, then anonymize ``text`` including them.
+
+        Used when the inspector reports a proper noun the rules missed. The
+        model decided *what* to hide; this table still decides the alias, so an
+        adopted term is exactly as restorable as a rule term — the property the
+        whole design rests on. Terms absent from the text are still registered,
+        which is what makes the next pass catch them without the model.
+        """
+        for value, category in list(terms)[:MAX_ADOPT_TERMS]:
+            cleaned = (value or "").strip()
+            if is_adoptable(cleaned):
+                self.store.alias_for(normalize_category(category), cleaned)
+        self._invalidate_restore_cache()
+        return self.anonymize(text)
+
     def anonymize(self, text: str) -> AnonymizationResult:
         """Replace every rule hit with its stable alias."""
-        if not text or self.rules.is_empty:
+        if not text:
             return AnonymizationResult(text=text, original_length=len(text or ""))
+        if self.rules.is_empty and not self._learned_matchers():
+            return AnonymizationResult(text=text, original_length=len(text))
 
         spans = self._collect_spans(text)
         if not spans:
@@ -115,7 +154,10 @@ class Anonymizer:
         """
         candidates: list[tuple[int, int, int]] = []  # (start, end, priority)
         categories: dict[tuple[int, int, int], str] = {}
-        for priority, matcher in enumerate(self.rules.matchers):
+        # Rules first: on an equal-length tie the configured category wins over
+        # whatever category the inspector guessed when the term was adopted.
+        matchers = (*self.rules.matchers, *self._learned_matchers())
+        for priority, matcher in enumerate(matchers):
             for match in matcher.pattern.finditer(text):
                 start, end = match.span()
                 if end <= start:
@@ -168,3 +210,29 @@ class Anonymizer:
 
     def _invalidate_restore_cache(self) -> None:
         self._restore_size = -1
+
+    # -------------------------------------------------------------- learned
+
+    def _learned_matchers(self) -> tuple[Matcher, ...]:
+        """Literals for every term adopted so far, longest first.
+
+        Rebuilt whenever the store grows. Without this an adopted term would
+        depend on the model noticing it again on every later pass; with it,
+        one detection is permanent.
+        """
+        if self._learned_size == len(self.store):
+            return self._learned
+        pairs = [(c, v) for c, v in self.store.originals() if v]
+        # Longest first, for the same reason the rule loader sorts: regex
+        # alternation is leftmost-first, not leftmost-longest.
+        pairs.sort(key=lambda pair: len(pair[1]), reverse=True)
+        self._learned = tuple(
+            Matcher(
+                pattern=re.compile(re.escape(value), re.IGNORECASE),
+                category=category,
+                literal=value,
+            )
+            for category, value in pairs
+        )
+        self._learned_size = len(self.store)
+        return self._learned

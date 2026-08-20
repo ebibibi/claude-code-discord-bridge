@@ -14,10 +14,10 @@ from typing import Any
 
 from .audit import AuditLog
 from .config import InspectionPolicy, PrivacyConfig
-from .engine import AnonymizationResult, Anonymizer
-from .inspector import InspectionResult, LocalLlmInspector
+from .engine import AnonymizationResult, Anonymizer, is_adoptable
+from .inspector import InspectionResult, LocalLlmInspector, Suspect
 from .mapping import MappingStore
-from .rules import AnonymizationRules
+from .rules import AnonymizationRules, normalize_category
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,12 @@ class GuardOutcome:
     inspection: InspectionResult | None = None
     reason: str | None = None
     warning: str | None = None
+    adopted: tuple[str, ...] = ()
+    """Aliases minted for terms the inspector reported (``adopt`` policy).
+
+    Aliases, never the real names: this is surfaced in the chat client, which
+    is exactly the place the real names must not reappear.
+    """
 
 
 @dataclass
@@ -55,7 +61,17 @@ class PrivacyGateway:
         if self.policy != InspectionPolicy.OFF and self.inspector is not None:
             inspection = self._drop_own_output(await self.inspector.inspect(result.text))
 
+        adopted: tuple[str, ...] = ()
+        if self._should_adopt(inspection):
+            assert inspection is not None  # narrowed by _should_adopt
+            adopted_result, adopted, remaining = self._adopt(text, inspection)
+            if adopted_result is not None:
+                result = adopted_result
+            inspection = dataclasses.replace(inspection, suspects=remaining)
+
         allowed, reason, warning = self._decide(inspection)
+        if adopted and allowed:
+            warning = f"Adopted {len(adopted)} term(s) the rules missed: {', '.join(adopted)}"
         self.audit.record(
             "outbound",
             allowed=allowed,
@@ -66,6 +82,7 @@ class PrivacyGateway:
                 {"alias": r.alias, "category": r.category, "count": r.count}
                 for r in result.replacements
             ],
+            adopted=list(adopted),
             inspector=(inspection.summary() if inspection else "not run"),
             text=result.text,
             **context,
@@ -82,7 +99,58 @@ class PrivacyGateway:
             inspection=inspection,
             reason=reason,
             warning=warning,
+            adopted=adopted,
         )
+
+    def _should_adopt(self, inspection: InspectionResult | None) -> bool:
+        """Adopt only what the inspector actually saw.
+
+        An unreachable inspector reports nothing, which must stay a block —
+        adopting is about terms the rules missed, not about lowering the bar
+        when the check could not run at all.
+        """
+        return (
+            self.policy == InspectionPolicy.ADOPT
+            and inspection is not None
+            and inspection.available
+            and bool(inspection.suspects)
+        )
+
+    def _adopt(
+        self, text: str, inspection: InspectionResult
+    ) -> tuple[AnonymizationResult | None, tuple[str, ...], tuple[Suspect, ...]]:
+        """Mint aliases for the reportable terms and re-run replacement.
+
+        Replacement restarts from the original text rather than patching the
+        already-anonymized copy: the engine is deterministic, so the rule hits
+        come out identical and the adopted terms simply join them.
+
+        Terms outside the adoption bounds are handed back untouched so the
+        caller keeps blocking on them. Declaring them handled because adoption
+        was *attempted* would send the real name.
+        """
+        terms: list[tuple[str, str]] = []
+        remaining: list[Suspect] = []
+        for suspect in inspection.suspects:
+            value = (suspect.value or "").strip()
+            if is_adoptable(value):
+                # Normalized here as well as in the engine: resolving the
+                # alias below with the raw category would mint a second
+                # entry and surface an alias that was never substituted.
+                terms.append((value, normalize_category(suspect.kind)))
+            else:
+                remaining.append(suspect)
+
+        if not terms:
+            return None, (), tuple(remaining)
+
+        with self._lock:
+            result = self.anonymizer.adopt(text, terms)
+            aliases = tuple(
+                dict.fromkeys(self.anonymizer.store.alias_for(kind, value) for value, kind in terms)
+            )
+        logger.info("Anonymization gateway adopted %d inspector-reported term(s)", len(aliases))
+        return result, aliases, tuple(remaining)
 
     def _drop_own_output(self, inspection: InspectionResult) -> InspectionResult:
         """Discard suspects that are the anonymizer's own placeholders.
@@ -115,7 +183,9 @@ class PrivacyGateway:
             detail = (
                 f"the local inspector ({inspection.model}) could not be reached: {inspection.error}"
             )
-            if self.policy == InspectionPolicy.BLOCK:
+            # `adopt` is fail-closed too: it can only adopt what the inspector
+            # actually reported, so an inspector that never ran is a block.
+            if self.policy in (InspectionPolicy.BLOCK, InspectionPolicy.ADOPT):
                 return (
                     False,
                     (
@@ -131,7 +201,9 @@ class PrivacyGateway:
             return True, None, None
 
         listed = ", ".join(f"`{s.value}`" for s in inspection.suspects)
-        if self.policy == InspectionPolicy.BLOCK:
+        # ADOPT clears `suspects` once it has replaced them, so anything still
+        # here under that policy was not adoptable — treat it like BLOCK.
+        if self.policy in (InspectionPolicy.BLOCK, InspectionPolicy.ADOPT):
             return (
                 False,
                 (
