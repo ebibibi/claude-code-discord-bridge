@@ -11,6 +11,7 @@ import pytest
 
 from claude_code_core.backend import create_backend
 from claude_code_core.local_backend import (
+    DEFAULT_MODEL,
     PROVIDER_ID,
     LocalCodexRunner,
     LocalModelConfig,
@@ -18,6 +19,7 @@ from claude_code_core.local_backend import (
     ensure_codex_home,
     verify_quiet_settings,
 )
+from claude_code_core.types import MessageType, StreamEvent
 
 
 @pytest.fixture
@@ -91,6 +93,78 @@ class TestRunnerEnvironment:
         clone = LocalCodexRunner(local_config=local_config).clone()
         assert isinstance(clone, LocalCodexRunner)
         assert clone.local_config is local_config
+
+
+class TestModelSelection:
+    """The selected model must have exactly one source: what /ollama use stored.
+
+    An environment default used to shadow it. Because create_backend() passes
+    ``model=None`` when nothing is stored, the runner omitted ``--model`` and
+    fell back to config.toml — so `/ollama list` could report one model while
+    the thread ran another.
+    """
+
+    def test_no_environment_variable_can_choose_the_model(self, monkeypatch):
+        monkeypatch.setenv("CCDB_LOCAL_MODEL", "some-other-model:70b")
+        assert LocalModelConfig.from_env().model == DEFAULT_MODEL
+
+    def test_an_unset_model_still_reaches_the_cli_explicitly(self, local_config):
+        runner = LocalCodexRunner(model=None, local_config=local_config)
+        assert runner.model == local_config.model
+
+    def test_a_stored_selection_wins(self, local_config):
+        runner = LocalCodexRunner(model="qwen3.6:35b-a3b", local_config=local_config)
+        assert runner.model == "qwen3.6:35b-a3b"
+
+
+class TestTruncatedStream:
+    """Ollama ends the stream without ``response.completed`` when its tool-call
+    parser rejects the model's output. The CLI reports a transport error and
+    retries the same context, so the turn dies with nothing the operator can act
+    on unless ccdb names the cause."""
+
+    @staticmethod
+    async def _run(runner, events):
+        async def fake_run(prompt, session_id=None):
+            for event in events:
+                yield event
+
+        # Bypass CodexRunner.run(): the failure being described is what the CLI
+        # reports, not how it is spawned.
+        import claude_code_core.codex_runner as codex_runner
+
+        original = codex_runner.CodexRunner.run
+        codex_runner.CodexRunner.run = lambda self, prompt, session_id=None: fake_run(
+            prompt, session_id
+        )
+        try:
+            return [event async for event in runner.run("hi")]
+        finally:
+            codex_runner.CodexRunner.run = original
+
+    async def test_explains_the_truncated_stream(self, local_config):
+        error = StreamEvent(
+            message_type=MessageType.RESULT,
+            is_complete=True,
+            error="stream disconnected before completion: stream closed before response.completed",
+        )
+        (result,) = await self._run(LocalCodexRunner(local_config=local_config), [error])
+        assert "ended the response stream early" in (result.error or "")
+        assert "/ollama use" in (result.error or "")
+        # The original transport message is kept — the hint is added, not swapped.
+        assert "stream disconnected before completion" in (result.error or "")
+
+    async def test_leaves_other_errors_alone(self, local_config):
+        error = StreamEvent(
+            message_type=MessageType.RESULT, is_complete=True, error="model not found"
+        )
+        (result,) = await self._run(LocalCodexRunner(local_config=local_config), [error])
+        assert result.error == "model not found"
+
+    async def test_passes_ordinary_events_through(self, local_config):
+        text = StreamEvent(message_type=MessageType.ASSISTANT, text="hello")
+        (result,) = await self._run(LocalCodexRunner(local_config=local_config), [text])
+        assert result.text == "hello"
 
 
 class TestFactory:

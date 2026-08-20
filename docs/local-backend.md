@@ -54,12 +54,13 @@ local thread cannot fall back to a paid endpoint by accident.
 
 ```bash
 CCDB_LOCAL_BASE_URL=http://192.168.1.3:11434/v1   # note the /v1
-CCDB_LOCAL_MODEL=gpt-oss:120b
 # CCDB_LOCAL_CODEX_HOME=/home/you/.ccdb/local-codex-home   # optional
 ```
 
 3. In Discord, select the backend: `/backend name:local`.
-4. Pick a model. `/ollama list` shows what is already there, `/ollama use`
+4. Pick a model. There is no environment variable for it — the selection made in
+   Discord is the only source, so what `/ollama list` marks with `▶` is what
+   runs. `/ollama list` shows what is already there, `/ollama use`
    selects one, and `/ollama pull` downloads a new one — see
    [Managing the runtime](#managing-the-runtime-ollama) below. `/model` and
    `/model install name:<model>` still work and do the same thing.
@@ -77,7 +78,6 @@ The session embed turns olive and reads 🏠 Local model.
 | Variable | Default | Meaning |
 |---|---|---|
 | `CCDB_LOCAL_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI-compatible endpoint serving `/v1/responses` |
-| `CCDB_LOCAL_MODEL` | `gpt-oss:120b` | Model id to request |
 | `CCDB_LOCAL_CODEX_HOME` | `~/.ccdb/local-codex-home` | ccdb-owned CLI home; regenerated on every spawn |
 
 ## Installing an Ollama model from Discord
@@ -192,6 +192,50 @@ for line in newest.open():
         break
 EOF
 ```
+
+## When a turn dies with "stream disconnected before completion"
+
+Measured on Ollama 0.32.9 with `nemotron-3-super:120b-a12b-q4_K_M`, a turn that
+had been running normally ended with the Codex CLI reporting
+
+```text
+stream disconnected before completion: stream closed before response.completed
+```
+
+and then retrying, up to five times, without ever recovering. The server side of
+the same second explains it:
+
+```text
+level=WARN source=qwen3coder.go:71 msg="qwen tool call parsing failed"
+  error="XML syntax error on line 5: element <function> closed by </parameter>"
+[GIN] 200 | 8.67s | POST "/v1/responses"
+srv stop: cancel task, id_task = 423
+```
+
+The model emitted a tool call its runtime could not parse; Ollama ended the
+`/v1/responses` stream without a `response.completed` event and cancelled the
+generation. The CLI cannot tell that apart from a dropped connection, so it
+retries — and a retry replays the same context to the same model, which
+regenerates the same malformed call. The observed retry took 3 seconds and died
+the same way, because the prompt was still cached.
+
+So this is not a network fault and not a ccdb bug, and waiting does not fix it.
+It is a property of the pairing between a model's tool-call syntax and its
+runtime's parser for that syntax. What to do:
+
+* **Switch models** with `/ollama use`. Formats differ per model family, and so
+  do the parsers: `gpt-oss` uses the harmony parser, the `qwen3.5`/`qwen3.6`
+  family its own, and `nemotron-3-super` the XML one that failed above. A model
+  that is fine for prose can still be the one that breaks here.
+* **Confirm before blaming the box** with `journalctl -u ollama | grep "tool call
+  parsing failed"` on the machine serving the endpoint. If the timestamps line
+  up with the failed turns, that is the whole story.
+* ccdb appends this explanation to the error it shows in Discord, so the retry
+  loop is not silent.
+
+Long, tool-heavy turns are where this shows up: every tool call is another
+chance to emit malformed syntax, so failure probability grows with turn length
+rather than being a fixed per-request risk.
 
 ## Honest expectations
 

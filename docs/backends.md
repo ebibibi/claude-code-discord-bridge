@@ -65,8 +65,10 @@ that “logged out” means “offline.”
 
 ```dotenv
 CCDB_LOCAL_BASE_URL=http://127.0.0.1:11434/v1
-CCDB_LOCAL_MODEL=gpt-oss:120b
 ```
+
+The model is not an environment setting: choose it at runtime with `/ollama use` (or `/model`), and
+`/ollama list` marks the selection with `▶`.
 
 Read [Local-model backend](local-backend.md) before using this for sensitive data. The guard is a
 configuration control, not an operating-system egress firewall, and should be re-measured after
