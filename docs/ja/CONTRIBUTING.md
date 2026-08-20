@@ -59,6 +59,39 @@ uv run pytest tests/ -v --cov=claude_discord
 
 PR を提出する前にすべてのテストが通過している必要があります。
 
+## 稼働中のボットで動作確認する（dev worktree モード）
+
+ユニットテストだけでは Discord 上の挙動をすべて検証できません。このリポジトリからボットを
+起動している場合、ボットの読み込み先を worktree に向けることで、本体ツリーではなく自分の
+ブランチを読ませられます。再インストールも editable install の切り替えも不要です:
+
+```bash
+git worktree add ../wt-my-feature -b feature/my-feature
+cd ../wt-my-feature
+make dev-on    # ~/.ccdb-dev-worktree を書き込んでボットを再起動
+# ... Discord 上で変更を実際に操作して確認 ...
+make dev-off   # マーカーを削除して本体ツリーに戻して再起動
+make drift     # ボットは origin/main にないコードを動かしていないか？
+```
+
+`make dev-on` は worktree のパスを `~/.ccdb-dev-worktree` に書き込みます。
+`scripts/pre-start.sh` が仕込む import フックがそのマーカーを読み、`claude_discord` /
+`claude_code_core` の import を worktree へ横取りします。`dev-on` / `dev-off` は
+`discord-bot` という systemd ユニットを再起動するので、デプロイ構成が異なる場合は
+Makefile を調整してください。
+
+**dev モードには有効期限がありません。** `make dev-on` を切り忘れると、サイドブランチが
+そのまま本番に居座り続け、マージした PR は「デプロイされたように見えて実際は動いていない」
+状態になります。`make drift`（`scripts/check-deploy-drift.sh`）はそれを検出します:
+worktree とブランチ名を示し、そのコミットが `origin/main` の祖先かどうかを判定し、
+結果として動いていないマージ済みコミット数を数え、dev モードが何日続いているかを報告します。
+比較対象はリモート参照で、古くなっている可能性のあるローカル `main` は使いません。
+`pre-start.sh` は起動のたびに同じレポートを出力します。終了コード: `0` 正常、`1` ドリフト、
+`2` マーカーの参照先が存在しない（フックは無言で本体ツリーにフォールバックします）。
+
+本体ツリーへ戻す前に `.env` を確認してください。自分のブランチだけが解釈する値は、
+本体ツリーではデフォルトにフォールバックし、エラーを出さないまま挙動が変わります。
+
 ## コードスタイル
 
 - **フォーマッター**: `ruff format`
