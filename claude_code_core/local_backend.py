@@ -25,18 +25,21 @@ Two consequences worth keeping in mind:
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from urllib import error as urllib_error
-from urllib import request as urllib_request
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import urlparse
 
 from .codex_runner import CodexRunner
+from .ollama_client import (
+    DEFAULT_PULL_TIMEOUT_SECONDS as DEFAULT_OLLAMA_PULL_TIMEOUT_SECONDS,
+)
+from .ollama_client import (
+    ollama_api_url,
+    validate_ollama_model_name,
+)
+from .ollama_client import pull_model as _pull_model
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +57,6 @@ __all__ = [
 DEFAULT_BASE_URL = "http://127.0.0.1:11434/v1"
 DEFAULT_MODEL = "gpt-oss:120b"
 PROVIDER_ID = "ccdb_local"
-DEFAULT_OLLAMA_PULL_TIMEOUT_SECONDS = 6 * 60 * 60
-OLLAMA_MODEL_NAME_PATTERN = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*"
-    r"(?::[A-Za-z0-9][A-Za-z0-9._-]*)?$"
-)
 
 # Settings that keep a local run local. Each maps to the TOML line that must be
 # present in the generated config; verify_quiet_settings() reports any that are
@@ -104,79 +102,13 @@ class LocalModelConfig:
         )
 
 
-def validate_ollama_model_name(model: str) -> str:
-    """Validate and normalize a user-provided Ollama model identifier.
-
-    Model names are sent as JSON, never interpolated into a shell command. The
-    strict grammar still rejects whitespace, control characters, URL syntax,
-    and accidentally pasted prose before a long-running pull begins.
-    """
-    normalized = model.strip()
-    if (
-        not normalized
-        or len(normalized) > 255
-        or OLLAMA_MODEL_NAME_PATTERN.fullmatch(normalized) is None
-    ):
-        raise ValueError(
-            "Invalid Ollama model name. Use letters, numbers, '.', '_', '-', '/', "
-            "and one optional ':tag'."
-        )
-    return normalized
-
-
 def ollama_pull_url(base_url: str) -> str:
     """Derive Ollama's native ``/api/pull`` URL from the configured API URL.
 
-    The local backend uses Ollama's OpenAI-compatible endpoint, normally
-    ``http://host:11434/v1``. Pulling a model uses Ollama's native API on the
-    same origin, so only the terminal ``/v1`` is replaced.
+    Kept as a named function because it is part of this module's public
+    surface; the derivation itself now lives in :mod:`ollama_client`.
     """
-    parsed = urlsplit(base_url.strip())
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
-        raise ValueError("CCDB_LOCAL_BASE_URL must be an HTTP(S) URL without credentials")
-
-    path = parsed.path.rstrip("/")
-    if path.endswith("/v1"):
-        path = path[:-3]
-    prefix = path.rstrip("/")
-    pull_path = f"{prefix}/api/pull" if prefix else "/api/pull"
-    return urlunsplit((parsed.scheme, parsed.netloc, pull_path, "", ""))
-
-
-def _pull_ollama_model_sync(
-    model: str,
-    *,
-    config: LocalModelConfig,
-    timeout_seconds: float,
-) -> None:
-    """Perform one blocking, non-streaming Ollama pull request."""
-    payload = json.dumps({"model": model, "stream": False}).encode("utf-8")
-    request = urllib_request.Request(
-        ollama_pull_url(config.base_url),
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib_request.urlopen(request, timeout=timeout_seconds) as response:
-            body = response.read()
-    except (urllib_error.HTTPError, urllib_error.URLError, TimeoutError, OSError) as exc:
-        raise RuntimeError(f"Ollama model pull request failed: {exc}") from exc
-
-    try:
-        result = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("Ollama returned an invalid response to the model pull request") from exc
-
-    if not isinstance(result, dict) or result.get("status") != "success":
-        detail = result.get("error") or result.get("status") if isinstance(result, dict) else None
-        suffix = f": {detail}" if detail else ""
-        raise RuntimeError(f"Ollama model pull did not complete successfully{suffix}")
+    return ollama_api_url(base_url, "/api/pull")
 
 
 async def pull_ollama_model(
@@ -186,13 +118,8 @@ async def pull_ollama_model(
     timeout_seconds: float = DEFAULT_OLLAMA_PULL_TIMEOUT_SECONDS,
 ) -> None:
     """Pull an Ollama model without blocking the Discord event loop."""
-    normalized = validate_ollama_model_name(model)
-    await asyncio.to_thread(
-        _pull_ollama_model_sync,
-        normalized,
-        config=config or LocalModelConfig.from_env(),
-        timeout_seconds=timeout_seconds,
-    )
+    resolved = config or LocalModelConfig.from_env()
+    await _pull_model(resolved.base_url, model, timeout_seconds=timeout_seconds)
 
 
 def build_local_config_toml(config: LocalModelConfig) -> str:

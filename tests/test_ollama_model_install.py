@@ -76,7 +76,7 @@ class TestOllamaPull:
             captured["timeout"] = timeout
             return _FakeResponse({"status": "success"})
 
-        monkeypatch.setattr("claude_code_core.local_backend.urllib_request.urlopen", _urlopen)
+        monkeypatch.setattr("claude_code_core.ollama_client.urllib_request.urlopen", _urlopen)
 
         await pull_ollama_model(MODEL, config=local_config)
 
@@ -92,7 +92,7 @@ class TestOllamaPull:
         def _urlopen(request, *, timeout: float):
             return _FakeResponse({"status": "pulling manifest"})
 
-        monkeypatch.setattr("claude_code_core.local_backend.urllib_request.urlopen", _urlopen)
+        monkeypatch.setattr("claude_code_core.ollama_client.urllib_request.urlopen", _urlopen)
 
         with pytest.raises(RuntimeError, match="did not complete successfully"):
             await pull_ollama_model(MODEL, config=local_config)
