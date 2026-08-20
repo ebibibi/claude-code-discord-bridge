@@ -802,6 +802,7 @@ class ClaudeChatCog(commands.Cog):
         auto_start: bool = True,
         result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None,
         attachments: list[tuple[str, bytes]] | None = None,
+        invite_user_id: int | None = None,
     ) -> discord.Thread:
         """Create a new thread and optionally start a Claude Code session.
 
@@ -835,6 +836,10 @@ class ClaudeChatCog(commands.Cog):
                         seed prompt. Lets a programmatic caller (e.g. a Forgejo
                         Issue watcher via ``/api/spawn``) surface the original
                         attachments so they're viewable in the thread.
+            invite_user_id: Optional Discord user to add as a thread member, so
+                        a thread nobody was watching still lands in their joined
+                        list. Best-effort: a failure here is a visibility miss,
+                        never a reason to fail a spawn that already succeeded.
 
         Returns:
             The newly created :class:`discord.Thread`.
@@ -845,6 +850,11 @@ class ClaudeChatCog(commands.Cog):
             type=discord.ChannelType.public_thread,
             auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
         )
+        # Added before the seed message so the requester sees the thread from its
+        # first line, not after Claude has already been talking to itself.
+        if invite_user_id:
+            with contextlib.suppress(Exception):
+                await thread.add_user(discord.Object(id=invite_user_id))
         # Post the prompt so StatusManager has a Message to add reactions to.
         # Long prompts (e.g. an ingested Teams thread) exceed Discord's
         # per-message limit, so chunk the seed for display. The full prompt is
