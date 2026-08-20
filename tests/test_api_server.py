@@ -609,6 +609,41 @@ class TestSpawn:
         await client.close()
 
     @pytest.mark.asyncio
+    async def test_spawn_forwards_user_id_as_invite(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        """A caller-supplied user_id must reach spawn_session, not be dropped."""
+        resp = await spawn_client.post(
+            "/api/spawn",
+            json={"prompt": "Check the backlog", "user_id": 418192003549888523},
+        )
+        assert resp.status == 201
+        assert mock_cog.spawn_session.await_args.kwargs["invite_user_id"] == 418192003549888523
+
+    @pytest.mark.asyncio
+    async def test_spawn_without_user_id_invites_nobody(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        await spawn_client.post("/api/spawn", json={"prompt": "Check the backlog"})
+        assert mock_cog.spawn_session.await_args.kwargs["invite_user_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_spawn_rejects_non_numeric_user_id(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        resp = await spawn_client.post("/api/spawn", json={"prompt": "Hello", "user_id": "@ebi"})
+        assert resp.status == 400
+        mock_cog.spawn_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_spawn_rejects_non_positive_user_id(
+        self, spawn_client: TestClient, mock_cog: MagicMock
+    ) -> None:
+        resp = await spawn_client.post("/api/spawn", json={"prompt": "Hello", "user_id": 0})
+        assert resp.status == 400
+        mock_cog.spawn_session.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_spawn_returns_201_with_thread_info(
         self, spawn_client: TestClient, mock_cog: MagicMock
     ) -> None:

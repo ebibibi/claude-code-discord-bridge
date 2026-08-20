@@ -70,8 +70,9 @@ class BackendSettings:
         self._env_model = {
             "claude": env_model_for_claude or "",
             "codex": env_model_for_codex or "",
-            # The local model is chosen by CCDB_LOCAL_MODEL, read by
-            # LocalModelConfig at spawn time; no separate env knob here.
+            # The local model has no env default on purpose: /ollama use (or
+            # /model) is the only place it is chosen, so what /ollama list
+            # marks as selected is what a thread actually runs.
             "local": "",
             # AG-UI identifies the model on the remote agent, not in ccdb.
             "agui": "",

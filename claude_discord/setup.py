@@ -491,6 +491,21 @@ async def setup_bridge(
         await bot.add_cog(backend_cmd_cog)
         logger.info("Registered BackendCommandCog")
 
+        # --- OllamaCommandCog: management for the `local` backend's runtime ---
+        # Registered alongside /backend rather than gated on reachability: the
+        # command whose job is to diagnose an unreachable Ollama must exist
+        # when Ollama is unreachable.
+        from .cogs.ollama_command import OllamaCommandCog
+
+        await bot.add_cog(
+            OllamaCommandCog(
+                bot,  # type: ignore[arg-type]
+                settings=backend_settings,
+                chat_cog=chat_cog,
+            )
+        )
+        logger.info("Registered OllamaCommandCog")
+
     # --- AskCommandCog (auto-discovered: only when anonymization rules exist) ---
     # Zero-config by the same rule as the gateway itself — no rules file, no
     # command, because a /ask that forwards real names is worse than none.

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import aiosqlite
 import pytest
 
 from claude_discord.database.models import init_db
@@ -16,6 +19,28 @@ async def repo(tmp_path):
 
 
 class TestSettingsRepository:
+    async def test_get_remains_available_during_an_exclusive_write(self, tmp_path):
+        """Readers should see the last commit while another connection writes."""
+        db_path = str(tmp_path / "concurrent.db")
+        await init_db(db_path)
+        repo = SettingsRepository(db_path)
+        await repo.set("claude_model", "committed-model")
+
+        writer = await aiosqlite.connect(db_path)
+        try:
+            await writer.execute("BEGIN EXCLUSIVE")
+            await writer.execute(
+                "UPDATE settings SET value = ? WHERE key = ?",
+                ("uncommitted-model", "claude_model"),
+            )
+
+            value = await asyncio.wait_for(repo.get("claude_model"), timeout=0.5)
+        finally:
+            await writer.rollback()
+            await writer.close()
+
+        assert value == "committed-model"
+
     async def test_get_returns_none_for_missing_key(self, repo):
         result = await repo.get("nonexistent")
         assert result is None

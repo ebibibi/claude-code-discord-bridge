@@ -80,6 +80,7 @@ _HELP_CATEGORY: dict[str, str | None] = {
     "model": "🤖 Model",
     "backend": "🤖 Model",
     "engine-status": "🤖 Model",
+    "ollama": "🤖 Model",  # manage the runtime behind the `local` backend
     "ask": "🤖 Model",  # one anonymized question to an external model
     "effort": "⚡ Effort",
     "tools-show": "🔧 Advanced",
@@ -739,12 +740,17 @@ class ClaudeChatCog(commands.Cog):
             isinstance(message.channel, discord.TextChannel)
             and message.channel.id in self._inline_reply_channel_ids
         ):
-            # Inline-reply mode: respond directly in the channel without creating a thread.
+            # Inline-reply mode: respond directly in the channel without creating
+            # a thread. Every message in such a channel lands here, so resume the
+            # session stored against the channel id — otherwise the conversation
+            # would restart cold on each message, which threads never do (see
+            # _handle_thread_reply). The channel is the conversation; /clear ends it.
+            record = await self.repo.get(message.channel.id)
             await self._run_claude(
                 message,
                 message.channel,
                 prompt,
-                session_id=None,
+                session_id=record.session_id if record else None,
                 images=images,
                 chat_only=chat_only,
             )
@@ -797,6 +803,7 @@ class ClaudeChatCog(commands.Cog):
         auto_start: bool = True,
         result_sink: Callable[[str | None, str | None], Awaitable[None]] | None = None,
         attachments: list[tuple[str, bytes]] | None = None,
+        invite_user_id: int | None = None,
     ) -> discord.Thread:
         """Create a new thread and optionally start a Claude Code session.
 
@@ -830,6 +837,10 @@ class ClaudeChatCog(commands.Cog):
                         seed prompt. Lets a programmatic caller (e.g. a Forgejo
                         Issue watcher via ``/api/spawn``) surface the original
                         attachments so they're viewable in the thread.
+            invite_user_id: Optional Discord user to add as a thread member, so
+                        a thread nobody was watching still lands in their joined
+                        list. Best-effort: a failure here is a visibility miss,
+                        never a reason to fail a spawn that already succeeded.
 
         Returns:
             The newly created :class:`discord.Thread`.
@@ -840,6 +851,11 @@ class ClaudeChatCog(commands.Cog):
             type=discord.ChannelType.public_thread,
             auto_archive_duration=THREAD_AUTO_ARCHIVE_MINUTES,
         )
+        # Added before the seed message so the requester sees the thread from its
+        # first line, not after Claude has already been talking to itself.
+        if invite_user_id:
+            with contextlib.suppress(Exception):
+                await thread.add_user(discord.Object(id=invite_user_id))
         # Post the prompt so StatusManager has a Message to add reactions to.
         # Long prompts (e.g. an ingested Teams thread) exceed Discord's
         # per-message limit, so chunk the seed for display. The full prompt is

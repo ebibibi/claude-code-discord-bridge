@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -473,6 +474,70 @@ class TestSpawnSession:
         call_kwargs = channel.create_thread.call_args.kwargs
         assert call_kwargs["name"] == "Do the thing"
         assert call_kwargs["type"] == discord.ChannelType.public_thread
+
+    @pytest.mark.asyncio
+    async def test_spawn_adds_invited_user_to_thread(self) -> None:
+        """invite_user_id makes the requester a thread member, before the seed message."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+        thread.add_user = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        cog = ClaudeChatCog(bot=MagicMock(), repo=MagicMock(), runner=MagicMock())
+
+        with patch.object(cog, "_run_claude", new=AsyncMock()):
+            await cog.spawn_session(channel, "Do the thing", invite_user_id=418192003549888523)
+
+        thread.add_user.assert_awaited_once()
+        assert thread.add_user.await_args.args[0].id == 418192003549888523
+
+    @pytest.mark.asyncio
+    async def test_spawn_without_invite_adds_nobody(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+        thread.add_user = AsyncMock()
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        cog = ClaudeChatCog(bot=MagicMock(), repo=MagicMock(), runner=MagicMock())
+
+        with patch.object(cog, "_run_claude", new=AsyncMock()):
+            await cog.spawn_session(channel, "Do the thing")
+
+        thread.add_user.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_spawn_survives_add_user_failure(self) -> None:
+        """A Discord-side add_user failure is a visibility miss, never a failed spawn."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        import discord
+
+        thread = MagicMock(spec=discord.Thread)
+        thread.send = AsyncMock()
+        thread.add_user = AsyncMock(side_effect=RuntimeError("Missing Permissions"))
+
+        channel = MagicMock()
+        channel.create_thread = AsyncMock(return_value=thread)
+
+        cog = ClaudeChatCog(bot=MagicMock(), repo=MagicMock(), runner=MagicMock())
+
+        with patch.object(cog, "_run_claude", new=AsyncMock()):
+            result = await cog.spawn_session(channel, "Do the thing", invite_user_id=999)
+
+        assert result is thread
+        thread.send.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_spawn_uses_custom_thread_name(self) -> None:
@@ -1864,6 +1929,33 @@ class TestInlineReplyChannels:
         cog._run_claude.assert_awaited_once()
         _, called_thread, *_ = cog._run_claude.call_args.args
         assert called_thread is msg.channel  # channel itself, not a thread
+
+    @pytest.mark.asyncio
+    async def test_inline_channel_resumes_stored_session(self) -> None:
+        """An inline channel is one continuous conversation, keyed by channel id.
+
+        Every message in such a channel goes through _handle_new_conversation, so
+        without this the session would restart cold each time — unlike threads.
+        """
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog.repo.get = AsyncMock(return_value=SimpleNamespace(session_id="sess-abc"))
+        cog._run_claude = AsyncMock()
+
+        msg = self._make_channel_message(channel_id=222)
+        await cog._handle_new_conversation(msg)
+
+        cog.repo.get.assert_awaited_once_with(222)
+        assert cog._run_claude.call_args.kwargs["session_id"] == "sess-abc"
+
+    @pytest.mark.asyncio
+    async def test_inline_channel_without_prior_session_starts_fresh(self) -> None:
+        """First message in an inline channel has no stored session to resume."""
+        cog = self._make_cog(channel_ids={111, 222}, inline_reply_channel_ids={222})
+        cog._run_claude = AsyncMock()
+
+        await cog._handle_new_conversation(self._make_channel_message(channel_id=222))
+
+        assert cog._run_claude.call_args.kwargs["session_id"] is None
 
     @pytest.mark.asyncio
     async def test_non_inline_channel_still_creates_thread(self) -> None:

@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/check-deploy-drift.sh` (also `make drift`)** — reports when the bot is loading code
+  that is not on `origin/main`. `make dev-on` is the right tool for testing a change against real
+  Discord traffic, but nothing expires it: `pre-start.sh` printed one line at boot and never
+  mentioned it again, so a forgotten dev worktree can keep a side branch in production for days
+  while every merged PR appears to deploy and does not. The check names the worktree and branch,
+  states whether that commit is an ancestor of `origin/main`, counts how many merged commits are
+  therefore not running, and reports how long dev mode has been on. `pre-start.sh` now prints the
+  full report instead of the single line. Exit codes: 0 clean, 1 drift, 2 marker points nowhere.
+
+### Fixed
+
+- **`POST /api/spawn` honours `user_id`** — the field was already being sent by callers and silently
+  dropped, so a spawned thread never appeared in the requester's joined list and the miss looked
+  like success. The user is now added as a thread member before the seed message is posted, matching
+  what `/api/ingest` already did for the bot owner. A malformed `user_id` is a caller bug and is
+  rejected with 400; a Discord-side failure to add the member is only a visibility miss and is
+  suppressed, because a spawn that already created the thread and started Claude must not be
+  reported as failed.
+
+- **`.gitignore` covers `.env.*`, not just `.env`** — dated backups of the environment file
+  (`.env.bak-…`) sat untracked-but-not-ignored beside the real one, each holding a live bot token,
+  so a single `git add -A` staged a working credential. GitHub push protection caught one such
+  commit before it left the machine; the ignore rule removes the trap rather than relying on the
+  catch. `.env.example` is re-included explicitly so the template stays tracked.
+
 ### Changed
 
 - **Thread-completion recording is opt-in, off by default** — deleting a thread is an everyday,

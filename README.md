@@ -254,6 +254,20 @@ curl -X POST "$CCDB_API_URL/api/spawn" \
 
 This is useful for notification-style workflows (e.g. daily briefings, CI alerts) where you want to display information upfront and let the user decide whether to engage Claude.
 
+**Adding the requester to the thread (`user_id`)** — A spawned thread is created by the bot, so nobody is watching it: it sits in the channel list until someone goes looking. Pass a Discord `user_id` and ccdb adds that user as a thread member before the seed message is posted, so the thread lands in their joined list and they see it from its first line.
+
+```bash
+curl -X POST "$CCDB_API_URL/api/spawn" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Triage the failing nightly build",
+    "thread_name": "Nightly Triage",
+    "user_id": 123456789012345678
+  }'
+```
+
+A `user_id` that is not a positive integer is a caller bug and is rejected with 400. A Discord-side failure to add the member is only a visibility miss and is suppressed — a spawn that already created the thread and started Claude is never reported as failed.
+
 Claude subprocesses receive `DISCORD_THREAD_ID` as an environment variable, so a running session can spawn child sessions to parallelize work.
 
 ### Authenticated External Ingest with Result Retrieval (`/api/ingest`)
@@ -366,6 +380,9 @@ ccdb 3.0 introduces three slash commands that change which AI handles the next s
 - `/model [name] [scope]` — show or switch the model used by the **current** backend. Each backend remembers its own model preference, so flipping backend back and forth keeps your favoured models intact. Leave a backend's model unset to defer to that CLI's own default (e.g. Codex uses the `model` in `~/.codex/config.toml`, so ccdb tracks the console default instead of pinning a version).
   The `name` autocomplete is **discovered live**: ccdb asks the Anthropic models endpoint (using the credentials the Claude Code CLI already has) which models your account can see, so a model released this morning shows up in the dropdown without a ccdb upgrade. Aliases (`opus`, `sonnet`, …) are labelled with the model they currently resolve to. Offline, unauthenticated, or on Bedrock/Vertex/Foundry it silently falls back to a small static list; set `CCDB_MODEL_DISCOVERY=0` to always use that list. Codex suggestions stay static (the Codex CLI exposes no model listing) — any id you type still works.
 - `/effort [level] [scope]` — show or switch the **reasoning effort** used by the current backend. Valid levels are backend-specific: Claude accepts `low/medium/high/max`; Codex accepts `minimal/low/medium/high/xhigh` (mapped to the CLI's `model_reasoning_effort`). Leave it unset to defer to the CLI default.
+- `/ollama status|list|ps|show|pull|rm|use` — manage the runtime behind the `local` backend. `/backend` and `/model` choose a model; they cannot tell you what is installed, what fits, or what is resident in memory — and when the cloud backends are unavailable those are the only questions that matter. `/ollama` mirrors Ollama's own API for exactly those, with autocompleted model arguments. It flags a model that does not advertise the `tools` capability (Codex acts only through tool calls, so such a model *describes* the edit instead of making it) and refuses to delete the selected one — see [docs/local-backend.md](docs/local-backend.md#managing-the-runtime-ollama).
+
+**The local model has no environment variable.** `CCDB_LOCAL_MODEL` has been removed: it was a second, invisible source of truth that could disagree with the selection shown in Discord. What `/ollama use` (or `/model`) selects is what runs, and `/ollama list` marks it with `▶`.
 
 All three commands persist to SQLite via `SettingsRepository`, so the choice survives bot restarts. Calling them with no arguments prints the current global default plus any thread override.
 
@@ -486,7 +503,7 @@ Behind the scenes:
 - **Thread search** — `/search <query>` finds a past thread by keyword, matching the persistent per-thread summary (the opening prompt) and working directory; renders hits as a scannable embed with a Discord deep-link that reopens even an archived (sidebar-hidden) thread; optional `origin` filter (Discord / CLI). Add `body:True` to also grep the full local Claude transcripts (`~/.claude/projects`), so keywords that appear only mid-conversation are found too — each body hit shows the matching snippet with a `💬` badge, and a transcript with no Discord thread offers a `claude --resume <id>` hint instead of a link. The same lookup is exposed as `GET /api/search` (add `body=1`) for other sessions and skills. No AI tokens — a `LIKE` query over data ccdb already keeps, plus a safe `grep` (never `shell=True`) over the transcripts on disk
 - **Session resume** — `/resume` shows a select menu of recent sessions (up to 25) and resumes the selected one in a new thread; optional `query` parameter for keyword search (matches summary and working directory); optional `filter=orphaned` to show only sessions from deleted threads; works from any channel or thread — always creates a new thread in the configured main channel
 - **Resume info** — `/resume-info` shows the CLI command to continue the current session in a terminal (thread-only)
-- **Clear session** — `/clear` resets the Claude Code session for the current thread, starting fresh without creating a new thread
+- **Clear session** — `/clear` resets the Claude Code session for the current conversation (thread or inline-reply channel), starting fresh without creating a new thread
 - **Startup resume** — Interrupted sessions restart automatically after any bot reboot; `AutoUpgradeCog` (upgrade restarts) and `ClaudeChatCog.cog_unload()` (all other shutdowns) mark them automatically, or use `POST /api/mark-resume` manually
 - **Programmatic spawn** — `POST /api/spawn` creates a new Discord thread + Claude session from any script or Claude subprocess; returns non-blocking 201 immediately after thread creation
 - **Thread ID injection** — `DISCORD_THREAD_ID` env var is passed to every Claude subprocess, enabling sessions to spawn child sessions via `$CCDB_API_URL/api/spawn`
@@ -506,7 +523,8 @@ Behind the scenes:
 - **Secret isolation** — Bot token stripped from subprocess environment
 - **User authorization** — `allowed_user_ids` restricts who can invoke Claude
 - **Log injection prevention** — User-provided API values are sanitized (newlines stripped) before writing to logs
-- **Local-model backend** (optional) — `/backend local` runs a thread against a model on your own hardware. ccdb owns a separate CLI home with the update check and analytics disabled, because a "local" run otherwise still contacts the vendor; it refuses to start if those settings are missing — see [docs/local-backend.md](docs/local-backend.md)
+- **Credential files stay untracked** — `.gitignore` covers `.env.*`, not just `.env`, because operators leave dated backups (`.env.bak-…`) beside the real file and each one holds a live bot token; `.env.example` is re-included explicitly so the template stays tracked
+- **Local-model backend** (optional) — `/backend local` runs a thread against a model on your own hardware. ccdb owns a separate CLI home with the update check and analytics disabled, because a "local" run otherwise still contacts the vendor; it refuses to start if those settings are missing — see [docs/local-backend.md](docs/local-backend.md. `/ollama` manages that runtime from Discord, and the model in use is whatever was selected there — there is no environment variable that can silently disagree with it)
 - **Remote AG-UI backend** (optional) — `/backend agui` connects the existing Discord/Teams session machinery to any HTTP/SSE AG-UI agent while preserving ccdb's session ledger, rendering, cancellation, and operational controls — see [docs/agui-backend.md](docs/agui-backend.md)
 - **`/ask` — explicit escalation** (optional) — sends one anonymized, self-contained question to a strong external model with no project context, no files and no tools, then restores your real names in the answer; the isolation is verified before every spawn — see [docs/escalation.md](docs/escalation.md)
 - **Anonymization gateway** (optional) — Replaces organisation-identifying terms with stable aliases before the prompt reaches Claude or Codex, and restores them in the answer. A local model checks the result for replacement misses and, by default, blocks the send when it finds one. Off until you write a rules file — see [docs/anonymization.md](docs/anonymization.md)
@@ -821,7 +839,7 @@ Or via environment variable (comma-separated channel IDs):
 INLINE_REPLY_CHANNEL_IDS=333,444
 ```
 
-In inline-reply mode, Claude's response is sent directly as a message in the channel rather than spawning a new thread. Sessions are still tracked internally, so follow-up messages in the channel continue the same Claude session.
+In inline-reply mode, Claude's response is sent directly as a message in the channel rather than spawning a new thread. The channel itself is one continuous conversation: sessions are tracked internally, so follow-up messages resume the same Claude session until `/clear` resets it.
 
 #### Chat-Only Channels
 
@@ -857,6 +875,7 @@ In chat-only mode, permission requests and `AskUserQuestion` prompts are **alway
 | `CCDB_COMMAND` | Path or name of the CLI binary (overrides `CLAUDE_COMMAND`). Used by the initial runner picked from `CCDB_BACKEND`; superseded by the two per-backend variables below when `/backend` switches at runtime. | _(auto: `claude` or `codex`)_ |
 | `CCDB_CLAUDE_COMMAND` | Explicit path to the Claude CLI binary. Used by `BackendFactory` whenever `/backend claude` is active, regardless of the initial `CCDB_BACKEND`. Falls back to `CLAUDE_COMMAND`, then `claude` (PATH). | (optional) |
 | `CCDB_CODEX_COMMAND` | Explicit path to the OpenAI Codex CLI binary. Required when running the bot under systemd (default service PATH does not include `~/.npm-global/bin`). Falls back to `codex` (PATH). | (optional) |
+| `CCDB_CODEX_SANDBOX_OVERRIDE` | Optional deployment-wide Codex `--sandbox` override: `read-only`, `workspace-write`, or `danger-full-access`. Leave unset to use the Codex CLI default. Use `danger-full-access` only when the host's outer isolation is trusted and OS namespace restrictions prevent Codex's own sandbox from starting. This setting is intentionally not exposed per thread. | (optional) |
 | `CCDB_AGUI_URL` | Exact HTTP(S) run endpoint for `/backend agui`. Redirects are rejected. | (required for `agui`) |
 | `CCDB_AGUI_TOKEN` | Optional bearer token for the AG-UI endpoint. Stripped from Claude/Codex subprocess environments. | (optional) |
 | `PATH` | Binary search path for the bot **and every CLI session it spawns** — sessions inherit the bot's environment. Set it in `.env` when running under systemd, which starts units with a minimal PATH and never reads `~/.bashrc` / `~/.profile`. See [Toolchain PATH](#toolchain-path--set-it-in-env). | (inherited from the parent process) |
@@ -1122,7 +1141,7 @@ uv sync --extra api
 | GET | `/api/tasks` | List registered tasks |
 | DELETE | `/api/tasks/{id}` | Remove a task |
 | PATCH | `/api/tasks/{id}` | Update a task (enable/disable, change schedule) |
-| POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply |
+| POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply, or `user_id` to add the requester to the thread |
 | POST | `/api/ingest` | Authenticated external spawn (browser extension / webhook) with base64 attachments; returns a `result_id` when result retrieval is configured |
 | GET | `/api/ingest/{result_id}` | Poll the spawned session's final reply (`status`/`result`/`error`/`thread_id`) |
 | GET | `/api/ingest/summary` | Read the running summary + `marker` for a long ingest thread by `key` (ingest-token gated) so the client can export only the diff |

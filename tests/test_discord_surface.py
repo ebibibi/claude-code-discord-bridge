@@ -19,7 +19,7 @@ Discord semantics is not a contract obligation and does not belong here.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
@@ -150,6 +150,42 @@ class TestOutputGoesThroughDiscord:
         surface = _make_surface()
         surface.thread.send = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "gone"))
         assert await surface.send_text("hello") is None
+
+    async def test_a_deleted_thread_is_only_contacted_once(self) -> None:
+        """Later assistant events must not retry a thread already known missing."""
+        surface = _make_surface()
+        surface.thread.send = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "gone"))
+
+        assert await surface.send_text("first") is None
+        assert await surface.send_text("second") is None
+
+        surface.thread.send.assert_awaited_once()
+
+    async def test_known_deleted_thread_skips_completion_files(self) -> None:
+        """Completion must not attempt attachments after text found the thread missing."""
+        surface = _make_surface()
+        surface.thread.send = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "gone"))
+        await surface.send_text("first")
+
+        with patch("claude_discord.surface.send_files", new_callable=AsyncMock) as send:
+            await surface.deliver_files(
+                [OutboundFile(display_name="result.txt", path="/tmp/result.txt")]
+            )
+
+        send.assert_not_awaited()
+
+    async def test_unexpected_send_failure_does_not_mark_thread_missing(self) -> None:
+        """Only Discord NotFound changes the delivery state."""
+        surface = _make_surface()
+        surface.thread.send = AsyncMock(side_effect=RuntimeError("unexpected bug"))
+
+        with pytest.raises(RuntimeError, match="unexpected bug"):
+            await surface.send_text("first")
+
+        surface.thread.send.side_effect = None
+        surface.thread.send.return_value = FakeMessage("second")
+        assert await surface.send_text("second") == "555"
+        assert surface.thread.send.await_count == 2
 
 
 class TestActivityMapsToAnEditedEmbed:

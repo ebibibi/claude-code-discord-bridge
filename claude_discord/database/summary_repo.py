@@ -103,11 +103,13 @@ class ThreadSummaryRepository:
         rec = await self.get(summary_key)
         if rec is None:
             raise RuntimeError(f"Failed to retrieve thread summary {summary_key} after upsert")
+        safe_summary_key = summary_key.replace("\r", " ").replace("\n", " ")
+        safe_marker = str(rec["marker"]).replace("\r", " ").replace("\n", " ")
         logger.info(
             "Thread summary saved: key=%s (%d chars) marker=%s",
-            summary_key,
+            safe_summary_key,
             len(summary),
-            rec["marker"],
+            safe_marker,
         )
         return rec
 
@@ -120,7 +122,8 @@ class ThreadSummaryRepository:
             await db.commit()
             removed = cursor.rowcount > 0
         if removed:
-            logger.info("Thread summary deleted: key=%s", summary_key)
+            safe_summary_key = summary_key.replace("\r", " ").replace("\n", " ")
+            logger.info("Thread summary deleted: key=%s", safe_summary_key)
         return removed
 
     async def count(self) -> int:

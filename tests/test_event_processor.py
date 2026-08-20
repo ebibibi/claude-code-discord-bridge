@@ -1298,6 +1298,73 @@ class TestContextStatsUsesPerTurnUsage:
         assert record is not None
         assert record.context_used == 5000 + 30000 + 0
 
+    @pytest.mark.asyncio
+    async def test_message_delta_stream_event_corrects_stale_assistant_output_tokens(
+        self, thread: MagicMock, runner: MagicMock, tmp_path
+    ) -> None:
+        """Regression test for the "2 in 3 out" display bug.
+
+        An ASSISTANT event's own usage is a mid-generation snapshot — for a
+        turn that ends with a short text block, output_tokens can be far
+        below the true final count (captured live: assistant reported
+        output_tokens=1 for a turn that actually used 3). The real final
+        usage arrives moments later as a STREAM_EVENT whose parsed
+        input_tokens/output_tokens come from the message_delta's usage
+        (see claude_code_core.parser._parse_stream_event). That later event
+        must win — not the assistant's stale snapshot — in both the
+        completion-notice fields (event.output_tokens) and context stats.
+        """
+        from claude_discord.database.models import init_db
+        from claude_discord.database.repository import SessionRepository
+
+        db_path = str(tmp_path / "sessions.db")
+        await init_db(db_path)
+        repo = SessionRepository(db_path)
+        await repo.save(thread_id=thread.id, session_id="s-message-delta")
+
+        config = _make_config(thread, runner, repo=repo)
+        p = EventProcessor(config)
+
+        # ASSISTANT: mid-generation snapshot, output_tokens under-reported.
+        assistant_turn = StreamEvent(
+            message_type=MessageType.ASSISTANT,
+            text="done",
+            is_partial=False,
+            input_tokens=2,
+            output_tokens=1,
+            cache_read_tokens=54432,
+            cache_creation_tokens=2471,
+        )
+        await p.process(assistant_turn)
+
+        # STREAM_EVENT (message_delta): the true final usage for that turn.
+        message_delta = StreamEvent(
+            message_type=MessageType.STREAM_EVENT,
+            input_tokens=2,
+            output_tokens=3,
+            cache_read_tokens=54432,
+            cache_creation_tokens=2471,
+        )
+        await p.process(message_delta)
+
+        result = _make_result_event(
+            session_id="s-message-delta",
+            input_tokens=4,
+            output_tokens=368,
+            cache_read_tokens=54432,
+            cache_creation_tokens=56903,
+            context_window=200000,
+        )
+        await p.process(result)
+
+        # The completion notice must show the corrected 3, not the stale 1.
+        assert result.output_tokens == 3
+        assert result.input_tokens == 2
+
+        record = await repo.get(thread.id)
+        assert record is not None
+        assert record.context_used == 2 + 54432 + 2471
+
 
 class TestRateLimitEventProcessing:
     """rate_limit_event is saved to usage_stats table."""

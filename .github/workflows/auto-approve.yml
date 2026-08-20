@@ -24,7 +24,9 @@ jobs:
       github.event.pull_request.user.login == 'ebibibi' &&
       github.event.pull_request.draft == false &&
       !contains(github.event.pull_request.labels.*.name, 'external-issue')
-    runs-on: [self-hosted, linux, x64]
+    # This control-plane job polls for required checks. Running it on the same
+    # single-capacity JIT pool as CI can starve the checks it is waiting for.
+    runs-on: ubuntu-latest
     permissions:
       pull-requests: write
       contents: write

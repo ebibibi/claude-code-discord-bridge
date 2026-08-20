@@ -298,6 +298,8 @@ class EventProcessor:
 
         elif event.message_type == MessageType.RATE_LIMIT_EVENT:
             await self._on_rate_limit_event(event)
+        elif event.message_type == MessageType.STREAM_EVENT:
+            await self._on_stream_event(event)
 
         if event.is_complete:
             await self._on_complete(event)
@@ -507,17 +509,41 @@ class EventProcessor:
             await self._handle_plan_approval(event)
 
         # Track per-turn usage from assistant messages for accurate context stats.
-        if event.input_tokens is not None:
-            self._last_turn_input_tokens = event.input_tokens
-            self._last_turn_output_tokens = event.output_tokens
-            self._last_turn_cache_read_tokens = event.cache_read_tokens
-            self._last_turn_cache_creation_tokens = event.cache_creation_tokens
+        self._update_last_turn_usage(event)
 
         # AskUserQuestion — set pending and signal caller to interrupt runner.
         # Always handled — interactive flow is needed regardless of mode.
         if event.ask_questions:
             self._pending_ask = event.ask_questions
             await self._config.runner.interrupt()
+
+    def _update_last_turn_usage(self, event: StreamEvent) -> None:
+        """Record the latest known per-turn usage for accurate context stats.
+
+        Called from both ASSISTANT and STREAM_EVENT events. An ``assistant``
+        message's own usage is a mid-generation snapshot — for a still-
+        streaming block it can under-report output_tokens by an order of
+        magnitude. The authoritative final usage for that same turn arrives
+        moments later in a ``message_delta`` stream_event (parsed into a
+        STREAM_EVENT-typed StreamEvent by claude_code_core.parser), which
+        this method also updates from — overwriting the assistant snapshot
+        with the true total, since it always arrives after it for the same
+        turn and before the next turn's events.
+        """
+        if event.input_tokens is not None:
+            self._last_turn_input_tokens = event.input_tokens
+            self._last_turn_output_tokens = event.output_tokens
+            self._last_turn_cache_read_tokens = event.cache_read_tokens
+            self._last_turn_cache_creation_tokens = event.cache_creation_tokens
+
+    async def _on_stream_event(self, event: StreamEvent) -> None:
+        """Handle low-level STREAM_EVENT events — currently only for usage.
+
+        Everything else about these events (text deltas, block boundaries)
+        is intentionally not acted on here; live text streaming already
+        comes from the coarser ASSISTANT events.
+        """
+        self._update_last_turn_usage(event)
 
     async def _on_tool_result(self, event: StreamEvent) -> None:
         """Handle USER events (tool results) — cancel timer, update embed."""

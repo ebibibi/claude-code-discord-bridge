@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 
@@ -51,6 +52,21 @@ class TestMark:
         assert p.session_id == "sid-xyz"
         assert p.reason == "custom_reason"
         assert p.resume_prompt == "Please continue."
+
+    @pytest.mark.asyncio
+    async def test_mark_does_not_write_multiline_log_entries(
+        self,
+        repo: PendingResumeRepository,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger="claude_discord.database.resume_repo")
+
+        await repo.mark(99, reason="restart\r\nforged")
+
+        message = caplog.records[-1].getMessage()
+        assert "\r" not in message
+        assert "\n" not in message
+        assert "reason=restart  forged" in message
 
 
 class TestGetPending:

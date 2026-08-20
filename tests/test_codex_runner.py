@@ -13,6 +13,19 @@ from claude_code_core.codex_runner import CodexRunner, parse_codex_line
 from claude_code_core.types import MessageType
 
 
+@pytest.fixture(autouse=True)
+def _clean_codex_sandbox_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate tests from CCDB_CODEX_SANDBOX_OVERRIDE in the ambient environment.
+
+    A developer's real shell/.env (e.g. a live deployment) may export this to
+    work around a host-specific sandbox issue — that must never leak into the
+    argv-structure assertions below. Tests that specifically exercise the
+    override still call monkeypatch.setenv() themselves, which layers on top
+    of (and is undone independently of) this fixture's delenv.
+    """
+    monkeypatch.delenv("CCDB_CODEX_SANDBOX_OVERRIDE", raising=False)
+
+
 class _FakeStream:
     def __init__(self, lines: list[bytes] | None = None, read_data: bytes = b"") -> None:
         self._lines = list(lines or [])
@@ -106,10 +119,52 @@ class TestCodexRunnerBuildArgs:
         assert "resume" in args
         assert "0199a213-81c0-7800-8aa1-bbab2a035a53" in args
 
-    def test_approval_mode_mapping(self) -> None:
-        runner = CodexRunner(command="codex", model="o4-mini", permission_mode="acceptEdits")
+    def test_never_emits_the_broken_ask_for_approval_flag(self) -> None:
+        """`codex exec` rejects `--ask-for-approval` outright on codex-cli >= ~0.13x
+        ("unexpected argument") — regression guard against reintroducing it.
+        `permission_mode` has no CLI lever for Codex (exec has no approval loop)."""
+        for mode in ("acceptEdits", "full", "none", "default", "auto", "plan"):
+            runner = CodexRunner(command="codex", model="o4-mini", permission_mode=mode)
+            args = runner._build_args("hello", session_id=None)
+            assert "--ask-for-approval" not in args
+            assert "-a" not in args
+
+    def test_no_sandbox_flag_by_default(self) -> None:
+        """Without CCDB_CODEX_SANDBOX_OVERRIDE set, ccdb must never pass --sandbox —
+        Codex picks its own (config.toml-driven) default, unchanged from today."""
+        runner = CodexRunner(command="codex", model="o4-mini")
         args = runner._build_args("hello", session_id=None)
-        assert any(a in args for a in ["--ask-for-approval", "-a"])
+        assert "--sandbox" not in args
+
+    def test_sandbox_override_from_env(self, monkeypatch) -> None:
+        monkeypatch.setenv("CCDB_CODEX_SANDBOX_OVERRIDE", "danger-full-access")
+        runner = CodexRunner(command="codex", model="o4-mini")
+        args = runner._build_args("hello", session_id=None)
+        assert args[args.index("--sandbox") + 1] == "danger-full-access"
+
+    def test_sandbox_override_precedes_resume_subcommand(self, monkeypatch) -> None:
+        monkeypatch.setenv("CCDB_CODEX_SANDBOX_OVERRIDE", "danger-full-access")
+        runner = CodexRunner(command="codex", model="o4-mini")
+        sid = "0199a213-81c0-7800-8aa1-bbab2a035a53"
+        args = runner._build_args("hello", session_id=sid)
+        assert args.index("--sandbox") < args.index("resume")
+
+    def test_invalid_sandbox_override_is_ignored(self, monkeypatch) -> None:
+        """A typo'd override must fail closed — no --sandbox flag at all — rather
+        than passing an unvalidated string straight to the subprocess argv."""
+        monkeypatch.setenv("CCDB_CODEX_SANDBOX_OVERRIDE", "full-access")
+        runner = CodexRunner(command="codex", model="o4-mini")
+        args = runner._build_args("hello", session_id=None)
+        assert "--sandbox" not in args
+
+    def test_sandbox_override_not_applied_when_bypassing_permissions(self, monkeypatch) -> None:
+        """--dangerously-bypass-approvals-and-sandbox already disables sandboxing;
+        --sandbox must not also be added."""
+        monkeypatch.setenv("CCDB_CODEX_SANDBOX_OVERRIDE", "danger-full-access")
+        runner = CodexRunner(command="codex", model="o4-mini", dangerously_skip_permissions=True)
+        args = runner._build_args("hello", session_id=None)
+        assert "--sandbox" not in args
+        assert "--dangerously-bypass-approvals-and-sandbox" in args
 
     def test_dangerously_skip_permissions(self) -> None:
         runner = CodexRunner(command="codex", model="o4-mini", dangerously_skip_permissions=True)
@@ -697,9 +752,15 @@ class TestCodexRunnerArgvStructure:
         codex exec [OPTIONS] [PROMPT]
         codex exec resume [OPTIONS] [SESSION_ID] [PROMPT]
 
-    ``exec`` accepts: ``--json``, ``--model``, ``--ask-for-approval``,
+    ``exec`` accepts: ``--json``, ``--model``, ``--sandbox``,
     ``--dangerously-bypass-approvals-and-sandbox``, ``--cd``.
-    ``exec resume`` accepts the same flags EXCEPT ``--cd`` (causes exit code 2).
+    ``exec resume`` accepts the same flags EXCEPT ``--sandbox`` and ``--cd``
+    (both cause exit code 2 when they appear after ``resume``; ``--sandbox``
+    must instead precede it — see test_sandbox_override_precedes_resume_subcommand
+    in TestCodexRunnerBuildArgs). ``--ask-for-approval`` is a global/
+    interactive-only flag, rejected by ``exec`` outright on codex-cli >=
+    ~0.13x ("unexpected argument") — ccdb never emits it (see
+    test_never_emits_the_broken_ask_for_approval_flag).
     The resume positional args come AFTER all flags, with SESSION_ID before PROMPT.
 
     These tests guard against regressions like the one that shipped briefly
@@ -736,13 +797,24 @@ class TestCodexRunnerArgvStructure:
         )
         args = runner._build_args("hello", session_id=sid)
         sid_idx = args.index(sid)
-        # --json, --model, --ask-for-approval must all come before SESSION_ID.
+        # --json, --model must both come before SESSION_ID.
         # NOTE: --cd is NOT supported by `codex exec resume` (only by `codex exec`).
-        for flag in ("--json", "--model", "--ask-for-approval"):
+        for flag in ("--json", "--model"):
             assert flag in args, f"{flag} missing from resume args"
             assert args.index(flag) < sid_idx, (
                 f"{flag} should appear before SESSION_ID in codex exec resume"
             )
+
+    def test_sandbox_override_precedes_resume_on_resumed_session(self, monkeypatch) -> None:
+        """--sandbox is an exec-level option, rejected by `exec resume` when it
+        appears after `resume` — the override must precede the subcommand."""
+        monkeypatch.setenv("CCDB_CODEX_SANDBOX_OVERRIDE", "danger-full-access")
+        sid = "019e29a0-d5b0-71f0-bdc0-46f09a06fdaf"
+        runner = CodexRunner(command="codex", model="gpt-5.4")
+        args = runner._build_args("hello", session_id=sid)
+        assert args.index("--sandbox") < args.index("resume"), (
+            "`codex exec resume --sandbox ...` is rejected by codex-cli with exit code 2"
+        )
 
     def test_cd_flag_not_passed_on_resume(self) -> None:
         """codex exec resume does not accept --cd; must be omitted to avoid exit code 2."""
