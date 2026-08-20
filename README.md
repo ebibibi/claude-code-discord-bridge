@@ -254,6 +254,20 @@ curl -X POST "$CCDB_API_URL/api/spawn" \
 
 This is useful for notification-style workflows (e.g. daily briefings, CI alerts) where you want to display information upfront and let the user decide whether to engage Claude.
 
+**Adding the requester to the thread (`user_id`)** — A spawned thread is created by the bot, so nobody is watching it: it sits in the channel list until someone goes looking. Pass a Discord `user_id` and ccdb adds that user as a thread member before the seed message is posted, so the thread lands in their joined list and they see it from its first line.
+
+```bash
+curl -X POST "$CCDB_API_URL/api/spawn" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Triage the failing nightly build",
+    "thread_name": "Nightly Triage",
+    "user_id": 123456789012345678
+  }'
+```
+
+A `user_id` that is not a positive integer is a caller bug and is rejected with 400. A Discord-side failure to add the member is only a visibility miss and is suppressed — a spawn that already created the thread and started Claude is never reported as failed.
+
 Claude subprocesses receive `DISCORD_THREAD_ID` as an environment variable, so a running session can spawn child sessions to parallelize work.
 
 ### Authenticated External Ingest with Result Retrieval (`/api/ingest`)
@@ -506,6 +520,7 @@ Behind the scenes:
 - **Secret isolation** — Bot token stripped from subprocess environment
 - **User authorization** — `allowed_user_ids` restricts who can invoke Claude
 - **Log injection prevention** — User-provided API values are sanitized (newlines stripped) before writing to logs
+- **Credential files stay untracked** — `.gitignore` covers `.env.*`, not just `.env`, because operators leave dated backups (`.env.bak-…`) beside the real file and each one holds a live bot token; `.env.example` is re-included explicitly so the template stays tracked
 - **Local-model backend** (optional) — `/backend local` runs a thread against a model on your own hardware. ccdb owns a separate CLI home with the update check and analytics disabled, because a "local" run otherwise still contacts the vendor; it refuses to start if those settings are missing — see [docs/local-backend.md](docs/local-backend.md)
 - **Remote AG-UI backend** (optional) — `/backend agui` connects the existing Discord/Teams session machinery to any HTTP/SSE AG-UI agent while preserving ccdb's session ledger, rendering, cancellation, and operational controls — see [docs/agui-backend.md](docs/agui-backend.md)
 - **`/ask` — explicit escalation** (optional) — sends one anonymized, self-contained question to a strong external model with no project context, no files and no tools, then restores your real names in the answer; the isolation is verified before every spawn — see [docs/escalation.md](docs/escalation.md)
@@ -1123,7 +1138,7 @@ uv sync --extra api
 | GET | `/api/tasks` | List registered tasks |
 | DELETE | `/api/tasks/{id}` | Remove a task |
 | PATCH | `/api/tasks/{id}` | Update a task (enable/disable, change schedule) |
-| POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply |
+| POST | `/api/spawn` | Create a new Discord thread and start a Claude Code session (non-blocking); pass `auto_start: false` to defer Claude until the first user reply, or `user_id` to add the requester to the thread |
 | POST | `/api/ingest` | Authenticated external spawn (browser extension / webhook) with base64 attachments; returns a `result_id` when result retrieval is configured |
 | GET | `/api/ingest/{result_id}` | Poll the spawned session's final reply (`status`/`result`/`error`/`thread_id`) |
 | GET | `/api/ingest/summary` | Read the running summary + `marker` for a long ingest thread by `key` (ingest-token gated) so the client can export only the diff |

@@ -111,7 +111,13 @@ HOOK_EOF
 done
 
 if [ -f "$HOME/.ccdb-dev-worktree" ]; then
+    # One line saying "dev mode" reads like a setting, not a warning, so a
+    # forgotten `make dev-on` can keep a side branch in production for days
+    # while merged PRs appear to deploy. Print the full drift report instead.
     echo "[pre-start] Dev worktree mode: $(cat "$HOME/.ccdb-dev-worktree")" >&2
+    if [ -x "$CCDB_HOME/scripts/check-deploy-drift.sh" ]; then
+        "$CCDB_HOME/scripts/check-deploy-drift.sh" 2>&1 | sed 's/^/[pre-start] /' >&2 || true
+    fi
 fi
 
 # ── Step 3: Validate imports ──

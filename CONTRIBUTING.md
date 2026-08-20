@@ -56,6 +56,38 @@ uv run pytest tests/ -v --cov=claude_discord
 
 All tests must pass before submitting a PR.
 
+## Testing Against a Live Bot (dev worktree mode)
+
+Unit tests do not cover everything a Discord surface does. If you run a bot from this
+repository, you can point it at a worktree so it loads your branch instead of the main
+tree — no reinstall, no editable-install juggling:
+
+```bash
+git worktree add ../wt-my-feature -b feature/my-feature
+cd ../wt-my-feature
+make dev-on    # write ~/.ccdb-dev-worktree and restart the bot
+# ... exercise the change on Discord ...
+make dev-off   # remove the marker and restart back onto the main tree
+make drift     # is the bot running code that is not on origin/main?
+```
+
+`make dev-on` writes the worktree path to `~/.ccdb-dev-worktree`; the import hook that
+`scripts/pre-start.sh` installs reads that marker and redirects `claude_discord` /
+`claude_code_core` imports to the worktree. `dev-on` / `dev-off` restart a systemd unit
+named `discord-bot` — adjust the Makefile if your deployment differs.
+
+**Nothing expires dev mode.** A forgotten `make dev-on` keeps a side branch in production
+indefinitely, while every merged PR *appears* to deploy and does not. `make drift`
+(`scripts/check-deploy-drift.sh`) answers that: it names the worktree and branch, says
+whether that commit is an ancestor of `origin/main`, counts how many merged commits are
+therefore not running, and reports how long dev mode has been on. It compares against the
+remote ref rather than a local `main`, which may itself be stale. `pre-start.sh` prints
+the same report on every boot. Exit codes: `0` clean, `1` drift, `2` the marker points
+nowhere (the hook silently falls back to the main tree).
+
+Before switching back, check `.env`: a value only your branch understands falls back to a
+default on the main tree, which changes behaviour without erroring.
+
 ## Code Style
 
 - **Formatter**: `ruff format`
